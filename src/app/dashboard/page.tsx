@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 import { getMyTeam } from '@/lib/queries/team';
 import ProvisionButton from './provision-button';
+import SimControls from './sim-controls';
 
 export default async function DashboardPage() {
   const team = await getMyTeam();
@@ -67,6 +68,8 @@ export default async function DashboardPage() {
           </p>
         )}
       </div>
+
+      <SimControls />
 
       <div className="grid gap-8 lg:grid-cols-2">
         <section>

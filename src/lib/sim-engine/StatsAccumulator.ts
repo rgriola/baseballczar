@@ -49,7 +49,8 @@ export function addPitcherER(box: PitcherBoxLine): void {
 
 export function addPitcherOut(box: PitcherBoxLine): void {
   box.om++;
-  box.ip = box.om / 3;
+  // Baseball notation: 3 outs = 1.0, 4 outs = 1.1, 5 outs = 1.2, 6 = 2.0
+  box.ip = Math.floor(box.om / 3) + (box.om % 3) * 0.1;
 }
 
 export function addWin(box: PitcherBoxLine): void { box.w++; }

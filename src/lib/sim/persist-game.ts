@@ -128,6 +128,18 @@ export async function persistGameResult(
 
 // ─── Helpers ──────────────────────────────────────────────────
 
+/** Convert baseball IP notation (6.2 = 6 and 2/3) to total outs */
+function ipToOuts(ip: number): number {
+  const whole = Math.floor(ip);
+  const frac = Math.round((ip - whole) * 10);
+  return whole * 3 + frac;
+}
+
+/** Convert total outs to baseball IP notation (20 outs = 6.2) */
+function outsToIp(outs: number): number {
+  return Math.floor(outs / 3) + (outs % 3) * 0.1;
+}
+
 function buildHitterGameRows(
   gameId: number,
   statsMap: Map<number, GameStats>,
@@ -192,7 +204,7 @@ function buildPitcherGameRows(
       cg: stats.cg,
       sho: stats.sho,
       sv: stats.sv,
-      ip: stats.ip,
+      ip: outsToIp(stats.om),
       ab: stats.bf - stats.bb,
       r: stats.r,
       er: stats.er,
@@ -293,7 +305,7 @@ async function upsertSeasonPitcherStats(
           cg: existing.cg + stats.cg,
           sv: existing.sv + stats.sv,
           sho: existing.sho + stats.sho,
-          ip: existing.ip + stats.ip,
+          ip: outsToIp(ipToOuts(existing.ip) + stats.om),
           bf: existing.bf + stats.bf,
           h: existing.h + stats.h,
           r: existing.r + stats.r,
@@ -315,7 +327,7 @@ async function upsertSeasonPitcherStats(
         cg: stats.cg,
         sv: stats.sv,
         sho: stats.sho,
-        ip: stats.ip,
+        ip: outsToIp(stats.om),
         bf: stats.bf,
         h: stats.h,
         r: stats.r,
@@ -333,33 +345,65 @@ async function updateStandings(
   result: GameResult,
   opts: PersistOptions,
 ) {
-  // Winner gets W+1, loser gets L+1
+  // Aggregate team hitting totals from player stats maps
+  function sumHitting(statsMap: Map<number, GameStats>) {
+    let ab = 0, r = 0, h = 0, b2 = 0, b3 = 0, hr = 0, rbi = 0, bb = 0, so = 0;
+    for (const s of statsMap.values()) {
+      ab += s.ab; r += s.r; h += s.hits; b2 += s.b2; b3 += s.b3;
+      hr += s.hr; rbi += s.rbi; bb += s.bb; so += s.so;
+    }
+    return { ab, r, h, b2, b3, hr, rbi, bb, so };
+  }
+  function sumPitching(statsMap: Map<number, PitcherBoxLine>) {
+    let er = 0, outs = 0;
+    for (const s of statsMap.values()) {
+      er += s.er; outs += s.om;
+    }
+    return { er, outs };
+  }
+
+  const homeHit = sumHitting(result.homePlayerStats);
+  const visitorHit = sumHitting(result.visitorPlayerStats);
+  // ERA: runs allowed by opponent pitchers = runs scored by the team's offense
+  // But for team ERA we want the team's pitching staff ERA
+  const homePitch = sumPitching(result.homePitcherStats);
+  const visitorPitch = sumPitching(result.visitorPitcherStats);
+
+  // Helper to update one team's standings
+  async function updateTeam(teamId: number, isWinner: boolean, hit: typeof homeHit, pitch: typeof homePitch) {
+    const { data: row } = await supabase
+      .from('standings')
+      .select('id, w, l, ab, r, h, b2, b3, hr, rbi, bb, so, era_runs, era_outs')
+      .eq('league_id', opts.leagueId)
+      .eq('team_id', teamId)
+      .eq('season_no', opts.seasonNo)
+      .single();
+
+    if (row) {
+      await supabase.from('standings').update({
+        w: row.w + (isWinner ? 1 : 0),
+        l: row.l + (isWinner ? 0 : 1),
+        ab: row.ab + hit.ab,
+        r: row.r + hit.r,
+        h: row.h + hit.h,
+        b2: row.b2 + hit.b2,
+        b3: row.b3 + hit.b3,
+        hr: row.hr + hit.hr,
+        rbi: row.rbi + hit.rbi,
+        bb: row.bb + hit.bb,
+        so: row.so + hit.so,
+        era_runs: row.era_runs + pitch.er,
+        era_outs: row.era_outs + pitch.outs,
+      }).eq('id', row.id);
+    }
+  }
+
   const winnerId = result.winningTeamId;
   const loserId = result.losingTeamId;
 
-  // Fetch both standings rows
-  const { data: winRow } = await supabase
-    .from('standings')
-    .select('id, w')
-    .eq('league_id', opts.leagueId)
-    .eq('team_id', winnerId)
-    .eq('season_no', opts.seasonNo)
-    .single();
-
-  const { data: loseRow } = await supabase
-    .from('standings')
-    .select('id, l')
-    .eq('league_id', opts.leagueId)
-    .eq('team_id', loserId)
-    .eq('season_no', opts.seasonNo)
-    .single();
-
-  if (winRow) {
-    await supabase.from('standings').update({ w: winRow.w + 1 }).eq('id', winRow.id);
-  }
-  if (loseRow) {
-    await supabase.from('standings').update({ l: loseRow.l + 1 }).eq('id', loseRow.id);
-  }
+  const homeIsWinner = result.homeTeamId === winnerId;
+  await updateTeam(result.homeTeamId, homeIsWinner, homeHit, homePitch);
+  await updateTeam(result.visitorTeamId, !homeIsWinner, visitorHit, visitorPitch);
 }
 
 async function processRevenue(

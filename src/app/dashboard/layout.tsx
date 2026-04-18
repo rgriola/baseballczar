@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 import { logout } from '../(auth)/actions';
+import NotificationBell from './notification-bell';
 
 const NAV_LINKS = [
   { href: '/dashboard', label: 'Front Office' },
@@ -12,6 +13,11 @@ const NAV_LINKS = [
   { href: '/dashboard/schedule', label: 'Schedule' },
   { href: '/dashboard/standings', label: 'Standings' },
   { href: '/dashboard/leaders', label: 'Leaders' },
+  { href: '/dashboard/finance', label: 'Finance' },
+  { href: '/dashboard/market', label: 'Market' },
+  { href: '/dashboard/trades', label: 'Trades' },
+  { href: '/dashboard/training', label: 'Training' },
+  { href: '/dashboard/challenges', label: 'O2O' },
 ];
 
 export default async function DashboardLayout({
@@ -37,6 +43,7 @@ export default async function DashboardLayout({
             <span className="text-sm text-gray-400">{teamName}</span>
           </div>
           <div className="flex items-center gap-4">
+            <NotificationBell userId={user.id} />
             <span className="text-sm text-gray-400">{user.email}</span>
             <form action={logout}>
               <button

@@ -1,11 +1,24 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useFormState, useFormStatus } from 'react-dom';
 import Link from 'next/link';
 import { login } from '../actions';
 
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
+    >
+      {pending ? 'Signing in...' : 'Sign In'}
+    </button>
+  );
+}
+
 export default function LoginPage() {
-  const [state, formAction, pending] = useActionState(
+  const [state, formAction] = useFormState(
     async (_prev: { error?: string } | undefined, formData: FormData) => {
       return await login(formData);
     },
@@ -49,13 +62,7 @@ export default function LoginPage() {
         />
       </div>
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
-      >
-        {pending ? 'Signing in...' : 'Sign In'}
-      </button>
+      <SubmitButton />
 
       <div className="flex justify-between text-sm">
         <Link href="/signup" className="text-blue-400 hover:text-blue-300">

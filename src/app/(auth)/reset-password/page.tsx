@@ -1,11 +1,24 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useFormState, useFormStatus } from 'react-dom';
 import Link from 'next/link';
 import { resetPassword } from '../actions';
 
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
+    >
+      {pending ? 'Sending...' : 'Send Reset Link'}
+    </button>
+  );
+}
+
 export default function ResetPasswordPage() {
-  const [state, formAction, pending] = useActionState(
+  const [state, formAction] = useFormState(
     async (_prev: { error?: string; success?: string } | undefined, formData: FormData) => {
       return await resetPassword(formData);
     },
@@ -40,13 +53,7 @@ export default function ResetPasswordPage() {
         />
       </div>
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
-      >
-        {pending ? 'Sending...' : 'Send Reset Link'}
-      </button>
+      <SubmitButton />
 
       <p className="text-center text-sm text-gray-400">
         <Link href="/login" className="text-blue-400 hover:text-blue-300">

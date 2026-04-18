@@ -1,7 +1,6 @@
 import { AtBatOutcome } from './types';
 import type {
   PlayerSkills, PitcherAttributes, GameEvent, GameResult,
-  ScoreBoardState,
 } from './types';
 import { calculateHitterSkill, calculatePitcherSkill } from './PlayerSkills';
 import { resolveAtBat } from './AtBat';

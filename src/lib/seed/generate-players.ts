@@ -141,7 +141,6 @@ function generateDemographics() {
 export function generateHitters(): GeneratedPlayer[] {
   return HITTER_POSITIONS.map((pos, i) => {
     const isNonRoster = i >= 15;
-    const isBench = i >= 9 && i < 15;
     return {
       first_name: pick(FIRST_NAMES),
       last_name: pick(LAST_NAMES),

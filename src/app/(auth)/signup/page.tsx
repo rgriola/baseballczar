@@ -1,11 +1,24 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useFormState, useFormStatus } from 'react-dom';
 import Link from 'next/link';
 import { signup } from '../actions';
 
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
+    >
+      {pending ? 'Creating account...' : 'Create Account'}
+    </button>
+  );
+}
+
 export default function SignupPage() {
-  const [state, formAction, pending] = useActionState(
+  const [state, formAction] = useFormState(
     async (_prev: { error?: string; success?: string } | undefined, formData: FormData) => {
       return await signup(formData);
     },
@@ -69,13 +82,7 @@ export default function SignupPage() {
         <p className="mt-1 text-xs text-gray-500">Minimum 6 characters</p>
       </div>
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
-      >
-        {pending ? 'Creating account...' : 'Create Account'}
-      </button>
+      <SubmitButton />
 
       <p className="text-center text-sm text-gray-400">
         Already have an account?{' '}

@@ -9,7 +9,7 @@ export default async function StandingsPage() {
     .from('standings')
     .select(`
       team_id, w, l,
-      team_runs, team_hits, team_hr, team_era_runs, team_era_outs,
+      r, h, hr, ab, bb, so, rbi, era_runs, era_outs,
       teams(team_name)
     `)
     .eq('league_id', team.league_id!)
@@ -30,6 +30,31 @@ export default async function StandingsPage() {
   const topW = standings?.[0]?.w ?? 0;
   const topL = standings?.[0]?.l ?? 0;
 
+  // Load O2O records for all teams in the league
+  const teamIds = (standings ?? []).map((s) => s.team_id);
+  const { data: o2oRecords } = await supabase
+    .from('o2o_records')
+    .select('team_a_id, team_b_id, wins_a, wins_b')
+    .or(
+      teamIds.map((id) => `team_a_id.eq.${id},team_b_id.eq.${id}`).join(','),
+    );
+
+  // Aggregate O2O W-L per team
+  const o2oMap: Record<number, { w: number; l: number }> = {};
+  for (const tid of teamIds) {
+    o2oMap[tid] = { w: 0, l: 0 };
+  }
+  for (const r of o2oRecords ?? []) {
+    if (o2oMap[r.team_a_id]) {
+      o2oMap[r.team_a_id].w += r.wins_a;
+      o2oMap[r.team_a_id].l += r.wins_b;
+    }
+    if (o2oMap[r.team_b_id]) {
+      o2oMap[r.team_b_id].w += r.wins_b;
+      o2oMap[r.team_b_id].l += r.wins_a;
+    }
+  }
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-white">League Standings</h1>
@@ -47,6 +72,7 @@ export default async function StandingsPage() {
               <th className="pb-2 text-right">H</th>
               <th className="pb-2 text-right">HR</th>
               <th className="pb-2 text-right">ERA</th>
+              <th className="pb-2 text-right">O2O</th>
             </tr>
           </thead>
           <tbody>
@@ -60,10 +86,11 @@ export default async function StandingsPage() {
                   <td className="py-1.5 text-right">{s.l}</td>
                   <td className="py-1.5 text-right font-mono">{pct(s.w, s.l)}</td>
                   <td className="py-1.5 text-right">{gb(topW, topL, s.w, s.l)}</td>
-                  <td className="py-1.5 text-right">{s.team_runs}</td>
-                  <td className="py-1.5 text-right">{s.team_hits}</td>
-                  <td className="py-1.5 text-right">{s.team_hr}</td>
-                  <td className="py-1.5 text-right font-mono">{teamEra(s.team_era_runs, s.team_era_outs)}</td>
+                  <td className="py-1.5 text-right">{s.r}</td>
+                  <td className="py-1.5 text-right">{s.h}</td>
+                  <td className="py-1.5 text-right">{s.hr}</td>
+                  <td className="py-1.5 text-right font-mono">{teamEra(s.era_runs ?? 0, s.era_outs ?? 0)}</td>
+                  <td className="py-1.5 text-right text-xs">{o2oMap[s.team_id] ? `${o2oMap[s.team_id].w}-${o2oMap[s.team_id].l}` : '0-0'}</td>
                 </tr>
               );
             })}
