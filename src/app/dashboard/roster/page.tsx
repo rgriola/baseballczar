@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { requireMyTeam } from '@/lib/queries/team';
+import RosterToggle from './roster-toggle';
 
 const HAND_LABEL: Record<number, string> = { 1: 'R', 2: 'L', 3: 'S' };
 
@@ -35,6 +36,7 @@ export default async function RosterPage() {
                 <th className="pb-2">Name</th>
                 <th className="pb-2">Pos</th>
                 <th className="pb-2">Status</th>
+                <th className="pb-2"></th>
                 <th className="pb-2 text-right">Age</th>
                 <th className="pb-2 text-right">B/T</th>
                 <th className="pb-2 text-right">SPD</th>
@@ -57,6 +59,11 @@ export default async function RosterPage() {
                     <span className={`rounded px-1.5 py-0.5 text-xs ${p.roster_status === 'active' ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-500'}`}>
                       {p.roster_status}
                     </span>
+                  </td>
+                  <td className="py-1.5">
+                    {(p.roster_status === 'active' || p.roster_status === 'reserve') && (
+                      <RosterToggle playerId={p.id} currentStatus={p.roster_status} />
+                    )}
                   </td>
                   <td className="py-1.5 text-right">{p.age}</td>
                   <td className="py-1.5 text-right">{HAND_LABEL[p.hand_batting]}/{HAND_LABEL[p.hand_throw]}</td>
@@ -88,6 +95,7 @@ export default async function RosterPage() {
                 <th className="pb-2">Name</th>
                 <th className="pb-2">Slot</th>
                 <th className="pb-2">Status</th>
+                <th className="pb-2"></th>
                 <th className="pb-2 text-right">Age</th>
                 <th className="pb-2 text-right">T</th>
                 <th className="pb-2 text-right">STA</th>
@@ -116,6 +124,11 @@ export default async function RosterPage() {
                     <span className={`rounded px-1.5 py-0.5 text-xs ${p.roster_status === 'active' ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-500'}`}>
                       {p.roster_status}
                     </span>
+                  </td>
+                  <td className="py-1.5">
+                    {(p.roster_status === 'active' || p.roster_status === 'reserve') && (
+                      <RosterToggle playerId={p.id} currentStatus={p.roster_status} />
+                    )}
                   </td>
                   <td className="py-1.5 text-right">{p.age}</td>
                   <td className="py-1.5 text-right">{HAND_LABEL[p.hand_throw]}</td>

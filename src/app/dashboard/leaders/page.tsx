@@ -52,11 +52,6 @@ export default async function LeadersPage() {
     const frac = Math.round((ip - whole) * 10);
     return whole + frac / 3;
   }
-  // Format IP for display in baseball notation
-  function formatIp(ip: number): string {
-    return ip.toFixed(1);
-  }
-
   const categories = [
     { title: 'Batting Average', data: top(hitting, (a, b) => (b.h / Math.max(b.ab, 1)) - (a.h / Math.max(a.ab, 1)), (s) => s.ab >= 10), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: (s.h / s.ab).toFixed(3) }) },
     { title: 'Home Runs', data: top(hitting, (a, b) => b.hr - a.hr), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.hr) }) },

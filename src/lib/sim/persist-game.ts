@@ -348,7 +348,7 @@ async function updateStandings(
   // Aggregate team hitting totals from player stats maps
   function sumHitting(statsMap: Map<number, GameStats>) {
     let ab = 0, r = 0, h = 0, b2 = 0, b3 = 0, hr = 0, rbi = 0, bb = 0, so = 0;
-    for (const s of statsMap.values()) {
+    for (const s of Array.from(statsMap.values())) {
       ab += s.ab; r += s.r; h += s.hits; b2 += s.b2; b3 += s.b3;
       hr += s.hr; rbi += s.rbi; bb += s.bb; so += s.so;
     }
@@ -356,7 +356,7 @@ async function updateStandings(
   }
   function sumPitching(statsMap: Map<number, PitcherBoxLine>) {
     let er = 0, outs = 0;
-    for (const s of statsMap.values()) {
+    for (const s of Array.from(statsMap.values())) {
       er += s.er; outs += s.om;
     }
     return { er, outs };
@@ -399,7 +399,6 @@ async function updateStandings(
   }
 
   const winnerId = result.winningTeamId;
-  const loserId = result.losingTeamId;
 
   const homeIsWinner = result.homeTeamId === winnerId;
   await updateTeam(result.homeTeamId, homeIsWinner, homeHit, homePitch);

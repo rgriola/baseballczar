@@ -186,3 +186,44 @@ export async function updateJersey(formData: FormData) {
 
   return { success: true };
 }
+
+const rosterStatusSchema = z.object({
+  playerId: z.number().int().positive(),
+  newStatus: z.enum(['active', 'reserve']),
+});
+
+export async function toggleRosterStatus(formData: FormData) {
+  const parsed = rosterStatusSchema.safeParse({
+    playerId: Number(formData.get('playerId')),
+    newStatus: formData.get('newStatus'),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Not authenticated' };
+
+  const { data: team } = await supabase
+    .from('teams')
+    .select('id')
+    .eq('owner_id', user.id)
+    .single();
+  if (!team) return { error: 'No team found' };
+
+  // Verify player belongs to team and is not a free agent
+  const { data: player } = await supabase
+    .from('players')
+    .select('id, roster_status')
+    .eq('id', parsed.data.playerId)
+    .eq('team_id', team.id)
+    .single();
+  if (!player) return { error: 'Player not found' };
+  if (player.roster_status === 'free_agent') return { error: 'Cannot move free agents' };
+
+  await supabase
+    .from('players')
+    .update({ roster_status: parsed.data.newStatus })
+    .eq('id', parsed.data.playerId);
+
+  return { success: true };
+}
