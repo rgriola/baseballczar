@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { updateSession } from '@/lib/supabase/middleware';
 import { apiRateLimit, authRateLimit } from '@/lib/redis/rate-limit';
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   // Skip rate limiting if Upstash env vars are not configured
   if (
     process.env.UPSTASH_REDIS_REST_URL &&

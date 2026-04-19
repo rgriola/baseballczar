@@ -157,7 +157,7 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
       }
 
       // Credit runs scored by runners
-      creditRuns(vField, vHitterStats, hPitcherStats, home.bullpen, vTotals, outs);
+      const topGoAheadPitch = creditRuns(vField, vHitterStats, hPitcherStats, home.bullpen, vTotals, outs, hTotals.r);
 
       // HR: batter run + pitcher ER always to current pitcher
       if (outcome === AtBatOutcome.HomeRun) {
@@ -178,7 +178,11 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
       // W/L candidate update: check if the lead just changed hands
       { const hl = hTotals.r > vTotals.r, vl = vTotals.r > hTotals.r;
         if (hl && !prevLeadIsHome) { hWinCandidateIdx = hPitchIdx; vLossCandidateIdx = vPitchIdx; }
-        if (vl && !prevLeadIsVisitor) { vWinCandidateIdx = vPitchIdx; hLossCandidateIdx = hPitchIdx; }
+        if (vl && !prevLeadIsVisitor) {
+          vWinCandidateIdx = vPitchIdx;
+          // Use the responsible pitcher (who put the go-ahead runner on base), not the current active pitcher
+          hLossCandidateIdx = topGoAheadPitch >= 0 ? topGoAheadPitch : hPitchIdx;
+        }
         prevLeadIsHome = hl; prevLeadIsVisitor = vl; }
 
       outs = vField.outsRef;
@@ -249,7 +253,7 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
           addPitcherOut(activePBox);
         }
 
-        creditRuns(hField, hHitterStats, vPitcherStats, visitor.bullpen, hTotals, outs);
+        const botGoAheadPitch = creditRuns(hField, hHitterStats, vPitcherStats, visitor.bullpen, hTotals, outs, vTotals.r);
 
         if (outcome === AtBatOutcome.HomeRun) {
           const bStats = hHitterStats.get(batter.playerId)!;
@@ -267,7 +271,11 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
 
         // W/L candidate update: check if the lead just changed hands
         { const hl = hTotals.r > vTotals.r, vl = vTotals.r > hTotals.r;
-          if (hl && !prevLeadIsHome) { hWinCandidateIdx = hPitchIdx; vLossCandidateIdx = vPitchIdx; }
+          if (hl && !prevLeadIsHome) {
+            hWinCandidateIdx = hPitchIdx;
+            // Use the responsible pitcher (who put the go-ahead runner on base), not the current active pitcher
+            vLossCandidateIdx = botGoAheadPitch >= 0 ? botGoAheadPitch : vPitchIdx;
+          }
           if (vl && !prevLeadIsVisitor) { vWinCandidateIdx = vPitchIdx; hLossCandidateIdx = hPitchIdx; }
           prevLeadIsHome = hl; prevLeadIsVisitor = vl; }
 
@@ -343,7 +351,9 @@ function creditRuns(
   pitchingBullpen: BullpenPitcher[],
   teamTotals: TeamTotals,
   outs: number,
-): void {
+  oppRuns: number,
+): number { // returns bullpen index of pitcher responsible for go-ahead run, or -1
+  let goAheadRespPitch = -1;
   for (let z = 6; z > 3; z--) {
     if (outs === 3) break;
     const runner = field.runners[z];
@@ -357,8 +367,14 @@ function creditRuns(
       field.plateApp.r++;
       field.innTot.r++;
       teamTotals.r++;
+
+      // First run that gives the batting team the lead — that pitcher takes the loss
+      if (goAheadRespPitch === -1 && teamTotals.r > oppRuns) {
+        goAheadRespPitch = runner.respPitch;
+      }
     }
   }
+  return goAheadRespPitch;
 }
 
 /**
