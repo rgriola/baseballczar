@@ -78,14 +78,14 @@ console.log(`  Stamina: ${sampleP.stamina}/${sampleP.max_stamina}`);
 // --- Schedule generation ---
 console.log('\n=== Schedule Generation ===');
 const schedule = generateSchedule(new Date('2026-04-20T16:00:00'));
-console.log(`Total game entries: ${schedule.length} (expected 150)`);
+console.log(`Total game entries: ${schedule.length} (expected 105)`);
 
 const rounds = new Set(schedule.map((g) => g.round));
-console.log(`Unique rounds: ${rounds.size} (expected 50)`);
+console.log(`Unique rounds: ${rounds.size} (expected 35)`);
 
 // Verify each round has exactly 3 games
 let roundErrors = 0;
-for (let r = 1; r <= 50; r++) {
+for (let r = 1; r <= 35; r++) {
   const gamesInRound = schedule.filter((g) => g.round === r);
   if (gamesInRound.length !== 3) {
     console.log(`  ERROR: Round ${r} has ${gamesInRound.length} games (expected 3)`);

@@ -40,3 +40,5 @@ Yes. Please Conduct a comprehensive review of the Baseballczar 2.0 project at th
 - This is typically tracked ie; Game 1 uses starter SP1, Game 2 uses SP2.
 - the Bullpen has 5 pitchers, typically one is designated as a "closer" with a specific CL position; The positions are RP1, RP2, RP3, RP4 and CL. The Sim logic would use the CL in the end of the game to "close" out the game.
 - The Pitcher Roster needs to allow 10 pitchers, no more no less, the rest are reserve and the Rotation page should have 10 pitchers 5 starters and the 5 Relievers.
+
+...

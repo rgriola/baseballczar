@@ -15,7 +15,15 @@ import {
 import { createScoreBoard, addInningScore } from './ScoreBoard';
 import type { GameStats, PitcherBoxLine } from './types';
 
-// ─── Input types ────────────────────────────────────────────────
+// ─── Save tracking ──────────────────────────────────────────────
+interface PitcherEntryState {
+  /** Pitching team's run lead when this pitcher entered (positive = leading). */
+  leadAtEntry: number;
+  /** Runners on base (0-3) for the opposing team when this pitcher entered. */
+  runnersAtEntry: number;
+}
+
+// ─── Input types ─────────────────────────────────────────────────
 
 export interface LineupPlayer {
   playerId: number;
@@ -76,6 +84,24 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
   const vPBox = vPitcherStats.get(visitor.bullpen[vPitchIdx].playerId)!;
   vPBox.g = 1; vPBox.gs = 1;
 
+  // Track pitcher entry state for save calculations
+  const hPitcherEntry = new Map<number, PitcherEntryState>();
+  const vPitcherEntry = new Map<number, PitcherEntryState>();
+  // Starters enter at 0-0, bases empty
+  hPitcherEntry.set(home.bullpen[0].playerId, { leadAtEntry: 0, runnersAtEntry: 0 });
+  vPitcherEntry.set(visitor.bullpen[0].playerId, { leadAtEntry: 0, runnersAtEntry: 0 });
+
+  // MLB W/L tracking: pitcher of record when their team last assumed the lead.
+  // hWinCandidateIdx = home pitcher "in the game" when home last took the lead.
+  // vLossCandidateIdx = visitor pitcher on mound when home last took the lead (gave up lead).
+  // (Symmetric for visitor leading.)
+  let prevLeadIsHome = false;
+  let prevLeadIsVisitor = false;
+  let hWinCandidateIdx = 0;
+  let vWinCandidateIdx = 0;
+  let hLossCandidateIdx = 0;
+  let vLossCandidateIdx = 0;
+
   // Mark starting lineup
   for (let i = 0; i < 9; i++) {
     vHitterStats.get(visitor.lineup[i].playerId)!;
@@ -96,7 +122,22 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
       const pBox = hPitcherStats.get(pitcher.playerId)!;
 
       // Auto pitch switch: fatigue, closer logic
+      const prevHPIdx = hPitchIdx;
       hPitchIdx = maybeSwitchPitcher(hPitchIdx, home.bullpen, pBox, vField.rob, hPitcherStats, inning, hTotals.r > vTotals.r);
+      if (hPitchIdx !== prevHPIdx) {
+        hPitcherEntry.set(home.bullpen[hPitchIdx].playerId, {
+          leadAtEntry: hTotals.r - vTotals.r,
+          runnersAtEntry: vField.rob,
+        });
+        // If home is leading, decide whether to transfer the W candidate.
+        // Starter must have ≥5 innings (15 outs) to keep the W; relievers need ≥1 out.
+        // If the outgoing pitcher doesn’t qualify, the incoming pitcher inherits candidacy.
+        if (hTotals.r > vTotals.r) {
+          const outBox = hPitcherStats.get(home.bullpen[prevHPIdx].playerId)!;
+          const qualifies = prevHPIdx === 0 ? outBox.om >= 15 : outBox.om >= 1;
+          if (!qualifies) hWinCandidateIdx = hPitchIdx;
+        }
+      }
 
       const activePitcher = home.bullpen[hPitchIdx];
       const activePBox = hPitcherStats.get(activePitcher.playerId)!;
@@ -134,6 +175,12 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
       addPitcherPA(activePBox, vField.plateApp);
       addTeamHittingStats(vTotals, vField.plateApp);
 
+      // W/L candidate update: check if the lead just changed hands
+      { const hl = hTotals.r > vTotals.r, vl = vTotals.r > hTotals.r;
+        if (hl && !prevLeadIsHome) { hWinCandidateIdx = hPitchIdx; vLossCandidateIdx = vPitchIdx; }
+        if (vl && !prevLeadIsVisitor) { vWinCandidateIdx = vPitchIdx; hLossCandidateIdx = hPitchIdx; }
+        prevLeadIsHome = hl; prevLeadIsVisitor = vl; }
+
       outs = vField.outsRef;
 
       // Record event
@@ -158,7 +205,7 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
     if (inning >= 9 && hTotals.r > vTotals.r) {
       hTotals.status = true;
       vTotals.status = false;
-      finalizeWinLoss(true, home, visitor, hPitcherStats, vPitcherStats, hPitchIdx, vPitchIdx);
+      finalizeWinLoss(true, home, visitor, hPitcherStats, vPitcherStats, hPitchIdx, vPitchIdx, hPitcherEntry, vPitcherEntry, hWinCandidateIdx, vWinCandidateIdx, hLossCandidateIdx, vLossCandidateIdx);
       break;
     }
 
@@ -171,7 +218,20 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
         const pitcher = visitor.bullpen[vPitchIdx];
         const pBox = vPitcherStats.get(pitcher.playerId)!;
 
+        const prevVPIdx = vPitchIdx;
         vPitchIdx = maybeSwitchPitcher(vPitchIdx, visitor.bullpen, pBox, hField.rob, vPitcherStats, inning, vTotals.r > hTotals.r);
+        if (vPitchIdx !== prevVPIdx) {
+          vPitcherEntry.set(visitor.bullpen[vPitchIdx].playerId, {
+            leadAtEntry: vTotals.r - hTotals.r,
+            runnersAtEntry: hField.rob,
+          });
+          // Same W-candidate transfer logic for visitor
+          if (vTotals.r > hTotals.r) {
+            const outBox = vPitcherStats.get(visitor.bullpen[prevVPIdx].playerId)!;
+            const qualifies = prevVPIdx === 0 ? outBox.om >= 15 : outBox.om >= 1;
+            if (!qualifies) vWinCandidateIdx = vPitchIdx;
+          }
+        }
 
         const activePitcher = visitor.bullpen[vPitchIdx];
         const activePBox = vPitcherStats.get(activePitcher.playerId)!;
@@ -205,6 +265,12 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
         addPitcherPA(activePBox, hField.plateApp);
         addTeamHittingStats(hTotals, hField.plateApp);
 
+        // W/L candidate update: check if the lead just changed hands
+        { const hl = hTotals.r > vTotals.r, vl = vTotals.r > hTotals.r;
+          if (hl && !prevLeadIsHome) { hWinCandidateIdx = hPitchIdx; vLossCandidateIdx = vPitchIdx; }
+          if (vl && !prevLeadIsVisitor) { vWinCandidateIdx = vPitchIdx; hLossCandidateIdx = hPitchIdx; }
+          prevLeadIsHome = hl; prevLeadIsVisitor = vl; }
+
         outs = hField.outsRef;
 
         events.push({
@@ -223,7 +289,7 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
           hTotals.status = true;
           vTotals.status = false;
           addInningScore(board, 'bottom', inning, hField.innTot.r, 0, hTotals.r, hTotals.hits);
-          finalizeWinLoss(true, home, visitor, hPitcherStats, vPitcherStats, hPitchIdx, vPitchIdx);
+          finalizeWinLoss(true, home, visitor, hPitcherStats, vPitcherStats, hPitchIdx, vPitchIdx, hPitcherEntry, vPitcherEntry, hWinCandidateIdx, vWinCandidateIdx, hLossCandidateIdx, vLossCandidateIdx);
           break;
         }
 
@@ -236,7 +302,7 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
       if (inning >= 9 && vTotals.r > hTotals.r && outs === 3) {
         vTotals.status = true;
         hTotals.status = false;
-        finalizeWinLoss(false, home, visitor, hPitcherStats, vPitcherStats, hPitchIdx, vPitchIdx);
+        finalizeWinLoss(false, home, visitor, hPitcherStats, vPitcherStats, hPitchIdx, vPitchIdx, hPitcherEntry, vPitcherEntry, hWinCandidateIdx, vWinCandidateIdx, hLossCandidateIdx, vLossCandidateIdx);
       }
     }
 
@@ -350,32 +416,84 @@ function finalizeWinLoss(
   vPitcherStats: Map<number, PitcherBoxLine>,
   hPitchIdx: number,
   vPitchIdx: number,
+  hPitcherEntry: Map<number, PitcherEntryState>,
+  vPitcherEntry: Map<number, PitcherEntryState>,
+  hWinCandidateIdx: number,
+  vWinCandidateIdx: number,
+  hLossCandidateIdx: number,
+  vLossCandidateIdx: number,
 ): void {
   const winTeam = homeWon ? home : visitor;
   const loseTeam = homeWon ? visitor : home;
   const winStats = homeWon ? hPitcherStats : vPitcherStats;
   const loseStats = homeWon ? vPitcherStats : hPitcherStats;
+  const winEntry = homeWon ? hPitcherEntry : vPitcherEntry;
 
-  // Winning pitcher = starter of winning team (simplified — proper W/L requires WinLoss tracking)
+  // ── Win ─────────────────────────────────────────────────────────────
+  // Win candidate = pitcher pitching for the winning team when they last took (or held) the lead,
+  // accounting for pitcher switches: the candidacy transfers to the incoming pitcher only when the
+  // outgoing pitcher fails to qualify (starter: <15 outs; reliever: <1 out).
+  // This means a reliever who records 1 out and then departs while their team leads keeps the W.
+  const winCandidateIdx = homeWon ? hWinCandidateIdx : vWinCandidateIdx;
+  const winCandidateBox = winStats.get(winTeam.bullpen[winCandidateIdx].playerId)!;
+  let winBox: PitcherBoxLine;
+  if (winCandidateBox.om >= 1) {
+    winBox = winCandidateBox;
+  } else {
+    // Edge case: candidate recorded 0 outs (e.g. walked first batter then replaced).
+    // Scan back from the last pitcher to find the most recent one with ≥1 out.
+    const finalPitchIdx = homeWon ? hPitchIdx : vPitchIdx;
+    winBox = winCandidateBox; // safe fallback
+    for (let i = finalPitchIdx; i >= 0; i--) {
+      const box = winStats.get(winTeam.bullpen[i]?.playerId);
+      if (box && box.om >= 1) { winBox = box; break; }
+    }
+  }
+  addWin(winBox);
+
+  // CG/SHO still tracked on the starter
   const winStarterBox = winStats.get(winTeam.bullpen[0].playerId)!;
-  addWin(winStarterBox);
-
   if (winStarterBox.gs === 1 && winStarterBox.ip >= 9) {
     addCG(winStarterBox);
     if (winStarterBox.r === 0) addSHO(winStarterBox);
   }
 
-  // Losing pitcher = starter of losing team
+  // ── Loss ────────────────────────────────────────────────────────────
+  // Loss candidate = pitcher on the mound for the losing team when the winning
+  // team scored the run that gave them the lead they never relinquished.
+  const lossCandidateIdx = homeWon ? vLossCandidateIdx : hLossCandidateIdx;
+  const lossBox = loseStats.get(loseTeam.bullpen[lossCandidateIdx].playerId)!;
+  addLoss(lossBox);
+
+  // CG still tracked on the losing starter
   const loseStarterBox = loseStats.get(loseTeam.bullpen[0].playerId)!;
-  addLoss(loseStarterBox);
   if (loseStarterBox.gs === 1 && loseStarterBox.ip >= 8) {
     addCG(loseStarterBox);
   }
 
-  // Save: last pitcher for winning team if different from starter
+  // Save: last relief pitcher for winning team, meeting official MLB save criteria.
+  // Base requirements: not the starter, pitched at least 1 out (om >= 1), did not earn the win.
+  // Plus ONE of:
+  //   Cond 1 — entered with a lead of 1-3 runs AND pitched at least 1 full inning (3 outs)
+  //   Cond 2 — entered with the tying run on base, at-bat, or on-deck
+  //             (lead <= runnersAtEntry + 2, where +1 = batter, +2 = on-deck)
+  //   Cond 3 — pitched at least 3 innings (9 outs)
   const lastPitchIdx = homeWon ? hPitchIdx : vPitchIdx;
   if (lastPitchIdx !== 0) {
-    const saveBox = winStats.get(winTeam.bullpen[lastPitchIdx].playerId);
-    if (saveBox) addSave(saveBox);
+    const lastPitcher = winTeam.bullpen[lastPitchIdx];
+    const saveBox = winStats.get(lastPitcher.playerId);
+    if (saveBox && saveBox.om >= 1 && saveBox.w === 0) {
+      const entry = winEntry.get(lastPitcher.playerId);
+      if (entry) {
+        const lead = entry.leadAtEntry;
+        const runners = entry.runnersAtEntry;
+        const cond1 = lead >= 1 && lead <= 3 && saveBox.om >= 3;
+        const cond2 = lead >= 1 && lead <= runners + 2;
+        const cond3 = saveBox.om >= 9;
+        if (cond1 || cond2 || cond3) {
+          addSave(saveBox);
+        }
+      }
+    }
   }
 }
