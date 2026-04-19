@@ -90,9 +90,9 @@ export const HITTER_BATT_ORDER = [
 
 /**
  * Rotation slots for the 20 pitchers per team.
- * 1-5 = starting rotation, 6-9 = bullpen, 0 = non-roster.
+ * 1-5 = starting rotation, 6-9 = bullpen (RP1-RP4), 10 = closer (CL), 0 = reserve.
  */
 export const PITCHER_ROTATION_SLOTS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ] as const;

@@ -30,6 +30,7 @@ export interface BullpenPitcher {
   lastName: string;
   skills: PitcherAttributes;
   isStarter: boolean;
+  isCloser?: boolean;
 }
 
 export interface TeamInput {
@@ -94,8 +95,8 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
       const pitcher = home.bullpen[hPitchIdx];
       const pBox = hPitcherStats.get(pitcher.playerId)!;
 
-      // Auto pitch switch: if BF >= 30 and runners on base
-      hPitchIdx = maybeSwitchPitcher(hPitchIdx, home.bullpen, pBox, vField.rob, hPitcherStats);
+      // Auto pitch switch: fatigue, closer logic
+      hPitchIdx = maybeSwitchPitcher(hPitchIdx, home.bullpen, pBox, vField.rob, hPitcherStats, inning, hTotals.r > vTotals.r);
 
       const activePitcher = home.bullpen[hPitchIdx];
       const activePBox = hPitcherStats.get(activePitcher.playerId)!;
@@ -170,7 +171,7 @@ export function simulateGame(visitor: TeamInput, home: TeamInput): GameResult {
         const pitcher = visitor.bullpen[vPitchIdx];
         const pBox = vPitcherStats.get(pitcher.playerId)!;
 
-        vPitchIdx = maybeSwitchPitcher(vPitchIdx, visitor.bullpen, pBox, hField.rob, vPitcherStats);
+        vPitchIdx = maybeSwitchPitcher(vPitchIdx, visitor.bullpen, pBox, hField.rob, vPitcherStats, inning, vTotals.r > hTotals.r);
 
         const activePitcher = visitor.bullpen[vPitchIdx];
         const activePBox = vPitcherStats.get(activePitcher.playerId)!;
@@ -296,6 +297,7 @@ function creditRuns(
 
 /**
  * Auto-switch pitchers when starter is fatigued and runners on base.
+ * In late innings (7+), bring in the closer if available and fresh.
  * Translated from TempV_PitchSwitch / TempH_PitchSwitch
  */
 function maybeSwitchPitcher(
@@ -304,11 +306,28 @@ function maybeSwitchPitcher(
   currentBox: PitcherBoxLine,
   runnersOnBase: number,
   pitcherStatsMap: Map<number, PitcherBoxLine>,
+  inning: number,
+  teamLeads: boolean,
 ): number {
+  // Late-game closer logic: bring in the closer in 8th+ inning when team leads
+  if (inning >= 8 && teamLeads) {
+    const closerIdx = bullpen.findIndex((p) => p.isCloser);
+    if (closerIdx !== -1 && closerIdx !== currentIdx) {
+      const closerBox = pitcherStatsMap.get(bullpen[closerIdx].playerId);
+      if (closerBox && closerBox.bf === 0) {
+        closerBox.g = 1;
+        return closerIdx;
+      }
+    }
+  }
+
   if (currentBox.bf >= 30 && runnersOnBase >= 1) {
-    // Pick a random reliever (index 1-9 in bullpen)
-    const relieverIdx = 1 + Math.floor(Math.random() * Math.min(bullpen.length - 1, 9));
-    if (relieverIdx < bullpen.length) {
+    // Pick a random reliever (skip starter at idx 0, and skip closer)
+    const relieverCandidates = bullpen
+      .map((p, i) => i)
+      .filter((i) => i !== 0 && i !== currentIdx && !bullpen[i].isCloser);
+    if (relieverCandidates.length > 0) {
+      const relieverIdx = relieverCandidates[Math.floor(Math.random() * relieverCandidates.length)];
       const relieverBox = pitcherStatsMap.get(bullpen[relieverIdx].playerId);
       if (relieverBox && relieverBox.bf === 0 && relieverBox.gs !== 1) {
         relieverBox.g = 1;

@@ -40,17 +40,23 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
   const [bullpen, setBullpen] = useState<Pitcher[]>(
     pitchers.filter((p) => p.rotation_slot >= 6 && p.rotation_slot <= 9).sort((a, b) => a.rotation_slot - b.rotation_slot),
   );
+  const [closer, setCloser] = useState<Pitcher | null>(
+    pitchers.find((p) => p.rotation_slot === 10) ?? null,
+  );
   const [unassigned, setUnassigned] = useState<Pitcher[]>(
-    pitchers.filter((p) => p.rotation_slot === 0 || p.rotation_slot > 9),
+    pitchers.filter((p) => p.rotation_slot === 0 || p.rotation_slot > 10),
   );
   const [dragIdx, setDragIdx] = useState<{ group: 'rotation' | 'bullpen'; idx: number } | null>(null);
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
 
+  const totalAssigned = rotation.length + bullpen.length + (closer ? 1 : 0);
+
   function moveToRotation(p: Pitcher) {
     if (rotation.length >= 5) return;
     setRotation([...rotation, p]);
     setBullpen(bullpen.filter((b) => b.id !== p.id));
+    setCloser(closer?.id === p.id ? null : closer);
     setUnassigned(unassigned.filter((u) => u.id !== p.id));
   }
 
@@ -58,13 +64,27 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
     if (bullpen.length >= 4) return;
     setBullpen([...bullpen, p]);
     setRotation(rotation.filter((r) => r.id !== p.id));
+    setCloser(closer?.id === p.id ? null : closer);
     setUnassigned(unassigned.filter((u) => u.id !== p.id));
+  }
+
+  function moveToCloser(p: Pitcher) {
+    // If there's already a closer, send them to unassigned
+    if (closer) {
+      setUnassigned((prev) => [...prev.filter((u) => u.id !== p.id), closer]);
+    } else {
+      setUnassigned(unassigned.filter((u) => u.id !== p.id));
+    }
+    setCloser(p);
+    setRotation(rotation.filter((r) => r.id !== p.id));
+    setBullpen(bullpen.filter((b) => b.id !== p.id));
   }
 
   function remove(p: Pitcher) {
     setUnassigned([...unassigned, p]);
     setRotation(rotation.filter((r) => r.id !== p.id));
     setBullpen(bullpen.filter((b) => b.id !== p.id));
+    if (closer?.id === p.id) setCloser(null);
   }
 
   function handleDragStartRotation(idx: number) {
@@ -94,13 +114,26 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
   }
 
   function save() {
-    if (rotation.length < 1) {
-      setMessage('Need at least 1 starting pitcher');
+    if (totalAssigned !== 10) {
+      setMessage('Rotation must have exactly 10 pitchers (5 SP + 4 RP + 1 CL)');
+      return;
+    }
+    if (rotation.length !== 5) {
+      setMessage('Need exactly 5 starting pitchers');
+      return;
+    }
+    if (bullpen.length !== 4) {
+      setMessage('Need exactly 4 relief pitchers');
+      return;
+    }
+    if (!closer) {
+      setMessage('Need a designated closer (CL)');
       return;
     }
     const fd = new FormData();
     fd.set('pitcherIds', JSON.stringify(rotation.map((p) => p.id)));
     fd.set('bullpenIds', JSON.stringify(bullpen.map((p) => p.id)));
+    fd.set('closerId', JSON.stringify(closer.id));
     startTransition(async () => {
       const result = await updateRotation(fd);
       setMessage(result?.error ?? 'Rotation saved!');
@@ -229,9 +262,34 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
         </div>
       </section>
 
+      {/* Closer */}
+      <section>
+        <h2 className="mb-3 text-lg font-semibold text-white">Closer ({closer ? '1' : '0'}/1)</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>{tableHeaders}</thead>
+            <tbody>
+              {closer ? (
+                <tr className="border-b border-gray-800/50 text-gray-300">
+                  <td className="py-1.5 w-10 text-center">
+                    <span className="rounded bg-red-900/50 px-1.5 py-0.5 text-xs font-medium text-red-400">CL</span>
+                  </td>
+                  {pitcherCells(closer)}
+                  <td className="py-1.5 w-10 text-center">
+                    <button onClick={() => remove(closer)} className={removeBtnCls}>✕</button>
+                  </td>
+                </tr>
+              ) : (
+                <tr><td colSpan={19} className="py-4 text-center text-gray-500">No closer assigned — add one from Available below</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       {/* Available */}
       <section>
-        <h2 className="mb-3 text-lg font-semibold text-white">Available ({unassigned.length})</h2>
+        <h2 className="mb-3 text-lg font-semibold text-white">Available ({unassigned.length}) <span className="text-sm font-normal text-gray-400">— {totalAssigned}/10 assigned</span></h2>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -254,7 +312,7 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
                 <th className="pb-2 text-right">FLD</th>
                 <th className="pb-2 text-right">THR</th>
                 <th className="pb-2 text-right font-semibold">TOT</th>
-                <th className="pb-2 w-24 text-right">Assign</th>
+                <th className="pb-2 w-32 text-right">Assign</th>
               </tr>
             </thead>
             <tbody>
@@ -262,7 +320,7 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
                 <tr key={p.id} className="border-b border-gray-800/50 text-gray-500">
                   <td className="py-1.5 w-10 text-center text-gray-600">—</td>
                   {pitcherCells(p)}
-                  <td className="py-1.5 w-24 text-right">
+                  <td className="py-1.5 w-32 text-right">
                     <div className="flex justify-end gap-1">
                       {rotation.length < 5 && (
                         <button onClick={() => moveToRotation(p)} className="rounded bg-green-900/40 px-2 py-0.5 text-xs text-green-400 hover:bg-green-800/50">→ SP</button>
@@ -270,6 +328,7 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
                       {bullpen.length < 4 && (
                         <button onClick={() => moveToBullpen(p)} className="rounded bg-yellow-900/40 px-2 py-0.5 text-xs text-yellow-400 hover:bg-yellow-800/50">→ RP</button>
                       )}
+                      <button onClick={() => moveToCloser(p)} className="rounded bg-red-900/40 px-2 py-0.5 text-xs text-red-400 hover:bg-red-800/50">→ CL</button>
                     </div>
                   </td>
                 </tr>
@@ -285,11 +344,17 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
       <div className="flex items-center gap-3">
         <button
           onClick={save}
-          disabled={isPending || rotation.length < 1}
+          disabled={isPending || totalAssigned !== 10}
           className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
         >
           {isPending ? 'Saving...' : 'Save Rotation'}
         </button>
+
+        {totalAssigned !== 10 && !message && (
+          <p className="text-sm text-yellow-400">
+            Assign exactly 10 pitchers: 5 SP + 4 RP + 1 CL ({totalAssigned}/10)
+          </p>
+        )}
 
         {message && (
           <p className={`text-sm ${message.includes('saved') ? 'text-green-400' : 'text-red-400'}`}>

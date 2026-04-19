@@ -17,6 +17,7 @@ export interface Team {
   league_id: number | null;
   team_name: string;
   country_id: number;
+  next_sp_slot: number;
   first_name: string | null;
   last_name: string | null;
   email: string | null;

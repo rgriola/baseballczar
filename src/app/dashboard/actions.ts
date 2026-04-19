@@ -97,13 +97,16 @@ export async function updateLineup(formData: FormData) {
 const rotationSchema = z.object({
   /** Array of pitcher IDs for rotation slots 1-5 */
   pitcherIds: z.array(z.number().int().positive()).min(1).max(5),
-  /** Array of pitcher IDs for bullpen (slots 6-9) */
+  /** Array of pitcher IDs for bullpen RP1-RP4 (slots 6-9) */
   bullpenIds: z.array(z.number().int().positive()).max(4),
+  /** Pitcher ID for the closer CL (slot 10), or null if unset */
+  closerId: z.number().int().positive().nullable().optional(),
 });
 
 export async function updateRotation(formData: FormData) {
   const rawPitchers = formData.get('pitcherIds');
   const rawBullpen = formData.get('bullpenIds');
+  const rawCloser = formData.get('closerId');
   if (typeof rawPitchers !== 'string' || typeof rawBullpen !== 'string') {
     return { error: 'Invalid data' };
   }
@@ -111,8 +114,15 @@ export async function updateRotation(formData: FormData) {
   const parsed = rotationSchema.safeParse({
     pitcherIds: JSON.parse(rawPitchers),
     bullpenIds: JSON.parse(rawBullpen),
+    closerId: rawCloser ? JSON.parse(rawCloser as string) : null,
   });
   if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const closerId = parsed.data.closerId ?? null;
+  const totalAssigned = parsed.data.pitcherIds.length + parsed.data.bullpenIds.length + (closerId ? 1 : 0);
+  if (totalAssigned !== 10) {
+    return { error: `Rotation must have exactly 10 pitchers (5 SP + 4 RP + 1 CL). Currently ${totalAssigned}.` };
+  }
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -126,7 +136,7 @@ export async function updateRotation(formData: FormData) {
   if (!team) return { error: 'No team found' };
 
   // Verify all pitchers belong to this team
-  const allIds = [...parsed.data.pitcherIds, ...parsed.data.bullpenIds];
+  const allIds = [...parsed.data.pitcherIds, ...parsed.data.bullpenIds, ...(closerId ? [closerId] : [])];
   const { data: pitchers } = await supabase
     .from('players')
     .select('id')
@@ -152,6 +162,14 @@ export async function updateRotation(formData: FormData) {
       .from('players')
       .update({ rotation_slot: 6 + i })
       .eq('id', parsed.data.bullpenIds[i]);
+  }
+
+  // Update closer slot (10)
+  if (closerId) {
+    await supabase
+      .from('players')
+      .update({ rotation_slot: 10 })
+      .eq('id', closerId);
   }
 
   // Set rotation_slot to 0 for all other pitchers
@@ -240,12 +258,34 @@ export async function toggleRosterStatus(formData: FormData) {
   // Verify player belongs to team and is not a free agent
   const { data: player } = await supabase
     .from('players')
-    .select('id, roster_status')
+    .select('id, roster_status, fielder')
     .eq('id', parsed.data.playerId)
     .eq('team_id', team.id)
     .single();
   if (!player) return { error: 'Player not found' };
   if (player.roster_status === 'free_agent') return { error: 'Cannot move free agents' };
+
+  // Enforce exactly 15 active position players
+  if (parsed.data.newStatus === 'active' && player.fielder) {
+    const { count } = await supabase
+      .from('players')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', team.id)
+      .eq('fielder', true)
+      .eq('roster_status', 'active');
+    if ((count ?? 0) >= 15) return { error: 'You already have 15 active position players. Move one to reserve first.' };
+  }
+
+  // Enforce exactly 10 active pitchers
+  if (parsed.data.newStatus === 'active' && !player.fielder) {
+    const { count } = await supabase
+      .from('players')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', team.id)
+      .eq('fielder', false)
+      .eq('roster_status', 'active');
+    if ((count ?? 0) >= 10) return { error: 'You already have 10 active pitchers. Move one to reserve first.' };
+  }
 
   await supabase
     .from('players')
@@ -324,6 +364,12 @@ export async function resetSeason(): Promise<{ error?: string; message?: string 
       rbi: 0, bb: 0, so: 0, sb: 0, cs: 0, sf: 0, sac: 0,
       era_runs: 0, era_outs: 0,
     })
+    .gte('id', 0);
+
+  // Reset starting pitcher rotation to SP1
+  await service
+    .from('teams')
+    .update({ next_sp_slot: 1 })
     .gte('id', 0);
 
   return { message: 'Season reset complete' };
