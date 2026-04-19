@@ -108,8 +108,26 @@ async function buildTeamInput(
     .lte('batt_order', 9)
     .order('batt_order');
 
-  if (hErr || !hitters || hitters.length < 9) {
-    throw new Error(`Team ${teamId} has insufficient lineup hitters (${hitters?.length ?? 0})`);
+  // If fewer than 9 lineup hitters, pull bench players to fill
+  let finalHitters = hitters ?? [];
+  if (!hErr && finalHitters.length < 9) {
+    const needed = 9 - finalHitters.length;
+    const existingIds = finalHitters.map((h) => h.id);
+    const { data: bench } = await supabase
+      .from('players')
+      .select('id, first_name, last_name, jersey_no, position, batt_order, speed, ag, eye, avg, strength, dhr')
+      .eq('team_id', teamId)
+      .eq('fielder', true)
+      .eq('roster_status', 'active')
+      .not('id', 'in', `(${existingIds.join(',')})`)
+      .limit(needed);
+    if (bench && bench.length > 0) {
+      finalHitters = [...finalHitters, ...bench];
+    }
+  }
+
+  if (hErr || finalHitters.length < 9) {
+    throw new Error(`Team ${teamId} has insufficient lineup hitters (${finalHitters.length})`);
   }
 
   // Load pitchers (rotation + bullpen)
@@ -127,7 +145,7 @@ async function buildTeamInput(
   }
 
   // Build lineup
-  const lineup: LineupPlayer[] = hitters.slice(0, 9).map((h) => ({
+  const lineup: LineupPlayer[] = finalHitters.slice(0, 9).map((h) => ({
     playerId: h.id,
     jerseyNo: h.jersey_no,
     lastName: h.last_name,
@@ -161,7 +179,7 @@ async function buildTeamInput(
 
   // Build metadata maps
   const hitterMeta = new Map<number, { teamId: number; position: string; batOrder: number }>();
-  for (const h of hitters.slice(0, 9)) {
+  for (const h of finalHitters.slice(0, 9)) {
     hitterMeta.set(h.id, { teamId, position: h.position, batOrder: h.batt_order });
   }
 

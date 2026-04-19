@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { requireMyTeam } from '@/lib/queries/team';
-import { checkBudget, recordTransaction, playerValueFromRow } from '@/lib/finance';
+import { checkBudget, safeDebit, playerValueFromRow } from '@/lib/finance';
 import { countRoster, canAddPlayer } from '@/lib/provisioning';
 import { z } from 'zod';
 
@@ -89,20 +89,33 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 6. Debit signing bonus
-  await recordTransaction(
-    supabase,
-    team.id,
-    'pPurchased',
-    -signingCost,
-    `Signed ${player.first_name} ${player.last_name} (signing bonus)`,
-    playerId,
-  );
+  // 6. Debit signing bonus (atomic)
+  let newBalance: number;
+  try {
+    newBalance = await safeDebit(
+      supabase,
+      team.id,
+      signingCost,
+      'pPurchased',
+      `Signed ${player.first_name} ${player.last_name} (signing bonus)`,
+      playerId,
+    );
+  } catch {
+    // Reverse the player assignment if debit fails
+    await supabase
+      .from('players')
+      .update({ team_id: null, roster_status: 'free_agent' as const })
+      .eq('id', playerId);
+    return NextResponse.json(
+      { error: 'Insufficient funds' },
+      { status: 400 },
+    );
+  }
 
   return NextResponse.json({
     success: true,
     player: `${player.first_name} ${player.last_name}`,
     signingCost,
-    newBalance: budgetCheck.balance - signingCost,
+    newBalance,
   });
 }

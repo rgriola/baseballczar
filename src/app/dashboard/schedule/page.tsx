@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 import { requireMyTeam } from '@/lib/queries/team';
 
+export const revalidate = 60;
+
 export default async function SchedulePage() {
   const team = await requireMyTeam();
   const supabase = await createClient();

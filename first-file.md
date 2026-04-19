@@ -23,12 +23,12 @@ Yes. Please Conduct a comprehensive review of the Baseballczar 2.0 project at th
   Correctness & Logic
   Security
   Architecture & Design
-  Game Sim
-  Data Integrity
-  Error Handling
-  Performance
-  Readability & Maintainability
-  Testing
-  Improvement Plan
+  - Game Sim
+    Data Integrity
+    Error Handling
+    Performance
+    Readability & Maintainability
+    Testing
+    Improvement Plan
 
 - Update the README.md with appropriate infomation

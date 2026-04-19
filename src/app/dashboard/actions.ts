@@ -2,17 +2,32 @@
 
 import { z } from 'zod';
 import { createClient } from '@/lib/supabase/server';
+import { createServiceClient } from '@/lib/supabase/service';
+
+const FIELD_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'] as const;
+/** Matches field positions and bench codes (B1, B2, … B99) */
+const positionRegex = /^(C|1B|2B|3B|SS|LF|CF|RF|DH|B\d{1,2})$/;
 
 const lineupSchema = z.object({
   /** Array of player IDs in batting order (index 0 = batt_order 1) */
   playerIds: z.array(z.number().int().positive()).length(9),
+  /** Array of field-position strings matching batting order */
+  positions: z.array(z.enum(FIELD_POSITIONS)).length(9),
+  /** Bench player IDs (in bench order) */
+  benchIds: z.array(z.number().int().positive()).optional(),
 });
 
 export async function updateLineup(formData: FormData) {
   const raw = formData.get('playerIds');
-  if (typeof raw !== 'string') return { error: 'Invalid data' };
+  const rawPos = formData.get('positions');
+  const rawBench = formData.get('benchIds');
+  if (typeof raw !== 'string' || typeof rawPos !== 'string') return { error: 'Invalid data' };
 
-  const parsed = lineupSchema.safeParse({ playerIds: JSON.parse(raw) });
+  const parsed = lineupSchema.safeParse({
+    playerIds: JSON.parse(raw),
+    positions: JSON.parse(rawPos),
+    benchIds: rawBench ? JSON.parse(rawBench as string) : [],
+  });
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
   const supabase = await createClient();
@@ -39,16 +54,28 @@ export async function updateLineup(formData: FormData) {
     return { error: 'Invalid player selection — must be 9 of your active fielders' };
   }
 
-  // Update batting order
+  // Update batting order and position
   for (let i = 0; i < 9; i++) {
     await supabase
       .from('players')
-      .update({ batt_order: i + 1 })
+      .update({ batt_order: i + 1, position: parsed.data.positions[i] })
       .eq('id', parsed.data.playerIds[i]);
   }
 
-  // Set batt_order to 0 for all other hitters on the team
+  // Set batt_order to 0 and assign Bx positions for bench hitters
   const lineupSet = new Set(parsed.data.playerIds);
+  const benchIds = parsed.data.benchIds ?? [];
+  const benchSet = new Set(benchIds);
+
+  // Assign B1, B2, B3… to bench players in the order provided
+  for (let i = 0; i < benchIds.length; i++) {
+    await supabase
+      .from('players')
+      .update({ batt_order: 0, position: `B${i + 1}` })
+      .eq('id', benchIds[i]);
+  }
+
+  // Any remaining hitters not in lineup or bench get batt_order 0
   const { data: allHitters } = await supabase
     .from('players')
     .select('id')
@@ -56,7 +83,7 @@ export async function updateLineup(formData: FormData) {
     .eq('fielder', true);
 
   for (const h of allHitters ?? []) {
-    if (!lineupSet.has(h.id)) {
+    if (!lineupSet.has(h.id) && !benchSet.has(h.id)) {
       await supabase
         .from('players')
         .update({ batt_order: 0 })
@@ -226,4 +253,78 @@ export async function toggleRosterStatus(formData: FormData) {
     .eq('id', parsed.data.playerId);
 
   return { success: true };
+}
+
+/**
+ * Server action: Simulate all remaining unplayed games.
+ * Runs server-side so it can use the service client directly.
+ */
+export async function simAll(): Promise<{ error?: string; message?: string }> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Not authenticated' };
+
+  // Delegate to the /api/sim/sim-all route which has maxDuration=300 (5 min)
+  // Server actions have a default 30s timeout — too short for 150 games.
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) return { error: 'Service key not configured' };
+
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
+
+  const res = await fetch(`${baseUrl}/api/sim/sim-all`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${serviceKey}` },
+  });
+
+  const body = await res.json();
+
+  if (!res.ok) {
+    return { error: body.error ?? `Sim failed (${res.status})` };
+  }
+
+  return { message: body.message ?? `Simulated ${body.simulated} games` };
+}
+
+/**
+ * Server action: Reset entire season — clear all game data and standings.
+ */
+export async function resetSeason(): Promise<{ error?: string; message?: string }> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Not authenticated' };
+
+  const service = createServiceClient();
+
+  const deletes = [
+    'game_events',
+    'game_stats_hitting',
+    'game_stats_pitching',
+    'player_stats_hitting',
+    'player_stats_pitching',
+    'games',
+  ];
+
+  for (const table of deletes) {
+    await service.from(table).delete().gte('id', 0);
+  }
+
+  await service
+    .from('schedules')
+    .update({ played: false })
+    .gte('id', 0);
+
+  // Clean up financial transactions from game revenue
+  await service.from('financial_transactions').delete().gte('id', 0);
+
+  await service
+    .from('standings')
+    .update({
+      w: 0, l: 0,
+      ab: 0, r: 0, h: 0, b2: 0, b3: 0, hr: 0,
+      rbi: 0, bb: 0, so: 0, sb: 0, cs: 0, sf: 0, sac: 0,
+      era_runs: 0, era_outs: 0,
+    })
+    .gte('id', 0);
+
+  return { message: 'Season reset complete' };
 }

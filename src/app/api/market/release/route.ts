@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { requireMyTeam } from '@/lib/queries/team';
+import { backfillLineup } from '@/lib/lineup/backfill';
 import { countRoster, canDeactivate, ROSTER_LIMITS } from '@/lib/provisioning';
 import { z } from 'zod';
 
@@ -89,6 +90,9 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
+
+  // Backfill lineup if a starter was released
+  await backfillLineup(supabase, team.id);
 
   return NextResponse.json({
     success: true,

@@ -7,11 +7,16 @@
  * Returns: { simulated: number, results: Array<{ scheduleId, gameId, score }> }
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
 import { simulateScheduledGame } from '@/lib/sim/simulate-scheduled-game';
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const authHeader = request.headers.get('authorization');
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey || authHeader !== `Bearer ${serviceKey}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const supabase = createServiceClient();
 

@@ -11,7 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { recordTransaction, getWeeklyPayroll } from '@/lib/finance';
+import { safeDebit, getWeeklyPayroll } from '@/lib/finance';
 
 export async function POST(req: NextRequest) {
   // Simple service-key auth for server-to-server calls
@@ -38,11 +38,11 @@ export async function POST(req: NextRequest) {
     const payroll = await getWeeklyPayroll(supabase, team_id);
     if (payroll === 0) continue;
 
-    const newBalance = await recordTransaction(
+    const newBalance = await safeDebit(
       supabase,
       team_id,
+      payroll,
       'player_sal',
-      -payroll,
       `Weekly payroll (${new Date().toISOString().slice(0, 10)})`,
     );
 

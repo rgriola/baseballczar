@@ -8,7 +8,7 @@ export default async function LineupPage() {
 
   const { data: hitters } = await supabase
     .from('players')
-    .select('id, first_name, last_name, jersey_no, position, batt_order, speed, ag, eye, avg, strength, dhr')
+    .select('id, first_name, last_name, jersey_no, position, batt_order, age, height, weight, hand_batting, hand_throw, speed, stamina, ag, eye, avg, strength, play_intel, bunting, fielding, throw, country_id')
     .eq('team_id', team.id)
     .eq('fielder', true)
     .eq('roster_status', 'active')

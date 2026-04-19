@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { simAll, resetSeason } from './actions';
 
 export default function SimControls() {
   const router = useRouter();
@@ -14,12 +15,11 @@ export default function SimControls() {
     setSimming(true);
     setMessage('Simulating season... this may take a minute.');
     try {
-      const res = await fetch('/api/sim/sim-all', { method: 'POST' });
-      const data = await res.json();
-      if (data.error) {
-        setMessage(`Error: ${data.error}`);
+      const result = await simAll();
+      if (result.error) {
+        setMessage(`Error: ${result.error}`);
       } else {
-        setMessage(data.message);
+        setMessage(result.message ?? 'Done');
       }
       router.refresh();
     } catch {
@@ -34,12 +34,11 @@ export default function SimControls() {
     setResetting(true);
     setMessage('Resetting season...');
     try {
-      const res = await fetch('/api/sim/reset', { method: 'POST' });
-      const data = await res.json();
-      if (data.error) {
-        setMessage(`Error: ${data.error}`);
+      const result = await resetSeason();
+      if (result.error) {
+        setMessage(`Error: ${result.error}`);
       } else {
-        setMessage(data.message);
+        setMessage(result.message ?? 'Done');
       }
       router.refresh();
     } catch {

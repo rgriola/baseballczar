@@ -7,7 +7,7 @@
  * For user-triggered O2O games, auth is checked separately.
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createServiceClient } from '@/lib/supabase/service';
 import { simulateScheduledGame } from '@/lib/sim/simulate-scheduled-game';
@@ -16,7 +16,13 @@ const schema = z.object({
   scheduleId: z.number().int().positive(),
 });
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const authHeader = request.headers.get('authorization');
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey || authHeader !== `Bearer ${serviceKey}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
     const parsed = schema.safeParse(body);

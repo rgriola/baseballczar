@@ -1,31 +1,39 @@
 import { createClient } from '@/lib/supabase/server';
 import { requireMyTeam } from '@/lib/queries/team';
 
+export const revalidate = 60;
+
 export default async function StatsPage() {
   const team = await requireMyTeam();
   const supabase = await createClient();
 
   const { data: hitting } = await supabase
     .from('player_stats_hitting')
-    .select('player_id, pa, ab, runs, hits, doubles, triples, hr, rbi, bb, so, sb, cs, players(first_name, last_name, jersey_no, position)')
+    .select('player_id, ab, r, h, b2, b3, hr, rbi, bb, so, sb, cs, sf, sac, players(first_name, last_name, jersey_no, position)')
     .eq('team_id', team.id)
-    .order('pa', { ascending: false });
+    .order('ab', { ascending: false });
 
   const { data: pitching } = await supabase
     .from('player_stats_pitching')
-    .select('player_id, w, l, sv, ip_outs, hits_allowed, runs_allowed, er, bb_allowed, so_pitched, hr_allowed, bf, cg, sho, players(first_name, last_name, jersey_no)')
+    .select('player_id, w, l, sv, ip, h, r, er, bb, so, hr, bf, cg, sho, players(first_name, last_name, jersey_no)')
     .eq('team_id', team.id)
-    .order('ip_outs', { ascending: false });
+    .order('ip', { ascending: false });
 
   function ba(h: number, ab: number) {
     return ab > 0 ? (h / ab).toFixed(3) : '.000';
   }
-  function era(er: number, ipOuts: number) {
-    const ip = ipOuts / 3;
-    return ip > 0 ? ((er / ip) * 9).toFixed(2) : '0.00';
+  function pa(ab: number, bb: number, sf: number, sac: number) {
+    return ab + bb + sf + sac;
   }
-  function ipStr(outs: number) {
-    return `${Math.floor(outs / 3)}.${outs % 3}`;
+  // ip is stored as e.g. 6.2 meaning 6 innings + 2 outs
+  function ipToInnings(ip: number): number {
+    const whole = Math.floor(ip);
+    const frac = Math.round((ip - whole) * 10);
+    return whole + frac / 3;
+  }
+  function era(er: number, ip: number) {
+    const inn = ipToInnings(ip);
+    return inn > 0 ? ((er / inn) * 9).toFixed(2) : '0.00';
   }
 
   return (
@@ -61,18 +69,18 @@ export default async function StatsPage() {
                   <tr key={s.player_id} className="border-b border-gray-800/50 text-gray-300">
                     <td className="py-1.5">#{p?.jersey_no} {p?.first_name} {p?.last_name}</td>
                     <td className="py-1.5">{p?.position}</td>
-                    <td className="py-1.5 text-right">{s.pa}</td>
+                    <td className="py-1.5 text-right">{pa(s.ab, s.bb, s.sf, s.sac)}</td>
                     <td className="py-1.5 text-right">{s.ab}</td>
-                    <td className="py-1.5 text-right">{s.runs}</td>
-                    <td className="py-1.5 text-right">{s.hits}</td>
-                    <td className="py-1.5 text-right">{s.doubles}</td>
-                    <td className="py-1.5 text-right">{s.triples}</td>
+                    <td className="py-1.5 text-right">{s.r}</td>
+                    <td className="py-1.5 text-right">{s.h}</td>
+                    <td className="py-1.5 text-right">{s.b2}</td>
+                    <td className="py-1.5 text-right">{s.b3}</td>
                     <td className="py-1.5 text-right">{s.hr}</td>
                     <td className="py-1.5 text-right">{s.rbi}</td>
                     <td className="py-1.5 text-right">{s.bb}</td>
                     <td className="py-1.5 text-right">{s.so}</td>
                     <td className="py-1.5 text-right">{s.sb}</td>
-                    <td className="py-1.5 text-right font-mono">{ba(s.hits, s.ab)}</td>
+                    <td className="py-1.5 text-right font-mono">{ba(s.h, s.ab)}</td>
                   </tr>
                 );
               })}
@@ -114,15 +122,15 @@ export default async function StatsPage() {
                     <td className="py-1.5 text-right">{s.w}</td>
                     <td className="py-1.5 text-right">{s.l}</td>
                     <td className="py-1.5 text-right">{s.sv}</td>
-                    <td className="py-1.5 text-right">{ipStr(s.ip_outs)}</td>
-                    <td className="py-1.5 text-right">{s.hits_allowed}</td>
-                    <td className="py-1.5 text-right">{s.runs_allowed}</td>
+                    <td className="py-1.5 text-right">{s.ip}</td>
+                    <td className="py-1.5 text-right">{s.h}</td>
+                    <td className="py-1.5 text-right">{s.r}</td>
                     <td className="py-1.5 text-right">{s.er}</td>
-                    <td className="py-1.5 text-right">{s.bb_allowed}</td>
-                    <td className="py-1.5 text-right">{s.so_pitched}</td>
-                    <td className="py-1.5 text-right">{s.hr_allowed}</td>
+                    <td className="py-1.5 text-right">{s.bb}</td>
+                    <td className="py-1.5 text-right">{s.so}</td>
+                    <td className="py-1.5 text-right">{s.hr}</td>
                     <td className="py-1.5 text-right">{s.cg}</td>
-                    <td className="py-1.5 text-right font-mono">{era(s.er, s.ip_outs)}</td>
+                    <td className="py-1.5 text-right font-mono">{era(s.er, s.ip)}</td>
                   </tr>
                 );
               })}

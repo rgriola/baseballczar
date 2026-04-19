@@ -1,13 +1,17 @@
 # Review: Architecture & Design
 
-> **Review Date:** April 18, 2026  
-> **Scope:** Overall architecture, component design, game simulation system, daemon equivalents  
+> **Review Date:** April 18, 2026 | **Updated:** April 18, 2026  
+> **Scope:** Overall architecture, component design, game simulation system, daemon equivalents
 
 ---
 
 ## Summary
 
-The application follows clean Next.js App Router conventions with a well-separated game engine. The biggest architectural gap is that **all heavy processing (game sim, training, payroll) runs inside the web server process** instead of as background workers — this is the root cause of the "slow and silent" experience compared to the original Java daemon architecture.
+The application follows clean Next.js App Router conventions with a well-separated game engine. The original review identified that all heavy processing ran inside the web server with no automation. Since then:
+
+- **Game simulation** now delegates to a dedicated API route with 5-minute timeout, batch RPC upserts, and per-game retry logic
+- **Daemon equivalents** are implemented via **Vercel Cron Jobs**: daily cron handles game sim + training + trade/challenge expiry; weekly cron handles payroll
+- **Remaining opportunity:** BullMQ worker process for true out-of-process sim with live progress streaming
 
 ---
 
@@ -76,26 +80,24 @@ The application follows clean Next.js App Router conventions with a well-separat
 
 ### 1. Game Simulation Runs In-Process (No Worker)
 
-**Severity:** 🟠 HIGH  
-**Files:** `src/app/api/sim/sim-all/route.ts`, `src/app/api/sim/run-due/route.ts`
+**Severity:** 🟠 HIGH → ✅ **Mitigated**  
+**Files:** `src/app/api/sim/sim-all/route.ts`, `src/app/api/sim/run-due/route.ts`, `src/app/api/cron/daily/route.ts`
 
-**Issue:** The original Baseball Czar ran game simulation as a **separate Java process** — it had its own terminal, visible log output, and didn't block the website. The current v2 runs simulation inside a Next.js API route handler, which means:
+**Original Issue:** The sim ran inside a 30-second server action, blocked the web server, and had zero visibility.
 
-- **Blocks the web server** — During a full season sim, the Node.js event loop is occupied processing games. Other requests may be delayed.
-- **No visibility** — No logs, no progress updates, no terminal output. The user clicks "Simulate" and waits in silence.
-- **Timeout risk** — Vercel and similar platforms impose 5-minute API timeouts. A 147-game season at ~1.5s/game = 220+ seconds.
-- **No retry/resume** — If the process crashes mid-season, there's no checkpoint. You have to restart from where it left off manually.
+**What Changed:**
 
-**The Infrastructure is Already Here:**
-```json
-// package.json
-"bullmq": "^5.74.1",
-"ioredis": "^5.10.1"
-```
+- `simAll()` server action now delegates to `POST /api/sim/sim-all` via fetch
+- `sim-all` route has `maxDuration=300` (5-minute Vercel timeout)
+- Each game retries up to 3 times with exponential backoff
+- Batch RPC upserts (`batch_upsert_season_hitting/pitching`) eliminated N+1 queries
+- `buildTeamInput()` auto-fills bench hitters if lineup has < 9
+- Vercel Cron calls `/api/cron/daily` at 4 AM UTC to auto-sim due games
+- Pino structured logging captures sim progress
 
-BullMQ (a Redis-backed job queue) and ioredis are installed but not connected.
+**Still Open:** BullMQ worker process would enable true background execution with live progress streaming. The dependencies are installed (`bullmq`, `ioredis`) but not wired.
 
-**Recommended Architecture:**
+**Future Architecture (optional):**
 
 ```
 ┌─────────────┐     POST /api/sim/enqueue      ┌──────────────┐
@@ -122,29 +124,38 @@ BullMQ (a Redis-backed job queue) and ioredis are installed but not connected.
 
 ### 2. No Daemon Equivalents for Training & Trades
 
-**Severity:** 🟠 HIGH  
-**Files:** `src/app/api/training/run/route.ts`, `src/app/api/payroll/run/route.ts`
+**Severity:** 🟠 HIGH → ✅ **Resolved**  
+**Files:** `src/app/api/cron/daily/route.ts`, `src/app/api/cron/weekly/route.ts`, `vercel.json`
 
-**Issue:** In the original system:
-- **Training daemon** ran once every 24 hours, processing all players across all leagues
-- **Trade window daemon** watched for trade deadline expiration and auto-expired pending offers
-- **Payroll daemon** ran weekly to deduct salaries
+**Original Issue:** Training, payroll, and trade expiry only ran via manual API calls.
 
-In v2, these are manual API calls protected by Bearer token. There is no cron scheduler, no BullMQ repeatable job, and no automated trigger.
+**What Changed — Vercel Cron Jobs:**
 
-**Impact:**
-- Training never runs unless manually triggered
-- Trades never expire (challenge_requests have `'expired'` status but nothing sets it)
-- Payroll never deducts unless called manually
+| Schedule        | Route                  | What It Does                                                       |
+| --------------- | ---------------------- | ------------------------------------------------------------------ |
+| Daily 4 AM UTC  | `GET /api/cron/daily`  | Sim due games, run training, expire stale trades/challenges (>48h) |
+| Monday 5 AM UTC | `GET /api/cron/weekly` | Deduct weekly payroll from all team budgets                        |
 
-**Recommendation:** Wire up BullMQ repeatable jobs:
-```typescript
-// Scheduled jobs
-simQueue.add('daily-training', {}, { repeat: { pattern: '0 4 * * *' } });      // 4 AM daily
-simQueue.add('weekly-payroll', {}, { repeat: { pattern: '0 5 * * 1' } });      // Monday 5 AM
-simQueue.add('expire-challenges', {}, { repeat: { pattern: '0 * * * *' } });   // Hourly
-simQueue.add('sim-due-games', {}, { repeat: { pattern: '*/5 * * * *' } });     // Every 5 min
+**Configuration** (`vercel.json`):
+
+```json
+{
+  "crons": [
+    { "path": "/api/cron/daily", "schedule": "0 4 * * *" },
+    { "path": "/api/cron/weekly", "schedule": "0 5 * * 1" }
+  ]
+}
 ```
+
+**Security:** Both cron routes are protected by `CRON_SECRET` Bearer token (Vercel automatically sends this header for cron invocations).
+
+**What each daily cron run does:**
+
+1. **Game sim** — Fetches all unplayed games with `game_time <= now`, simulates them sequentially
+2. **Training** — Calls `runDailyTraining()` for all players with assigned training slots
+3. **Trade/challenge expiry** — Sets `status='withdrawn'` on trade offers pending >48h, `status='expired'` on stale challenge requests
+
+The manual API routes (`POST /api/training/run`, `POST /api/payroll/run`) still work for admin/testing purposes.
 
 ---
 
@@ -157,29 +168,35 @@ simQueue.add('sim-due-games', {}, { repeat: { pattern: '*/5 * * * *' } });     /
 
 ```typescript
 const supabase = await createClient();
-const { data: { user } } = await supabase.auth.getUser();
-if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+const {
+  data: { user },
+} = await supabase.auth.getUser();
+if (!user)
+  return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
 const { data: team } = await supabase
-  .from('teams')
-  .select('id')
-  .eq('owner_id', user.id)
+  .from("teams")
+  .select("id")
+  .eq("owner_id", user.id)
   .single();
-if (!team) return NextResponse.json({ error: 'No team found' }, { status: 404 });
+if (!team)
+  return NextResponse.json({ error: "No team found" }, { status: 404 });
 ```
 
 And Bearer-token routes repeat:
+
 ```typescript
-const authHeader = request.headers.get('authorization');
+const authHeader = request.headers.get("authorization");
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!serviceKey || authHeader !== `Bearer ${serviceKey}`) {
-  return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 }
 ```
 
 **Impact:** Code duplication increases the risk of inconsistency (e.g., the sim routes forgot to add auth).
 
 **Recommendation:** Create shared middleware helpers:
+
 ```typescript
 // lib/api/auth.ts
 export async function requireUser(request: Request) { ... }
@@ -197,11 +214,13 @@ export async function requireServiceKey(request: Request) { ... }
 **Issue:** When the 6th team joins a league, the system auto-fills remaining slots with AI teams, generates 40 players per AI team, creates standings, budgets, and generates the full 150-game schedule. This is a massive operation (~200+ database inserts) triggered by a single user action (team creation).
 
 **Impact:**
+
 - The provisioning request takes 10-30 seconds to complete
 - If it fails mid-way, the league is in a partially-created state
 - No transaction wrapping — partial AI teams or schedules could exist
 
 **Recommendation:**
+
 - Move league-fill and schedule generation to a BullMQ job
 - Return immediately to the user with "League is being set up..."
 - Notify via in-app notification when ready
@@ -281,37 +300,37 @@ sim-engine/
 
 ### Key Design Decisions in the Engine
 
-| Decision | Rationale | Tradeoff |
-|----------|-----------|----------|
-| Pure TypeScript, no DB | Engine can be unit-tested without database | Requires separate orchestration layer |
-| Single random roll per at-bat | Simple, fast | Less realistic than pitch-by-pitch sim |
-| Dominance-based threshold | Prevents "average of averages" problem | Creates cliff-effects (see Correctness review) |
-| Pitcher fatigue by BF count | Simple tracking, no pitch count | Less granular than real baseball |
-| Fixed bullpen order by rotation_slot | Predictable | No in-game strategy adjustments |
-| Baserunning as state machine | Clear rules, deterministic per outcome | Simplified (no stolen bases during at-bats) |
+| Decision                             | Rationale                                  | Tradeoff                                       |
+| ------------------------------------ | ------------------------------------------ | ---------------------------------------------- |
+| Pure TypeScript, no DB               | Engine can be unit-tested without database | Requires separate orchestration layer          |
+| Single random roll per at-bat        | Simple, fast                               | Less realistic than pitch-by-pitch sim         |
+| Dominance-based threshold            | Prevents "average of averages" problem     | Creates cliff-effects (see Correctness review) |
+| Pitcher fatigue by BF count          | Simple tracking, no pitch count            | Less granular than real baseball               |
+| Fixed bullpen order by rotation_slot | Predictable                                | No in-game strategy adjustments                |
+| Baserunning as state machine         | Clear rules, deterministic per outcome     | Simplified (no stolen bases during at-bats)    |
 
 ### What the Original Java System Did Differently
 
-| Feature | Java v1 | TypeScript v2 |
-|---------|---------|---------------|
-| Process model | Separate JVM process | In-process API route |
-| Logging | Own terminal with real-time output | None (silent) |
-| Progress | Visible game-by-game in console | None |
-| Error recovery | Daemon restarts, picks up where left off | No checkpoint, manual restart |
-| Training | 24-hour cron daemon | Manual API call |
-| Trades | Trade-window daemon with deadline logic | Manual API call, no expiration |
-| Payroll | Scheduled weekly daemon | Manual API call |
-| Season sim speed | ~2 minutes for 150 games | ~3-4 minutes (timeout risk) |
-| Connection model | Persistent JDBC connection pool | Per-request Supabase client |
+| Feature          | Java v1                                  | TypeScript v2 (current)                |
+| ---------------- | ---------------------------------------- | -------------------------------------- |
+| Process model    | Separate JVM process                     | Dedicated API route (maxDuration=300s) |
+| Logging          | Own terminal with real-time output       | Pino structured JSON logging           |
+| Progress         | Visible game-by-game in console          | Server-side logs (no UI streaming yet) |
+| Error recovery   | Daemon restarts, picks up where left off | Per-game retry (3x) + skips on failure |
+| Training         | 24-hour cron daemon                      | Vercel Cron daily at 4 AM UTC          |
+| Trades           | Trade-window daemon with deadline logic  | Daily cron expires pending offers >48h |
+| Payroll          | Scheduled weekly daemon                  | Vercel Cron weekly (Monday 5 AM UTC)   |
+| Season sim speed | ~2 minutes for 150 games                 | ~2-3 minutes (batch RPC, no N+1)       |
+| Connection model | Persistent JDBC connection pool          | Per-request Supabase client            |
 
 ---
 
 ## Summary Table
 
-| # | Finding | Severity | Category |
-|---|---------|----------|----------|
-| 1 | Game sim runs in-process, no worker | HIGH | Process Model |
-| 2 | No daemon equivalents (training, trades, payroll) | HIGH | Automation |
-| 3 | Repeated auth boilerplate across API routes | MEDIUM | Code Organization |
-| 4 | Provisioning does massive work synchronously | MEDIUM | User Experience |
-| 5 | No API versioning | LOW | API Design |
+| #   | Finding                                           | Severity | Status       | Category          |
+| --- | ------------------------------------------------- | -------- | ------------ | ----------------- |
+| 1   | Game sim runs in-process, no worker               | HIGH     | ⚠️ Mitigated | Process Model     |
+| 2   | No daemon equivalents (training, trades, payroll) | HIGH     | ✅ Resolved  | Automation        |
+| 3   | Repeated auth boilerplate across API routes       | MEDIUM   | Open         | Code Organization |
+| 4   | Provisioning does massive work synchronously      | MEDIUM   | Open         | User Experience   |
+| 5   | No API versioning                                 | LOW      | Open         | API Design        |

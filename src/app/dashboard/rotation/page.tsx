@@ -8,7 +8,7 @@ export default async function RotationPage() {
 
   const { data: pitchers } = await supabase
     .from('players')
-    .select('id, first_name, last_name, jersey_no, rotation_slot, stamina, ag, eye, avg, strength, dhr, play_intel, hand_throw')
+    .select('id, first_name, last_name, jersey_no, rotation_slot, age, height, weight, hand_throw, speed, stamina, ag, eye, avg, strength, play_intel, bunting, fielding, throw, country_id')
     .eq('team_id', team.id)
     .eq('fielder', false)
     .eq('roster_status', 'active')

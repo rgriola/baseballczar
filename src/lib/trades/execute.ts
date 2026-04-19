@@ -9,7 +9,8 @@
 
 import { SupabaseClient } from '@supabase/supabase-js';
 import { countRoster, ROSTER_LIMITS } from '@/lib/provisioning';
-import { checkBudget, recordTransaction } from '@/lib/finance';
+import { checkBudget, safeDebit, safeCredit } from '@/lib/finance';
+import { backfillLineup } from '@/lib/lineup/backfill';
 
 interface TradeOfferData {
   id: number;
@@ -135,21 +136,21 @@ export async function executeTrade(
       .eq('id', pid);
   }
 
-  // 5. Cash transfer
+  // 5. Cash transfer (atomic)
   if (offer.cash_amount > 0) {
-    await recordTransaction(
+    await safeDebit(
       supabase,
       buyerTeamId,
+      offer.cash_amount,
       'trade_cash',
-      -offer.cash_amount,
       `Trade cash sent`,
       offer.id,
     );
-    await recordTransaction(
+    await safeCredit(
       supabase,
       sellerTeamId,
-      'trade_cash',
       offer.cash_amount,
+      'trade_cash',
       `Trade cash received`,
       offer.id,
     );
@@ -174,4 +175,8 @@ export async function executeTrade(
       offeredPlayerIds,
     },
   });
+
+  // Backfill lineup for both teams in case starters were traded
+  await backfillLineup(supabase, sellerTeamId);
+  await backfillLineup(supabase, buyerTeamId);
 }

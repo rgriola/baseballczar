@@ -1,7 +1,9 @@
 /**
- * Budget check utilities.
+ * Budget utilities.
  *
- * Used by free-agent signings, trades, and any operation that debits the budget.
+ * safeDebit / safeCredit use PostgreSQL RPCs with SELECT ... FOR UPDATE
+ * to prevent race conditions. The old recordTransaction is kept for
+ * backward compat but callers should migrate to the safe variants.
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
@@ -13,8 +15,7 @@ export interface BudgetCheckResult {
 }
 
 /**
- * Check whether a team can afford a given cost.
- * Returns the current balance and whether the cost is within budget.
+ * Check whether a team can afford a given cost (read-only, no lock).
  */
 export async function checkBudget(
   supabase: SupabaseClient,
@@ -34,9 +35,56 @@ export async function checkBudget(
 }
 
 /**
- * Debit (or credit) a team's budget and log a financial transaction.
- * Positive amount = income, negative = expense.
+ * Atomically debit a team's budget via PostgreSQL RPC.
+ * Returns the new balance, or throws if insufficient funds.
+ */
+export async function safeDebit(
+  supabase: SupabaseClient,
+  teamId: number,
+  amount: number,
+  type: string,
+  description: string,
+  referenceId?: number,
+): Promise<number> {
+  const { data, error } = await supabase.rpc('safe_debit', {
+    p_team_id: teamId,
+    p_amount: amount,
+    p_type: type,
+    p_desc: description,
+    p_ref_id: referenceId ?? null,
+  });
+
+  if (error) throw new Error(`safe_debit failed: ${error.message}`);
+  if (data === -1) throw new Error('Insufficient funds');
+  return data as number;
+}
+
+/**
+ * Atomically credit a team's budget via PostgreSQL RPC.
  * Returns the new balance.
+ */
+export async function safeCredit(
+  supabase: SupabaseClient,
+  teamId: number,
+  amount: number,
+  type: string,
+  description: string,
+  referenceId?: number,
+): Promise<number> {
+  const { data, error } = await supabase.rpc('safe_credit', {
+    p_team_id: teamId,
+    p_amount: amount,
+    p_type: type,
+    p_desc: description,
+    p_ref_id: referenceId ?? null,
+  });
+
+  if (error) throw new Error(`safe_credit failed: ${error.message}`);
+  return data as number;
+}
+
+/**
+ * @deprecated Use safeDebit / safeCredit instead. This has a race condition.
  */
 export async function recordTransaction(
   supabase: SupabaseClient,

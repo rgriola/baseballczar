@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
 import { simulateScheduledGame } from '@/lib/sim';
 import { calculateGameRevenue } from '@/lib/sim-engine/GateReceipts';
-import { recordTransaction } from '@/lib/finance';
+import { safeDebit, safeCredit } from '@/lib/finance';
 import { sendNotification } from '@/lib/notifications';
 import { z } from 'zod';
 
@@ -72,16 +72,16 @@ export async function POST(req: NextRequest) {
   const homeTotal =
     revenue.homeReceipts + revenue.homeFoodBev + revenue.homeAds + revenue.homeStadiumOps;
 
-  await recordTransaction(supabase, homeTeamId, 'gate_receipts', homeTotal, 'O2O home gate receipts', result.gameId);
-  await recordTransaction(supabase, visitorTeamId, 'gate_receipts', revenue.visitorReceipts, 'O2O visitor receipts', result.gameId);
+  await safeCredit(supabase, homeTeamId, homeTotal, 'gate_receipts', 'O2O home gate receipts', result.gameId);
+  await safeCredit(supabase, visitorTeamId, revenue.visitorReceipts, 'gate_receipts', 'O2O visitor receipts', result.gameId);
 
   // Settle wager
   if (challenge.wager > 0) {
     const winnerId = result.winningTeamId;
     const loserId = winnerId === homeTeamId ? visitorTeamId : homeTeamId;
 
-    await recordTransaction(supabase, winnerId, 'wager_won', challenge.wager, 'O2O wager won', result.gameId);
-    await recordTransaction(supabase, loserId, 'wager_lost', -challenge.wager, 'O2O wager lost', result.gameId);
+    await safeCredit(supabase, winnerId, challenge.wager, 'wager_won', 'O2O wager won', result.gameId);
+    await safeDebit(supabase, loserId, challenge.wager, 'wager_lost', 'O2O wager lost', result.gameId);
   }
 
   // Update o2o_records (upsert)

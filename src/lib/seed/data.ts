@@ -15,7 +15,19 @@ export const FIRST_NAMES = [
   'Gary', 'Nicholas', 'Eric', 'Jonathan', 'Stephen',
   'Larry', 'Justin', 'Scott', 'Brandon', 'Benjamin',
   'Samuel', 'Raymond', 'Patrick',
-] as const; // 43 names
+  'Alexander', 'Tyler', 'Dylan', 'Aaron', 'Nathan',
+  'Zachary', 'Adam', 'Henry', 'Douglas', 'Peter',
+  'Jack', 'Dennis', 'Jerry', 'Travis', 'Austin',
+  'Sean', 'Jesse', 'Bryan', 'Vincent', 'Russell',
+  'Philip', 'Elijah', 'Caleb', 'Logan', 'Mason',
+  'Ethan', 'Owen', 'Luke', 'Hunter', 'Liam',
+  'Noah', 'Carter', 'Jayden', 'Connor', 'Landon',
+  'Christian', 'Cole', 'Gabriel', 'Isaiah', 'Cameron',
+  'Chase', 'Jordan', 'Colton', 'Tristan', 'Marcus',
+  'Derek', 'Dominic', 'Ian', 'Blake', 'Grant',
+  'Xavier', 'Jared', 'Miles', 'Wesley', 'Dakota',
+  'Shane', 'Tanner',
+] as const; // 100 names
 
 export const LAST_NAMES = [
   'Smith', 'Johnson', 'Williams', 'Brown', 'Jones',
@@ -27,7 +39,19 @@ export const LAST_NAMES = [
   'Hill', 'Green', 'Adams', 'Baker', 'Gonzalez',
   'Nelson', 'Carter', 'Mitchell', 'Perez', 'Roberts',
   'Turner', 'Phillips', 'Campbell',
-] as const; // 43 names
+  'Parker', 'Evans', 'Edwards', 'Collins', 'Stewart',
+  'Sanchez', 'Morris', 'Rogers', 'Reed', 'Cook',
+  'Morgan', 'Bell', 'Murphy', 'Bailey', 'Rivera',
+  'Cooper', 'Richardson', 'Cox', 'Howard', 'Ward',
+  'Peterson', 'Gray', 'Ramirez', 'James', 'Watson',
+  'Brooks', 'Kelly', 'Sanders', 'Price', 'Bennett',
+  'Wood', 'Barnes', 'Ross', 'Henderson', 'Coleman',
+  'Jenkins', 'Perry', 'Powell', 'Long', 'Patterson',
+  'Hughes', 'Flores', 'Washington', 'Butler', 'Simmons',
+  'Foster', 'Gonzales', 'Bryant', 'Alexander', 'Russell',
+  'Griffin', 'Diaz', 'Hayes', 'Myers', 'Ford',
+  'Hamilton', 'Sullivan',
+] as const; // 100 names
 
 export const TEAM_CITIES = [
   'Houston', 'Chicago', 'Phoenix', 'Dallas', 'Denver',

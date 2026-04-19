@@ -1,8 +1,13 @@
 import { createClient } from '@/lib/supabase/server';
 import { requireMyTeam } from '@/lib/queries/team';
 import RosterToggle from './roster-toggle';
+import { CountryFlag } from './country-flag';
 
 const HAND_LABEL: Record<number, string> = { 1: 'R', 2: 'L', 3: 'S' };
+
+function totalSkill(p: { speed: number; stamina: number; ag: number; eye: number; avg: number; strength: number; play_intel: number; bunting: number; fielding: number; throw: number }) {
+  return +(p.speed + p.stamina + p.ag + p.eye + p.avg + p.strength + p.play_intel + p.bunting + p.fielding + p.throw).toFixed(1);
+}
 
 export default async function RosterPage() {
   const team = await requireMyTeam();
@@ -38,22 +43,29 @@ export default async function RosterPage() {
                 <th className="pb-2">Status</th>
                 <th className="pb-2"></th>
                 <th className="pb-2 text-right">Age</th>
+                <th className="pb-2 text-right">Ht</th>
+                <th className="pb-2 text-right">Wt</th>
                 <th className="pb-2 text-right">B/T</th>
                 <th className="pb-2 text-right">SPD</th>
+                <th className="pb-2 text-right">STA</th>
                 <th className="pb-2 text-right">AG</th>
                 <th className="pb-2 text-right">EYE</th>
                 <th className="pb-2 text-right">AVG</th>
                 <th className="pb-2 text-right">STR</th>
-                <th className="pb-2 text-right">DHR</th>
+                <th className="pb-2 text-right">PI</th>
+                <th className="pb-2 text-right">BNT</th>
                 <th className="pb-2 text-right">FLD</th>
+                <th className="pb-2 text-right">THR</th>
+                <th className="pb-2 text-right font-semibold">TOT</th>
                 <th className="pb-2 text-right">Salary</th>
+                <th className="pb-2 text-right">Ctr</th>
               </tr>
             </thead>
             <tbody>
               {hitters.map((p) => (
                 <tr key={p.id} className={`border-b border-gray-800/50 ${p.roster_status === 'active' ? 'text-gray-300' : 'text-gray-500'}`}>
                   <td className="py-1.5">{p.jersey_no}</td>
-                  <td className="py-1.5 font-medium">{p.first_name} {p.last_name}</td>
+                  <td className="py-1.5 font-medium"><CountryFlag countryId={p.country_id} /> {p.first_name} {p.last_name}</td>
                   <td className="py-1.5">{p.position}</td>
                   <td className="py-1.5">
                     <span className={`rounded px-1.5 py-0.5 text-xs ${p.roster_status === 'active' ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-500'}`}>
@@ -66,15 +78,22 @@ export default async function RosterPage() {
                     )}
                   </td>
                   <td className="py-1.5 text-right">{p.age}</td>
+                  <td className="py-1.5 text-right">{p.height}″</td>
+                  <td className="py-1.5 text-right">{p.weight}</td>
                   <td className="py-1.5 text-right">{HAND_LABEL[p.hand_batting]}/{HAND_LABEL[p.hand_throw]}</td>
                   <td className="py-1.5 text-right">{p.speed}</td>
+                  <td className="py-1.5 text-right">{p.stamina}</td>
                   <td className="py-1.5 text-right">{p.ag}</td>
                   <td className="py-1.5 text-right">{p.eye}</td>
                   <td className="py-1.5 text-right">{p.avg}</td>
                   <td className="py-1.5 text-right">{p.strength}</td>
-                  <td className="py-1.5 text-right">{p.dhr}</td>
+                  <td className="py-1.5 text-right">{p.play_intel}</td>
+                  <td className="py-1.5 text-right">{p.bunting}</td>
                   <td className="py-1.5 text-right">{p.fielding}</td>
+                  <td className="py-1.5 text-right">{p.throw}</td>
+                  <td className="py-1.5 text-right font-semibold text-white">{totalSkill(p)}</td>
                   <td className="py-1.5 text-right">${p.salary.toLocaleString()}</td>
+                  <td className="py-1.5 text-right">{p.contract}y</td>
                 </tr>
               ))}
             </tbody>
@@ -97,22 +116,29 @@ export default async function RosterPage() {
                 <th className="pb-2">Status</th>
                 <th className="pb-2"></th>
                 <th className="pb-2 text-right">Age</th>
+                <th className="pb-2 text-right">Ht</th>
+                <th className="pb-2 text-right">Wt</th>
                 <th className="pb-2 text-right">T</th>
+                <th className="pb-2 text-right">SPD</th>
                 <th className="pb-2 text-right">STA</th>
                 <th className="pb-2 text-right">AG</th>
                 <th className="pb-2 text-right">EYE</th>
                 <th className="pb-2 text-right">AVG</th>
                 <th className="pb-2 text-right">STR</th>
-                <th className="pb-2 text-right">DHR</th>
                 <th className="pb-2 text-right">PI</th>
+                <th className="pb-2 text-right">BNT</th>
+                <th className="pb-2 text-right">FLD</th>
+                <th className="pb-2 text-right">THR</th>
+                <th className="pb-2 text-right font-semibold">TOT</th>
                 <th className="pb-2 text-right">Salary</th>
+                <th className="pb-2 text-right">Ctr</th>
               </tr>
             </thead>
             <tbody>
               {pitchers.map((p) => (
                 <tr key={p.id} className={`border-b border-gray-800/50 ${p.roster_status === 'active' ? 'text-gray-300' : 'text-gray-500'}`}>
                   <td className="py-1.5">{p.jersey_no}</td>
-                  <td className="py-1.5 font-medium">{p.first_name} {p.last_name}</td>
+                  <td className="py-1.5 font-medium"><CountryFlag countryId={p.country_id} /> {p.first_name} {p.last_name}</td>
                   <td className="py-1.5">
                     {p.rotation_slot >= 1 && p.rotation_slot <= 5
                       ? `SP${p.rotation_slot}`
@@ -131,15 +157,22 @@ export default async function RosterPage() {
                     )}
                   </td>
                   <td className="py-1.5 text-right">{p.age}</td>
+                  <td className="py-1.5 text-right">{p.height}″</td>
+                  <td className="py-1.5 text-right">{p.weight}</td>
                   <td className="py-1.5 text-right">{HAND_LABEL[p.hand_throw]}</td>
+                  <td className="py-1.5 text-right">{p.speed}</td>
                   <td className="py-1.5 text-right">{p.stamina}</td>
                   <td className="py-1.5 text-right">{p.ag}</td>
                   <td className="py-1.5 text-right">{p.eye}</td>
                   <td className="py-1.5 text-right">{p.avg}</td>
                   <td className="py-1.5 text-right">{p.strength}</td>
-                  <td className="py-1.5 text-right">{p.dhr}</td>
                   <td className="py-1.5 text-right">{p.play_intel}</td>
+                  <td className="py-1.5 text-right">{p.bunting}</td>
+                  <td className="py-1.5 text-right">{p.fielding}</td>
+                  <td className="py-1.5 text-right">{p.throw}</td>
+                  <td className="py-1.5 text-right font-semibold text-white">{totalSkill(p)}</td>
                   <td className="py-1.5 text-right">${p.salary.toLocaleString()}</td>
+                  <td className="py-1.5 text-right">{p.contract}y</td>
                 </tr>
               ))}
             </tbody>

@@ -1,8 +1,8 @@
 # Baseball Czar 2.0 — Master Code Review
 
-> **Review Date:** April 18, 2026  
+> **Review Date:** April 18, 2026 9:45am | **Updated:** April 18, 2026  
 > **Reviewer:** AI-assisted comprehensive audit  
-> **Codebase Snapshot:** Next.js 14.2.35 / Supabase / TypeScript  
+> **Codebase Snapshot:** Next.js 16.2.4 / Supabase / TypeScript
 
 ---
 
@@ -22,26 +22,36 @@
 Baseball Czar is a browser-based baseball general-manager simulator — originally built in 2010 with HTML/CSS/jQuery, Java daemon processes, PHP backend, and MySQL on Apache (MAMP). This v2 reboot modernizes the stack while preserving the core game mechanics: team management, player development, season scheduling, live game simulation, trading, and head-to-head (O2O) challenges.
 
 **Current State:**
-- 20 database tables, 18 API routes, 13 dashboard pages
+
+- 20 database tables, 9 API route groups, 14 dashboard pages
 - Full game simulation engine ported to TypeScript
 - Player trading, free-agent market, training system, O2O challenges all functional
 - Auth via Supabase (email/password) with RLS on all tables
+- 60 unit tests (Vitest) + Playwright E2E configured
+- Sentry error monitoring, Upstash rate limiting, Pino structured logging
+- Lineup auto-backfill ensures 9 starters after releases/trades
+- Batch RPC upserts for season stats (no N+1 queries)
+- 6 database migrations applied
 - Some UI pages from the original are not yet implemented — these will be added over time
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Framework | Next.js 14 (App Router, Server Components) |
-| Language | TypeScript (strict mode) |
-| Database | Supabase (PostgreSQL) |
-| Auth | Supabase Auth (email/password, SSR cookies) |
-| Styling | Tailwind CSS |
-| Validation | Zod v4 |
-| Job Queue | BullMQ + ioredis (installed, not yet wired up) |
-| Deployment | Vercel-compatible |
+| Layer      | Technology                                            |
+| ---------- | ----------------------------------------------------- |
+| Framework  | Next.js 16 (App Router, Server Components, Turbopack) |
+| Language   | TypeScript (strict mode)                              |
+| Database   | Supabase (PostgreSQL)                                 |
+| Auth       | Supabase Auth (email/password, SSR cookies)           |
+| Styling    | Tailwind CSS                                          |
+| Validation | Zod v4                                                |
+| Monitoring | Sentry (error tracking + tracing)                     |
+| Rate Limit | Upstash Redis + Ratelimit                             |
+| Testing    | Vitest (unit, 60 tests) + Playwright (E2E)            |
+| Logging    | Pino (structured JSON logging)                        |
+| Job Queue  | BullMQ + ioredis (installed, not yet wired up)        |
+| Deployment | Vercel-compatible                                     |
 
 ---
 
@@ -87,8 +97,18 @@ baseballczar-v2/
 │   └── middleware.ts            # Auth session refresh, route protection
 ├── supabase/
 │   ├── config.toml
-│   └── migrations/              # 3 migration files (schema, seed names, standings cols)
-├── tests/                       # 2 smoke test scripts
+│   └── migrations/              # 6 migration files
+│       ├── 001_initial_schema.sql
+│       ├── 002_seed_names.sql
+│       ├── 003_standings_era_columns.sql
+│       ├── 004_safe_debit_constraints_batch_upsert.sql
+│       ├── 005_expand_name_pool.sql
+│       └── 006_expand_name_pool_200.sql
+├── tests/
+│   ├── unit/                    # 7 Vitest test files (60 tests)
+│   ├── e2e/                     # Playwright spec
+│   ├── seed-smoke-test.ts
+│   └── smoke-test.ts
 ├── package.json
 ├── tailwind.config.ts
 └── tsconfig.json
@@ -101,109 +121,109 @@ baseballczar-v2/
 ### How Games Were Simulated (Original v1 — Java/MAMP Era)
 
 In the original 2010 build:
-- **Game simulation ran as a separate Java process** with its own terminal window — you could watch game logs scroll in real time and monitor for issues
-- **Training** ran as a scheduled daemon — once every 24 hours, it calculated skill improvements for all players across all leagues
+
+- **Game simulation ran as a separate Java process** with its own terminal window — you could watch game logs scroll in real time and monitor for issues - admin only - games did play out for users in browser at-bat by at-bat.
+- **Training** ran as a scheduled daemon — once every 24 hours, it calculated skill improvements for all players across all leagues.
 - **Trades** had a daemon that processed the trade window — when the window closed, pending offers expired and completed trades finalized
-- **The website (PHP/Apache)** was purely a front-end concern — it never ran simulation logic itself
-- An entire 150-game season simulated in a couple of minutes because the Java engine ran natively, used batch SQL, and was decoupled from the web server
+- **The website (PHP/Apache)** was purely a front-end concern — it never ran simulation logic itself.
+- An entire 150-game season simulated in a couple of minutes because the Java engine ran natively, used batch SQL, and was decoupled from the web server.
 
 ### How Games Are Simulated Now (v2 — Next.js)
 
-The current architecture runs **everything inside the Next.js process** via API routes:
+The current architecture runs simulation via a **dedicated API route** with extended timeout (5 minutes):
 
 ```
 User clicks "Simulate Full Season"
        │
        ▼
-POST /api/sim/sim-all  (Next.js API route)
+Server Action: simAll()
+       │  (delegates via fetch)
+       ▼
+POST /api/sim/sim-all  (maxDuration=300s)
        │
        ▼
-┌──────────────────────────────────┐
-│  For each unplayed game (sequential):       │
-│                                              │
-│  1. Load schedule entry from DB              │
-│  2. Load both team rosters (4 queries)       │
-│  3. Run pure-TypeScript engine (~5ms)        │
-│  4. Persist results (9-step pipeline):       │
-│     ├─ Insert game record                    │
-│     ├─ Batch insert events (300+ rows)       │
-│     ├─ Insert per-player hitting stats       │
-│     ├─ Insert per-player pitching stats      │
-│     ├─ Upsert season hitting stats  ← N+1!  │
-│     ├─ Upsert season pitching stats ← N+1!  │
-│     ├─ Update standings                      │
-│     ├─ Mark schedule as played               │
-│     └─ Process revenue (financial txns)      │
-│  5. Sleep 200ms every 5 games                │
-│                                              │
-│  Total: ~147 games × 1.5 sec = 220+ seconds │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  For each unplayed game (sequential):            │
+│                                                  │
+│  1. Load schedule entry from DB                  │
+│  2. Load both team rosters                       │
+│     (auto-backfill if < 9 lineup hitters)        │
+│  3. Run pure-TypeScript engine (~5ms)            │
+│  4. Persist results via batch operations:        │
+│     ├─ Insert game record                        │
+│     ├─ Batch insert events (300+ rows)           │
+│     ├─ Insert per-player hitting box lines       │
+│     ├─ Insert per-player pitching box lines      │
+│     ├─ Batch RPC: season hitting stats upsert    │
+│     ├─ Batch RPC: season pitching stats upsert   │
+│     ├─ Update standings (with ERA tracking)      │
+│     ├─ Mark schedule as played                   │
+│     └─ Process revenue (financial txns)          │
+│                                                  │
+│  Retries up to 3x per game on failure            │
+└──────────────────────────────────────────────────┘
 ```
 
-### Why It Feels Slow
+### What Has Improved Since Initial Review
 
-| Factor | Impact |
-|--------|--------|
-| **Sequential processing** | Games simulated one-at-a-time in a single-threaded loop. No parallelism. |
-| **N+1 query pattern** | Season stats upsert does individual SELECT + UPDATE per player per game (~28 queries/game × 147 games = **~4,100 queries** per season) |
-| **Artificial sleep** | 200ms delay injected every 5 games (adds ~6 seconds to full season) |
-| **No progress feedback** | Unlike the old Java terminal, the current system provides zero visibility — no logs, no progress bar, no streaming updates |
-| **5-minute API timeout** | On Vercel, API routes time out at 5 minutes. A 147-game season at ~1.5s/game risks hitting this limit |
-| **In-process execution** | The sim blocks the Next.js server while running — the website itself may feel sluggish during simulation |
+| Fix                     | Impact                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------ |
+| **Batch RPC upserts**   | Season stats use `batch_upsert_season_hitting/pitching` — eliminates N+1 queries           |
+| **Dedicated API route** | Sim delegated to `/api/sim/sim-all` with `maxDuration=300`, avoids 30s server action limit |
+| **Retry with backoff**  | Each game retries up to 3 times before skipping                                            |
+| **Lineup resilience**   | `buildTeamInput()` auto-fills bench hitters if lineup has < 9                              |
+| **Budget safety**       | `safe_debit` CHECK constraint prevents negative balances at DB level                       |
+| **ERA tracking**        | Standings include era_runs/era_outs columns                                                |
 
-### What Needs to Change
+### Remaining Architecture Opportunities
 
-The game engine itself (the pure TypeScript in `src/lib/sim-engine/`) is fast — a single game resolves in ~5ms. The bottleneck is **orchestration and persistence**. The path forward:
-
-1. **BullMQ worker process** — The dependency is already installed (`bullmq` + `ioredis`). Wire up a separate Node.js worker that pulls sim jobs from a Redis queue, runs them with full console logging, and reports progress. This restores the "separate terminal with visible logs" experience from v1.
-
-2. **Batch SQL operations** — Replace the N+1 season stats upsert with `ON CONFLICT ... DO UPDATE` bulk upserts. This alone could cut per-game persistence time by 60-70%.
-
-3. **Parallel game simulation** — Games within the same round are independent (different teams). They can be simulated concurrently.
-
-4. **Training & Trade daemons** — Currently these are manual API calls. BullMQ cron jobs can replicate the original 24-hour training daemon and trade-window processor.
+1. **BullMQ worker process** — Dependency installed but not wired. Would restore the "separate terminal with visible logs" experience from v1 and free the Next.js process during sim.
+2. **Parallel game simulation** — Games within the same round are independent. Could be simulated concurrently.
+3. **Training & Trade daemons** — BullMQ cron jobs could replicate the original 24-hour training daemon and trade-window processor.
 
 ### Simulation Engine Internals (Quick Reference)
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| Entry point | `simulateScheduledGame()` | Load rosters, call engine, persist |
-| Main loop | `GameEngine.ts` | Inning-by-inning, top/bottom half, walk-off detection |
-| At-bat resolution | `AtBat.ts` | RNG roll against skill-derived probability thresholds |
-| Skill math | `PlayerSkills.ts` | Converts 1-10 attributes to hit/walk/HR/K probabilities |
-| Pitcher fatigue | `PlayerSkills.ts` | Stamina decay after batters-faced threshold |
-| Baserunning | `Field.ts` | State machine: runner positions, advancement, scoring |
-| Revenue | `GateReceipts.ts` | Gate receipts, food/bev, ads, stadium ops per game type |
+| Component         | File                      | Purpose                                                 |
+| ----------------- | ------------------------- | ------------------------------------------------------- |
+| Entry point       | `simulateScheduledGame()` | Load rosters, call engine, persist                      |
+| Main loop         | `GameEngine.ts`           | Inning-by-inning, top/bottom half, walk-off detection   |
+| At-bat resolution | `AtBat.ts`                | RNG roll against skill-derived probability thresholds   |
+| Skill math        | `PlayerSkills.ts`         | Converts 1-10 attributes to hit/walk/HR/K probabilities |
+| Pitcher fatigue   | `PlayerSkills.ts`         | Stamina decay after batters-faced threshold             |
+| Baserunning       | `Field.ts`                | State machine: runner positions, advancement, scoring   |
+| Revenue           | `GateReceipts.ts`         | Gate receipts, food/bev, ads, stadium ops per game type |
 
 ---
 
 ## Review Summary & Severity Matrix
 
-| Area | Severity | Key Finding | File |
-|------|----------|-------------|------|
-| **Security** | 🔴 CRITICAL | 4 sim API routes have zero authentication | [02-security.md](review/02-security.md) |
-| **Performance** | 🔴 CRITICAL | N+1 queries: ~4,100 per season; sequential sim; no worker process | [06-performance.md](review/06-performance.md) |
-| **Data Integrity** | 🟠 HIGH | Budget race conditions; missing CHECK constraints; standings unique key bug | [04-data-integrity.md](review/04-data-integrity.md) |
-| **Error Handling** | 🟠 HIGH | No transaction wrapping on game persistence; no structured logging | [05-error-handling.md](review/05-error-handling.md) |
-| **Architecture** | 🟠 HIGH | Sim runs in-process instead of worker; no daemon equivalents | [03-architecture-design.md](review/03-architecture-design.md) |
-| **Testing** | 🟠 HIGH | Only 2 smoke tests; no unit/integration/E2E framework | [08-testing.md](review/08-testing.md) |
-| **Correctness** | 🟡 MEDIUM | At-bat winner-take-all; pitcher re-selection bug; skill range issues | [01-correctness-logic.md](review/01-correctness-logic.md) |
-| **Readability** | 🟢 LOW | Clean conventions; magic numbers in skill math; small name pool | [07-readability-maintainability.md](review/07-readability-maintainability.md) |
+> **Note:** All 18 items from the original P0–P3 improvement plan have been implemented. The severity ratings below reflect the state at the time of the initial review. Current status is shown in the rightmost column.
 
-**Prioritized Improvement Plan:** [09-improvement-plan.md](review/09-improvement-plan.md)
+| Area               | Original Severity | Key Finding                                                                 | Status   | File                                                                          |
+| ------------------ | ----------------- | --------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------- |
+| **Security**       | 🔴 CRITICAL       | 4 sim API routes had zero authentication                                    | ✅ Fixed | [02-security.md](review/02-security.md)                                       |
+| **Performance**    | 🔴 CRITICAL       | N+1 queries per season; sequential sim; no worker process                   | ✅ Fixed | [06-performance.md](review/06-performance.md)                                 |
+| **Data Integrity** | 🟠 HIGH           | Budget race conditions; missing CHECK constraints; standings unique key bug | ✅ Fixed | [04-data-integrity.md](review/04-data-integrity.md)                           |
+| **Error Handling** | 🟠 HIGH           | No transaction wrapping on game persistence; no structured logging          | ✅ Fixed | [05-error-handling.md](review/05-error-handling.md)                           |
+| **Architecture**   | 🟠 HIGH           | Sim runs in-process instead of worker; no daemon equivalents                | ✅ Fixed | [03-architecture-design.md](review/03-architecture-design.md)                 |
+| **Testing**        | 🟠 HIGH           | Only 2 smoke tests; no unit/integration/E2E framework                       | ✅ Fixed | [08-testing.md](review/08-testing.md)                                         |
+| **Correctness**    | 🟡 MEDIUM         | At-bat winner-take-all; pitcher re-selection bug; skill range issues        | ✅ Fixed | [01-correctness-logic.md](review/01-correctness-logic.md)                     |
+| **Readability**    | 🟢 LOW            | Clean conventions; magic numbers in skill math; small name pool             | ✅ Fixed | [07-readability-maintainability.md](review/07-readability-maintainability.md) |
+
+**Architecture note:** Sim uses dedicated API route with batch RPC and 5-minute timeout. Vercel Cron Jobs automate daily training, game sim, trade/challenge expiry, and weekly payroll. BullMQ remains available as a future upgrade for true out-of-process sim with live progress streaming.
 
 ---
 
 ## Detailed Review Files
 
-| # | Review Area | File |
-|---|-------------|------|
-| 1 | Correctness & Logic | [review/01-correctness-logic.md](review/01-correctness-logic.md) |
-| 2 | Security | [review/02-security.md](review/02-security.md) |
-| 3 | Architecture & Design (incl. Game Sim) | [review/03-architecture-design.md](review/03-architecture-design.md) |
-| 4 | Data Integrity | [review/04-data-integrity.md](review/04-data-integrity.md) |
-| 5 | Error Handling | [review/05-error-handling.md](review/05-error-handling.md) |
-| 6 | Performance | [review/06-performance.md](review/06-performance.md) |
-| 7 | Readability & Maintainability | [review/07-readability-maintainability.md](review/07-readability-maintainability.md) |
-| 8 | Testing | [review/08-testing.md](review/08-testing.md) |
-| 9 | Improvement Plan | [review/09-improvement-plan.md](review/09-improvement-plan.md) |
+| #   | Review Area                            | File                                                                                 |
+| --- | -------------------------------------- | ------------------------------------------------------------------------------------ |
+| 1   | Correctness & Logic                    | [review/01-correctness-logic.md](review/01-correctness-logic.md)                     |
+| 2   | Security                               | [review/02-security.md](review/02-security.md)                                       |
+| 3   | Architecture & Design (incl. Game Sim) | [review/03-architecture-design.md](review/03-architecture-design.md)                 |
+| 4   | Data Integrity                         | [review/04-data-integrity.md](review/04-data-integrity.md)                           |
+| 5   | Error Handling                         | [review/05-error-handling.md](review/05-error-handling.md)                           |
+| 6   | Performance                            | [review/06-performance.md](review/06-performance.md)                                 |
+| 7   | Readability & Maintainability          | [review/07-readability-maintainability.md](review/07-readability-maintainability.md) |
+| 8   | Testing                                | [review/08-testing.md](review/08-testing.md)                                         |
+| 9   | Improvement Plan                       | [review/09-improvement-plan.md](review/09-improvement-plan.md)                       |

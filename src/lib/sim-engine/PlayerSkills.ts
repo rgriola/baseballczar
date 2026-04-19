@@ -1,4 +1,12 @@
 import type { PlayerSkills, PitcherAttributes, SkillThresholds } from './types';
+import {
+  HITTER,
+  PITCHER,
+  STAMINA_FACTOR,
+  BATTER_THRESHOLD,
+  STAMINA_FACTOR_DEFAULT,
+  BATTER_THRESHOLD_DEFAULT,
+} from './constants';
 
 /**
  * Calculate hitter skill thresholds from raw 0-100 attributes.
@@ -14,19 +22,12 @@ import type { PlayerSkills, PitcherAttributes, SkillThresholds } from './types';
  *   (K, 1]        → ground-ball out
  */
 export function calculateHitterSkill(skills: PlayerSkills): SkillThresholds {
-  const AG_f = 0.025;
-  const AVG_f = 0.007;
-  const POWER_f = 0.025;
-  const EYE_f = 0.03;
-  const DHR_f = 0.05;
-  const SPEED_f = 0.002;
-
-  const xAG = skills.ag * AG_f + 0.1;
-  const xAVG = skills.avg * AVG_f + 0.1;
-  const xPOWER = skills.power * POWER_f + 0.05;
-  const xEYE = skills.eye * EYE_f + 0.15;
-  const xDHR = skills.dhr * DHR_f + 0.35;
-  const xSPEED = skills.speed * SPEED_f + 0.003;
+  const xAG = skills.ag * HITTER.AG_FACTOR + HITTER.AG_BASE;
+  const xAVG = skills.avg * HITTER.AVG_FACTOR + HITTER.AVG_BASE;
+  const xPOWER = skills.power * HITTER.POWER_FACTOR + HITTER.POWER_BASE;
+  const xEYE = skills.eye * HITTER.EYE_FACTOR + HITTER.EYE_BASE;
+  const xDHR = skills.dhr * HITTER.DHR_FACTOR + HITTER.DHR_BASE;
+  const xSPEED = skills.speed * HITTER.SPEED_FACTOR + HITTER.SPEED_BASE;
 
   const BBs = xAG * xEYE;
   const Ks = xAG - BBs;
@@ -60,19 +61,12 @@ export function calculatePitcherSkill(
   // Apply stamina degradation first
   const degraded = applyStaminaDecay(skills, battersFaced);
 
-  const AG_f = 0.0272;
-  const AVG_f = -0.014545;
-  const POWER_f = -0.0364;
-  const EYE_f = -0.0418;
-  const DHR_f = -0.054545;
-  const SPEED_f = 0.002;
-
-  const xAG = degraded.ag * AG_f + 0.15;
-  const xAVG = degraded.avg * AVG_f + 0.31;
-  const xPOWER = degraded.power * POWER_f + 0.5;
-  const xEYE = degraded.eye * EYE_f + 0.6;
-  const xDHR = degraded.dhr * DHR_f + 0.95;
-  const xSPEED = degraded.speed * SPEED_f + 0.003;
+  const xAG = degraded.ag * PITCHER.AG_FACTOR + PITCHER.AG_BASE;
+  const xAVG = degraded.avg * PITCHER.AVG_FACTOR + PITCHER.AVG_BASE;
+  const xPOWER = degraded.power * PITCHER.POWER_FACTOR + PITCHER.POWER_BASE;
+  const xEYE = degraded.eye * PITCHER.EYE_FACTOR + PITCHER.EYE_BASE;
+  const xDHR = degraded.dhr * PITCHER.DHR_FACTOR + PITCHER.DHR_BASE;
+  const xSPEED = degraded.speed * PITCHER.SPEED_FACTOR + PITCHER.SPEED_BASE;
 
   const BBs = xAG * xEYE;
   const Ks = xAG - BBs;
@@ -101,18 +95,8 @@ function applyStaminaDecay(
   skills: PitcherAttributes,
   battersFaced: number,
 ): PitcherAttributes {
-  const staminaFactorMap: Record<number, number> = {
-    10: 0.025, 9: 0.03, 8: 0.035, 7: 0.04, 6: 0.05,
-    5: 0.06, 4: 0.065, 3: 0.075, 2: 0.09, 1: 0.1,
-  };
-
-  const batterThresholdMap: Record<number, number> = {
-    10: 33, 9: 30, 8: 27, 7: 23, 6: 19,
-    5: 17, 4: 15, 3: 13, 2: 10, 1: 7, 0: 5,
-  };
-
-  const staminaFactor = staminaFactorMap[Math.min(10, Math.max(1, skills.stamina))] ?? 0.05;
-  const batterThreshold = batterThresholdMap[Math.min(10, Math.max(0, skills.pitchIntel))] ?? 6;
+  const staminaFactor = STAMINA_FACTOR[Math.min(10, Math.max(1, skills.stamina))] ?? STAMINA_FACTOR_DEFAULT;
+  const batterThreshold = BATTER_THRESHOLD[Math.min(10, Math.max(0, skills.pitchIntel))] ?? BATTER_THRESHOLD_DEFAULT;
 
   if (battersFaced <= batterThreshold) {
     return { ...skills };
