@@ -1,6 +1,7 @@
 'use client';
 
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import Link from 'next/link';
 import { login } from '../actions';
 
@@ -18,7 +19,7 @@ function SubmitButton() {
 }
 
 export default function LoginPage() {
-  const [state, formAction] = useFormState(
+  const [state, formAction] = useActionState(
     async (_prev: { error?: string } | undefined, formData: FormData) => {
       return await login(formData);
     },
