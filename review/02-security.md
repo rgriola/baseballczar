@@ -32,13 +32,13 @@ The application has a solid foundation with Supabase Auth, Zod validation, and R
 
 These routes use the **service-role key** (admin-level Supabase access) internally, meaning they bypass all RLS policies.
 
-**How the middleware allows this:** The middleware in `src/middleware.ts` explicitly allows `/api/*` routes through without authentication:
+**How the proxy allows this:** The proxy entrypoint in `src/proxy.ts` explicitly allows `/api/*` routes through without authentication:
 
 ```typescript
 if (
   pathname.startsWith("/login") ||
   pathname.startsWith("/signup") ||
-  pathname.startsWith("/api/") || // ← All API routes bypass middleware auth
+  pathname.startsWith("/api/") || // ← All API routes bypass proxy auth
   pathname === "/"
 ) {
   return response;

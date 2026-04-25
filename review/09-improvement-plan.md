@@ -77,7 +77,7 @@ $$ LANGUAGE plpgsql;
 **What to do:**
 
 1. Install `@upstash/ratelimit` + `@upstash/redis` (or use Vercel KV)
-2. Add middleware-level rate limiting:
+2. Add proxy-level rate limiting:
    - Auth routes: 5 requests/minute per IP
    - API routes: 30 requests/minute per user
    - Sim routes: 1 request/10 seconds per user (simulations are expensive)
@@ -242,7 +242,7 @@ const { error } = await supabase
 2. Create `src/lib/logger.ts` with child loggers per domain
 3. Replace `console.log` calls with structured log calls
 4. Log: sim start/end, game results, trade executions, errors with context
-5. Add request-id tracking via middleware
+5. Add request-id tracking via proxy
 
 **Effort:** ~4-6 hours
 
@@ -264,12 +264,12 @@ const { error } = await supabase
 
 ---
 
-### P2-4: Add Security Headers via Middleware
+### P2-4: Add Security Headers via Proxy
 
 **Review:** [02-security.md](02-security.md) Finding #5
 
 **What to do:**
-Add to `src/middleware.ts`:
+Add to `src/proxy.ts`:
 
 ```typescript
 const securityHeaders = {
@@ -408,7 +408,7 @@ Ongoing: P3 items as time allows
 These can be done immediately between larger tasks:
 
 1. ✅ Auth on 4 sim routes (P0-1, partial — just the auth check)
-2. ✅ Security headers in middleware (P2-4)
+2. ✅ Security headers in proxy (P2-4)
 3. ✅ `UNIQUE` constraint on standings (P1-3, partial)
 4. ✅ Extract skill constants (P2-5)
 5. ✅ `npm install -D vitest` + one test file (P2-1, partial)

@@ -108,7 +108,7 @@ src/
 │   ├── queries/          # Shared DB queries (getMyTeam, requireMyTeam)
 │   ├── seed/             # Player generation, schedule generation, 200+ names
 │   └── supabase/         # Client helpers (browser, server, service-role)
-├── middleware.ts          # Auth session refresh + route protection
+├── proxy.ts               # Auth session refresh + route protection
 supabase/
 ├── config.toml
 └── migrations/            # 7 SQL migrations

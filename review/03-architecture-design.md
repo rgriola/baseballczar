@@ -36,7 +36,7 @@ The application follows clean Next.js App Router conventions with a well-separat
 │  │  /app/dashboard/*   → Server Components (RSC)    │   │
 │  │  /app/api/*         → API Route Handlers          │   │
 │  │  /app/(auth)/*      → Auth pages + actions        │   │
-│  │  middleware.ts       → Session refresh + guards    │   │
+│  │  proxy.ts            → Session refresh + guards    │   │
 │  └───────────────────────┬───────────────────────────┘   │
 │                          │                               │
 │  ┌───────────────────────┼───────────────────────────┐   │

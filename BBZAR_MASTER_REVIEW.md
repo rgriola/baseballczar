@@ -94,7 +94,7 @@ baseballczar-v2/
 │   │   ├── queries/             # Shared DB queries (getMyTeam, requireMyTeam)
 │   │   ├── seed/                # Player generation, schedule generation, name data
 │   │   └── supabase/            # Client factories (browser, server, service-role)
-│   └── middleware.ts            # Auth session refresh, route protection
+│   └── proxy.ts                 # Auth session refresh, route protection
 ├── supabase/
 │   ├── config.toml
 │   └── migrations/              # 6 migration files
