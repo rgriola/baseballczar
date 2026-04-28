@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "Baseball Czar",
+    "slug": "baseballczar",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "baseballczar",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f1b2d"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.baseballczar.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0f1b2d"
+      },
+      "package": "com.baseballczar.app"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    }
+  }
+}
