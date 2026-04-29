@@ -60,15 +60,18 @@ export function makeFielderSprite(
     .circle(0, 0, radiusPx).fill(0xffffff)
     .stroke({ color: 0x222222, width: 0.5 });
   c.addChild(body);
-  // Cap: small ellipse sitting on top of the head, offset radially in
-  // the direction the player is facing. The cap is drawn centered at
-  // (0,0) with the major axis along x; `tween.advance` repositions it
-  // each frame to (cosθ, sinθ) * hatOffsetPx and rotates it to θ so
-  // the brim sweeps with motion. Default facing is toward home plate.
-  const hatOffsetPx = radiusPx * 0.85;
+  // Cap: a small directional wedge (triangle) drawn at the body
+  // center, apex along +x. `tween.advance` rotates it to point in the
+  // direction the player is facing — the apex/brim is unambiguous, so
+  // there's no front/back ambiguity like a symmetric ellipse would have.
+  const hatOffsetPx = 0;
   const hat = new Graphics()
-    .ellipse(0, 0, radiusPx * 0.85, radiusPx * 0.45)
-    .fill({ color: 0x111111, alpha: 0.95 });
+    .moveTo(radiusPx * 1.15, 0)
+    .lineTo(-radiusPx * 0.25, -radiusPx * 0.55)
+    .lineTo(-radiusPx * 0.25, radiusPx * 0.55)
+    .closePath()
+    .fill({ color: 0x111111, alpha: 0.95 })
+    .stroke({ color: 0xffffff, width: 0.5 });
   c.addChild(hat);
   // Only show the position label if the sprite is large enough to read it.
   if (radiusPx >= 6) {
@@ -100,10 +103,14 @@ export function makeRunnerSprite(
     .circle(0, 0, radiusPx).fill(color)
     .stroke({ color: 0x111111, width: 0.5 });
   c.addChild(body);
-  const hatOffsetPx = radiusPx * 0.85;
+  const hatOffsetPx = 0;
   const hat = new Graphics()
-    .ellipse(0, 0, radiusPx * 0.85, radiusPx * 0.45)
-    .fill({ color: 0x111111, alpha: 0.95 });
+    .moveTo(radiusPx * 1.15, 0)
+    .lineTo(-radiusPx * 0.25, -radiusPx * 0.55)
+    .lineTo(-radiusPx * 0.25, radiusPx * 0.55)
+    .closePath()
+    .fill({ color: 0x111111, alpha: 0.95 })
+    .stroke({ color: 0xffffff, width: 0.5 });
   c.addChild(hat);
   return { c, hat, hatOffsetPx };
 }

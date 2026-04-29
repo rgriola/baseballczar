@@ -19,7 +19,7 @@ import {
   type RunnerSprite,
   makeRunnerSprite,
 } from './sprites';
-import { startTween } from './tween';
+import { startTween, updateHatFacing } from './tween';
 
 interface Deps {
   runners: Map<number, RunnerSprite>;
@@ -67,6 +67,8 @@ export function createRunnerManager(deps: Deps): RunnerManager {
       startT: 0, durSec: 0, arc: 'line', apexFt: 0,
     };
     runners.set(runnerId, r);
+    // Frame-zero facing: idle runners look toward home plate.
+    updateHatFacing(r, transform, null);
     return r;
   };
 
@@ -109,6 +111,9 @@ export function createRunnerManager(deps: Deps): RunnerManager {
       startT: 0, durSec: 0, arc: 'line', apexFt: 0,
     };
     runners.set(batterId, sprite);
+    // Frame-zero facing: batter looks toward home (i.e. inward toward
+    // the plate); once they swing and run, the moving facing kicks in.
+    updateHatFacing(sprite, transform, null);
     if (walkOutAtT != null) {
       // Walk pace = ~50% of sprint speed, so a slow slugger ambles in
       // around 11 ft/s and a burner trots at 14 ft/s.

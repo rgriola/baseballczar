@@ -23,7 +23,7 @@ import {
   makeFielderSprite,
   makeRunnerSprite,
 } from './scene/sprites';
-import { altitudeFt, advance, startTween } from './scene/tween';
+import { altitudeFt, advance, startTween, updateHatFacing } from './scene/tween';
 import { createRunnerManager } from './scene/runners';
 import { stageHomeTeamInDugout, playFieldersToPositions } from './scene/intro';
 
@@ -69,7 +69,7 @@ export function createScene(transform: FieldTransform): SceneAPI {
     gfx.position.set(px.x, px.y);
     layerFielders.addChild(gfx);
     fielderBodies.set(pos, body);
-    fielders.set(pos, {
+    const f: MovingSprite = {
       gfx, hat, hatOffsetPx,
       cur: { ...ft },
       from: { ...ft },
@@ -78,7 +78,11 @@ export function createScene(transform: FieldTransform): SceneAPI {
       durSec: 0,
       arc: 'line',
       apexFt: 0,
-    });
+    };
+    fielders.set(pos, f);
+    // Frame-zero facing: every fielder looks toward home plate so the
+    // very first render is correctly oriented (don't wait for a tick).
+    updateHatFacing(f, transform, null);
   }
 
   // ─── Ball sprite (initially at pitcher's mound) ───

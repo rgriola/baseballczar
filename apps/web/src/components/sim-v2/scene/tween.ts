@@ -95,8 +95,11 @@ export function advance(
  * Engine→screen y is flipped (`ftToPx` uses `homeY - pt.y * scale`),
  * so motion in engine coords must be flipped on y before computing the
  * screen-space angle for Pixi rotation.
+ *
+ * Exported so newly-created sprites can be oriented on frame zero
+ * (before the first `advance` tick).
  */
-function updateHatFacing(
+export function updateHatFacing(
   sprite: MovingSprite,
   _transform: FieldTransform,
   motion: { dx: number; dy: number } | null,
