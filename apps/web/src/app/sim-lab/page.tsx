@@ -55,9 +55,14 @@ function runSim(seed: number): SimRun {
 function compressTimeline(events: SimEvent[], maxGapSec: number): SimEvent[] {
   if (events.length === 0) return events;
   const PREGAME_MAX_SEC = 14;     // covers the 12s intro-jog cap
-  const FIRST_AB_MAX_SEC = 10;    // covers the ~8s leadoff walk-out from dugout
-  const FIRST_PITCH_MAX_SEC = 8;  // covers the ~5s leadoff batter still walking
-                                  //   to the box after at-bat-start
+  // Pull the leadoff at-bat-start up close to inning-start so the
+  // batter starts walking out of the dugout while the fielders are
+  // still jogging to position. Without this, the batter waits ~10s
+  // after the fielders, then heads out alone.
+  const FIRST_AB_MAX_SEC = 2;
+  // Then leave enough room for the ~5s walk-out + buffer before the
+  // first pitch fires.
+  const FIRST_PITCH_MAX_SEC = 10;
   let firstInningStartSeen = false;
   let firstAtBatStartSeen = false;
   let firstPitchSeen = false;
