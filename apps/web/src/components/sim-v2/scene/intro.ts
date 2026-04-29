@@ -50,12 +50,17 @@ export function stageHomeTeamInDugout(
 }
 
 /**
- * Move every fielder to their position-of-record. In `intro` mode the
- * jog speed is driven by each fielder's `speed` skill (1–10 → 22–28
- * ft/s sprint, ×0.70 for jog), so a fast CF outpaces a slow 1B
- * naturally without a fixed cascade. Outside intro mode this is a quick
- * 0.5s snap used at every inning-start.
+ * Move every fielder to their position-of-record. In `intro` mode they
+ * sprint at full speed out of the dugout (skill 1–10 → 22–28 ft/s), so
+ * a fast CF still outpaces a slow 1B without a fixed cascade. The
+ * duration is capped at `INTRO_MAX_SEC` so the slowest fielder is
+ * guaranteed to be in position well before the leadoff at-bat begins
+ * (engine pushes `at-bat-start` 25s after `inning-start`). Outside
+ * intro mode this is a quick 0.5s snap used at every inning-start.
  */
+const INTRO_MIN_SEC = 2.0;
+const INTRO_MAX_SEC = 12.0;
+
 export function playFieldersToPositions(
   fielders: Map<Position, MovingSprite>,
   atClockSec: number,
@@ -66,9 +71,9 @@ export function playFieldersToPositions(
     const home = FIELDER_POSITIONS_FT[pos];
     if (intro) {
       const speed = speedByPos?.get(pos) ?? 5;
-      const jogFps = sprintFtPerSec(speed) * 0.70;
+      const sprintFps = sprintFtPerSec(speed);
       const dist = Math.hypot(home.x - sp.cur.x, home.y - sp.cur.y);
-      const dur = Math.max(2.0, dist / jogFps);
+      const dur = Math.min(INTRO_MAX_SEC, Math.max(INTRO_MIN_SEC, dist / sprintFps));
       startTween(sp, home, dur, atClockSec, 'line');
     } else {
       startTween(sp, home, 0.5, atClockSec, 'line');

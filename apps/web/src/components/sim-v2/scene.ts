@@ -386,6 +386,10 @@ export function createScene(transform: FieldTransform): SceneAPI {
   const reset = () => {
     // Clear all runners
     for (const id of [...runners.keys()]) removeRunner(id);
+    // Re-arm the pre-game intro so the next game also plays
+    // the take-the-field jog + leadoff walk-out.
+    firstInningOpened = false;
+    firstBatterShown = false;
     // Snap fielders home
     for (const [pos, sp] of fielders) {
       const home = FIELDER_POSITIONS_FT[pos];
