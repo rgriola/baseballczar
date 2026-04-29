@@ -31,6 +31,7 @@ import type { Position } from '../config';
 import { FIELDER_POSITIONS_FT } from '../physics/positions';
 import { BASE_COORDS_FT } from '../physics/speed';
 import { throwTimeSec } from '../physics/throw';
+import { createRng } from '../rng';
 import type { InningStartEvent, SimEvent, SimEventInit } from './types';
 import { TIME, ballReturnFlightSec } from './timing';
 import { emitBaseRunningEvents } from './baseRunning';
@@ -42,6 +43,9 @@ export function buildEvents(g: GameResult): SimEvent[] {
   let t = 0;
   const scoreHome = { v: 0 };
   const scoreAway = { v: 0 };
+  // Deterministic RNG seeded from team ids so the same GameResult
+  // always produces the same events (PI decisions are reproducible).
+  const rng = createRng((g.homeTeam.id * 31 + g.awayTeam.id) ^ 0xBBC2A2);
 
   /** Push an event at `t + dt` and advance the global clock. */
   const push = (e: SimEventInit, dt: number) => {
@@ -158,7 +162,7 @@ export function buildEvents(g: GameResult): SimEvent[] {
       if (p.outcome === 'in-play' && ab.battedBall) {
         // Capture contact time BEFORE emitBattedBallVisuals advances `t`.
         lastContactT = t;
-        emitBattedBallVisuals(ab.battedBall, ab, push, currentDefenseMap, bases, outsInInning);
+        emitBattedBallVisuals(ab.battedBall, ab, push, currentDefenseMap, bases, outsInInning, rng);
       } else if (p.battedBall) {
         // Foul ball — emit a contact event so the renderer can show the
         // launch + landing in foul territory. If the foul was caught for

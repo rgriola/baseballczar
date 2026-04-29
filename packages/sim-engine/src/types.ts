@@ -25,6 +25,12 @@ export interface Skills {
   pitchIntel: number;  // pitch selection IQ + control
   // Fielding
   defense: number;     // range + glove + arm accuracy
+  /** Play Intelligence — situational read for defense (cutoff vs.
+   *  lead runner, hit cutoff vs. throw home) and baserunning (extra
+   *  base, tag up). 1..10. Hidden from the box score. Optional for
+   *  backwards compatibility with existing fixtures — defaults to 5
+   *  via `getPlayIntelligence(player)`. */
+  playIntelligence?: number;
 }
 
 export interface Player {

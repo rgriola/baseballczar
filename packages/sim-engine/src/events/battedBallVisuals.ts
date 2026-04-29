@@ -13,6 +13,8 @@ import type { Position } from '../config';
 import { FIELDER_POSITIONS_FT } from '../physics/positions';
 import { throwTimeSec } from '../physics/throw';
 import { getCoverage } from '../defense/responsibilities';
+import { decideThrowTarget } from '../defense/decide';
+import type { Rng } from '../rng';
 import type { SimEventInit } from './types';
 import { TIME, basePoint } from './timing';
 
@@ -26,6 +28,9 @@ export function emitBattedBallVisuals(
    *  Optional for backwards compatibility — defaults to empty bases. */
   bases?: readonly (unknown | null)[],
   outsBefore = 0,
+  /** Optional Rng for PI rolls on throw target. If omitted, the
+   *  textbook coverage is used unconditionally (legacy behavior). */
+  rng?: Rng,
 ): void {
   // The play happens at `fieldedAtPoint` for grounders the IF intercepts
   // mid-roll; for everything else it's the ball's natural landing point.
@@ -86,7 +91,7 @@ export function emitBattedBallVisuals(
   // Driven by the deterministic responsibility table. Emit
   // cover/cutoff/backup converges in parallel with the throw so the
   // whole defense rotates correctly on every play.
-  const coverage = getCoverage({
+  const coverage0 = getCoverage({
     fielder: ab.fieldedBy,
     fieldedAt: playPoint,
     result: ab.result,
@@ -94,6 +99,11 @@ export function emitBattedBallVisuals(
     outs: outsBefore,
     sprayAngleDeg: ball.sprayAngleDeg,
   });
+  // PI gate: low-PI fielder may downgrade the throw target to a
+  // safer base, conceding the lead runner. High-PI fielders execute
+  // the textbook play almost every time. Pure replay-time roll
+  // seeded from team ids in buildEvents — reproducible.
+  const coverage = rng ? decideThrowTarget(coverage0, fielderPlayer, rng) : coverage0;
 
   // All cover / cutoff / backup fielders break at contact (dt=0). The
   // renderer tweens them to their assigned point.

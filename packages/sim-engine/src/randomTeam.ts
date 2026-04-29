@@ -38,6 +38,7 @@ function rollSkills(rng: Rng, isPitcher: boolean): Skills {
       stamina: rollSkill(rng),
       pitchIntel: rollSkill(rng),
       defense: rollSkill(rng),
+      playIntelligence: rollSkill(rng),
     };
   }
   return {
@@ -50,6 +51,7 @@ function rollSkills(rng: Rng, isPitcher: boolean): Skills {
     stamina: 1,
     pitchIntel: 1,
     defense: rollSkill(rng),
+    playIntelligence: rollSkill(rng),
   };
 }
 

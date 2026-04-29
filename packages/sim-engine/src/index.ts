@@ -22,3 +22,6 @@ export { throwTimeSec, throwVelocityMph } from './physics/throw';
 export { runnerTimeSec, sprintFtPerSec, BASE_COORDS_FT } from './physics/speed';
 export { FIELDER_POSITIONS_FT } from './physics/positions';
 export { isInfieldFly, INFIELD_FLY } from './rules/infieldFly';
+export { getCoverage } from './defense/responsibilities';
+export type { CoverageAssignments, Base, CoverAssignment, CutoffAssignment, BackupAssignment } from './defense/responsibilities';
+export { decideThrowTarget, getPlayIntelligence, rollPI } from './defense/decide';
