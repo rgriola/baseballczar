@@ -57,7 +57,12 @@ export function altitudeFt(sprite: MovingSprite, clockSec: number): number {
 export function advance(
   sprite: MovingSprite, clockSec: number, transform: FieldTransform,
 ): void {
-  if (sprite.durSec <= 0) return;
+  if (sprite.durSec <= 0) {
+    // Idle: keep the cap pointing toward home plate so a stationary
+    // fielder/runner reads as facing the play.
+    if (sprite.hat) updateHatFacing(sprite, transform, null);
+    return;
+  }
   const u = Math.min(1, Math.max(0, (clockSec - sprite.startT) / sprite.durSec));
   sprite.cur = lerpFt(sprite.from, sprite.to, u);
   const px = ftToPx(sprite.cur, transform);
@@ -66,5 +71,56 @@ export function advance(
   else if (sprite.arc === 'grounder') yOffset = grounderBouncePx(u, transform);
   else if (sprite.arc === 'pitch') yOffset = pitchLiftPx(u, transform);
   sprite.gfx.position.set(px.x, px.y - yOffset);
+  // Cap follows direction of motion. We use the from→to vector (constant
+  // for the whole tween) so the cap doesn't jitter on near-zero per-frame
+  // deltas at the end of a tween. Falls back to facing home when the
+  // movement vector is degenerate.
+  if (sprite.hat) {
+    const dx = sprite.to.x - sprite.from.x;
+    const dy = sprite.to.y - sprite.from.y;
+    if (Math.hypot(dx, dy) > 0.5) {
+      updateHatFacing(sprite, transform, { dx, dy });
+    } else {
+      updateHatFacing(sprite, transform, null);
+    }
+  }
   if (u >= 1) sprite.durSec = 0;
+}
+
+/**
+ * Position + rotate the cap. `motion` is an engine-feet vector (where
+ * the player is heading). When null, the cap points toward home plate
+ * (engine origin), which is the natural "ready / between-plays" pose.
+ *
+ * Engine→screen y is flipped (`ftToPx` uses `homeY - pt.y * scale`),
+ * so motion in engine coords must be flipped on y before computing the
+ * screen-space angle for Pixi rotation.
+ */
+function updateHatFacing(
+  sprite: MovingSprite,
+  _transform: FieldTransform,
+  motion: { dx: number; dy: number } | null,
+): void {
+  const hat = sprite.hat!;
+  const offset = sprite.hatOffsetPx ?? 0;
+  let dx: number;
+  let dy: number;
+  if (motion) {
+    dx = motion.dx;
+    dy = motion.dy;
+  } else {
+    // Face home: vector from current position back to (0, 0).
+    dx = -sprite.cur.x;
+    dy = -sprite.cur.y;
+    if (Math.hypot(dx, dy) < 0.5) {
+      // Standing on home plate (e.g. batter): face up the field.
+      dx = 0;
+      dy = 1;
+    }
+  }
+  // Flip y for screen-space (engine +y = up the field = screen -y).
+  const screenDy = -dy;
+  const angle = Math.atan2(screenDy, dx);
+  hat.position.set(Math.cos(angle) * offset, Math.sin(angle) * offset);
+  hat.rotation = angle;
 }

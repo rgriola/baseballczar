@@ -24,6 +24,15 @@ export interface MovingSprite {
   arc: 'line' | 'fly' | 'grounder' | 'pitch';
   /** Apex altitude in feet (for fly arcs only). */
   apexFt: number;
+  /** Optional facing-indicator ("cap") child: an ellipse sitting on top
+   *  of the player body that the renderer rotates to point in the
+   *  direction the player is currently facing. Player sprites have one;
+   *  the ball does not. Carried on the sprite so `tween.advance` can
+   *  update it each frame without needing a separate map lookup. */
+  hat?: Graphics;
+  /** Hat radial offset from body center, in pixels. Captured at sprite
+   *  creation so the same sprite reads correctly at any zoom level. */
+  hatOffsetPx?: number;
 }
 
 export interface RunnerSprite extends MovingSprite {
@@ -39,7 +48,7 @@ export interface RunnerSprite extends MovingSprite {
  */
 export function makeFielderSprite(
   pos: Position, radiusPx: number,
-): { c: Container; body: Graphics } {
+): { c: Container; body: Graphics; hat: Graphics; hatOffsetPx: number } {
   const c = new Container();
   // Shadow first so it draws beneath the body. Slightly offset down to
   // suggest a sun overhead and to read as feet planted on the dirt.
@@ -51,6 +60,16 @@ export function makeFielderSprite(
     .circle(0, 0, radiusPx).fill(0xffffff)
     .stroke({ color: 0x222222, width: 0.5 });
   c.addChild(body);
+  // Cap: small ellipse sitting on top of the head, offset radially in
+  // the direction the player is facing. The cap is drawn centered at
+  // (0,0) with the major axis along x; `tween.advance` repositions it
+  // each frame to (cosθ, sinθ) * hatOffsetPx and rotates it to θ so
+  // the brim sweeps with motion. Default facing is toward home plate.
+  const hatOffsetPx = radiusPx * 0.85;
+  const hat = new Graphics()
+    .ellipse(0, 0, radiusPx * 0.85, radiusPx * 0.45)
+    .fill({ color: 0x111111, alpha: 0.95 });
+  c.addChild(hat);
   // Only show the position label if the sprite is large enough to read it.
   if (radiusPx >= 6) {
     const lbl = new Text({
@@ -64,11 +83,14 @@ export function makeFielderSprite(
     lbl.position.set(0, 0);
     c.addChild(lbl);
   }
-  return { c, body };
+  return { c, body, hat, hatOffsetPx };
 }
 
-/** Build a runner sprite — colored circle body with a soft shadow. */
-export function makeRunnerSprite(color: number, radiusPx: number): Container {
+/** Build a runner sprite — colored circle body with a soft shadow and a
+ *  facing cap. The cap is repositioned each frame by `tween.advance`. */
+export function makeRunnerSprite(
+  color: number, radiusPx: number,
+): { c: Container; hat: Graphics; hatOffsetPx: number } {
   const c = new Container();
   const shadow = new Graphics()
     .ellipse(0, radiusPx * 0.55, radiusPx * 1.05, radiusPx * 0.45)
@@ -78,5 +100,10 @@ export function makeRunnerSprite(color: number, radiusPx: number): Container {
     .circle(0, 0, radiusPx).fill(color)
     .stroke({ color: 0x111111, width: 0.5 });
   c.addChild(body);
-  return c;
+  const hatOffsetPx = radiusPx * 0.85;
+  const hat = new Graphics()
+    .ellipse(0, 0, radiusPx * 0.85, radiusPx * 0.45)
+    .fill({ color: 0x111111, alpha: 0.95 });
+  c.addChild(hat);
+  return { c, hat, hatOffsetPx };
 }

@@ -56,12 +56,12 @@ export function createRunnerManager(deps: Deps): RunnerManager {
     let r = runners.get(runnerId);
     if (r) return r;
     const ft = initBase === 'home' ? { x: 0, y: 0 } : BASE_COORDS_FT[initBase];
-    const gfx = makeRunnerSprite(teamColor, playerRadiusPx);
+    const { c: gfx, hat, hatOffsetPx } = makeRunnerSprite(teamColor, playerRadiusPx);
     const px = ftToPx(ft, transform);
     gfx.position.set(px.x, px.y);
     layerRunners.addChild(gfx);
     r = {
-      gfx, teamColor,
+      gfx, teamColor, hat, hatOffsetPx,
       speed: 5,
       cur: { ...ft }, from: { ...ft }, to: { ...ft },
       startT: 0, durSec: 0, arc: 'line', apexFt: 0,
@@ -92,7 +92,7 @@ export function createRunnerManager(deps: Deps): RunnerManager {
       : hand;
     const standsRight = effectiveHand === 'R';
     const ft = { x: standsRight ? -xMag : xMag, y: 0 };
-    const gfx = makeRunnerSprite(teamColor, playerRadiusPx);
+    const { c: gfx, hat, hatOffsetPx } = makeRunnerSprite(teamColor, playerRadiusPx);
     // For the pre-game leadoff, start the batter in the away dugout
     // (3B side) and walk them to the box. Subsequent batters just
     // appear in the box (they're already "on deck").
@@ -103,7 +103,7 @@ export function createRunnerManager(deps: Deps): RunnerManager {
     gfx.position.set(px.x, px.y);
     layerRunners.addChild(gfx);
     const sprite: RunnerSprite = {
-      gfx, teamColor,
+      gfx, teamColor, hat, hatOffsetPx,
       speed: speedSkill,
       cur: { ...startFt }, from: { ...startFt }, to: { ...startFt },
       startT: 0, durSec: 0, arc: 'line', apexFt: 0,

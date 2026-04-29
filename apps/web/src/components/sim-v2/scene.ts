@@ -64,13 +64,13 @@ export function createScene(transform: FieldTransform): SceneAPI {
   const fielders = new Map<Position, MovingSprite>();
   const fielderBodies = new Map<Position, Graphics>();
   for (const [pos, ft] of Object.entries(FIELDER_POSITIONS_FT) as [Position, { x: number; y: number }][]) {
-    const { c: gfx, body } = makeFielderSprite(pos, playerRadiusPx);
+    const { c: gfx, body, hat, hatOffsetPx } = makeFielderSprite(pos, playerRadiusPx);
     const px = ftToPx(ft, transform);
     gfx.position.set(px.x, px.y);
     layerFielders.addChild(gfx);
     fielderBodies.set(pos, body);
     fielders.set(pos, {
-      gfx,
+      gfx, hat, hatOffsetPx,
       cur: { ...ft },
       from: { ...ft },
       to: { ...ft },
