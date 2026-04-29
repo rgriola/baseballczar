@@ -68,6 +68,55 @@ export const CONFIG = {
     catchRadiusFt: 10,           // ball within this of fielder = caught (line-drive)
   },
 
+  // ─── Fielding physics & territory ────────────────────────────
+  // Knobs that govern how a fielder converges on a batted ball, picks
+  // it up, and how the OF/IF aggression slack converts contact to
+  // singles/doubles/triples. All extracted from battedBall.ts magic
+  // numbers in Phase B.
+  fielding: {
+    /** Pickup time after the fielder/ball converge (glove transfer). */
+    pickupSec: 0.4,
+    /** Friction multiplier on a grounder's exit-velo as it rolls toward
+     *  the fielder. 0.55 = the ball reaches the IF at ~55% of EV. */
+    groundBallFrictionMul: 0.55,
+    /** Floor on rolling speed (ft/sec) so very weak choppers still get
+     *  a reasonable arrival time at the fielder. */
+    minRollSpeedFps: 40,
+    /** Per-degree territory penalty (sec) applied when a fly's spray
+     *  angle is outside a fielder's natural zone. Keeps CF from poaching
+     *  routine flies that geometrically belong to LF/RF. */
+    territoryPenaltySecPerDeg: 0.012,
+    /** Inside this radius (ft) from home, the C/P will compete for
+     *  weak pop-ups and choppers regardless of launch angle. */
+    shortBallRadiusFt: 45,
+    /** Each fielder's natural spray angle (deg, CF=0). Reaching outside
+     *  this zone costs `territoryPenaltySecPerDeg` per deg of miss. */
+    naturalSprayAngleDeg: {
+      LF: -28, CF: 0, RF: +28,
+      B3: -22, SS: -10, B2: +10, B1: +22,
+    } as const,
+    /** Foul-pop catch radii (ft from home) — how far each fielder will
+     *  drift into foul ground for a pop-up. */
+    foulCatch: {
+      /** Default cap for corner IF / corner OF. */
+      cornerDepthFt: 35,
+      /** Catcher gets a wider chase radius for fouls in the dirt circle. */
+      catcherDepthFt: 60,
+      /** When a foul lands within this distance of home, bias the catcher
+       *  by multiplying his reach time by `catcherShortBiasMul`. */
+      catcherShortRadiusFt: 20,
+      catcherShortBiasMul: 0.7,
+    },
+    /** Outfielder slack (sec) deciding how aggressively the runner takes
+     *  an extra base. Smaller slack ⇒ more doubles/triples. */
+    extraBaseSlackSec: {
+      /** Used in single-vs-double decision (throw to 2B). */
+      toSecond: 0.5,
+      /** Used in double-vs-triple decision (throw to 3B). */
+      toThird: 0.3,
+    },
+  },
+
   // ─── Batted-ball distributions ────────────────────────────────
   // Skill→tendency mapping. These are the v1 levers.
   battedBall: {

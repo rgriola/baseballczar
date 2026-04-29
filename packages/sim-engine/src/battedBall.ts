@@ -106,17 +106,14 @@ function findConverger(
   // away. Treat anything inside ~45 ft of home as "in front of the
   // plate" and let C/P compete for it.
   const distFromHome = Math.hypot(ball.landingPoint.x, ball.landingPoint.y);
-  const isShortBall = distFromHome < 45;
-  // Each fielder has a "natural" angular zone \u2014 the spray angle his
+  const isShortBall = distFromHome < CONFIG.fielding.shortBallRadiusFt;
+  // Each fielder has a "natural" angular zone — the spray angle his
   // home position covers. Reaching outside that zone costs a small
-  // territory penalty so the right fielder doesn't routinely steal
-  // balls hit into the left fielder's area when his speed/range edges
-  // out the geometric leader by a hair. Numbers are degrees of spray.
-  // (Spray convention: 0 = CF, -45 = LF line, +45 = RF line.)
-  const NATURAL_ANGLE: Partial<Record<Position, number>> = {
-    LF: -28, CF: 0, RF: +28,
-    B3: -22, SS: -10, B2: +10, B1: +22,
-  };
+  // territory penalty (CONFIG.fielding.territoryPenaltySecPerDeg) so the
+  // right fielder doesn't routinely steal balls hit into the left
+  // fielder's area when his speed/range edges out the geometric leader
+  // by a hair. (Spray convention: 0 = CF, -45 = LF line, +45 = RF line.)
+  const NATURAL_ANGLE = CONFIG.fielding.naturalSprayAngleDeg as Partial<Record<Position, number>>;
   const ballAngle = ball.sprayAngleDeg;
   let best: Convergence | null = null;
   for (const [pos, fielder] of defense) {
@@ -136,7 +133,7 @@ function findConverger(
     // gap-shot still goes to whoever is geometrically closest.
     const natural = NATURAL_ANGLE[pos];
     if (natural !== undefined && !isGrounder) {
-      reach += Math.abs(ballAngle - natural) * 0.012;
+      reach += Math.abs(ballAngle - natural) * CONFIG.fielding.territoryPenaltySecPerDeg;
     }
     // Catch radius scales with defense (±6 ft across 1-10).
     const effectiveCatchRadius = CONFIG.fielder.catchRadiusFt
@@ -238,16 +235,17 @@ export function resolveBattedBall(
   // Time the fielder takes to be "on the ball with glove on it":
   //   grounder → ball travels at ~50% of exit velo to him (rolling friction)
   //   fly      → use his computed reach time + glove pickup
-  const ballRollSpeedFps = ball.exitVeloMph * CONFIG.flight.mphToFps * 0.55;
+  const ballRollSpeedFps = ball.exitVeloMph * CONFIG.flight.mphToFps
+    * CONFIG.fielding.groundBallFrictionMul;
   const distToFielder = Math.hypot(
     fielderPt.x - ball.landingPoint.x,
     fielderPt.y - ball.landingPoint.y,
   );
   const ballTravelSec = isGrounder
-    ? CONFIG.fielder.reactionSec + distToFielder / Math.max(40, ballRollSpeedFps)
+    ? CONFIG.fielder.reactionSec + distToFielder
+        / Math.max(CONFIG.fielding.minRollSpeedFps, ballRollSpeedFps)
     : conv.reachTimeSec;
-  const pickupSec = 0.4;
-  const totalToBall = ballTravelSec + pickupSec;
+  const totalToBall = ballTravelSec + CONFIG.fielding.pickupSec;
 
   if (isInfielder) {
     // Throw to 1B; race vs batter (or error → reached safely)
@@ -288,7 +286,7 @@ export function resolveBattedBall(
     + runnerTimeSec('first', 'second', hitter.skills.speed);
   const fielderToSecond = totalToBall + throwTo2;
 
-  if (runnerToSecond > fielderToSecond - 0.5) {
+  if (runnerToSecond > fielderToSecond - CONFIG.fielding.extraBaseSlackSec.toSecond) {
     // Runner wisely stops at first
     return { result: 'single', fieldedBy: conv.position };
   }
@@ -300,7 +298,7 @@ export function resolveBattedBall(
     + runnerTimeSec('second', 'third', hitter.skills.speed);
   const fielderToThird = totalToBall + throwTo3;
 
-  if (runnerToThird < fielderToThird - 0.3) {
+  if (runnerToThird < fielderToThird - CONFIG.fielding.extraBaseSlackSec.toThird) {
     return { result: 'triple', fieldedBy: conv.position };
   }
   return { result: 'double', fieldedBy: conv.position };
@@ -329,10 +327,13 @@ export function resolveFoulBall(
 
   // Working radius: tighter than the league cap so we don't over-produce
   // foul-outs. The cap in CONFIG is the absolute max a fielder will drift.
-  const depthCap = Math.min(35, CONFIG.park.foulTerritoryDepthFt);
+  const depthCap = Math.min(
+    CONFIG.fielding.foulCatch.cornerDepthFt,
+    CONFIG.park.foulTerritoryDepthFt,
+  );
   // Catcher gets a wider chase radius for fouls in the dirt circle.
   // Real-life catchers will drift 50+ ft to track a foul pop.
-  const catcherDepthCap = 60;
+  const catcherDepthCap = CONFIG.fielding.foulCatch.catcherDepthFt;
   let best: { pos: Position; reach: number } | null = null;
   for (const [pos, fielder] of defense) {
     // Only the corner infielders, catcher, and corner outfielders
@@ -352,10 +353,12 @@ export function resolveFoulBall(
     // Need to get there before the ball comes down (no slack — fouls
     // drift unpredictably and most "close" fouls drop in the seats).
     if (reach > ball.hangTimeSec) continue;
-    // Slight bias toward the catcher for short fouls (within ~20 ft of
-    // home), since C is best-positioned to read pop-ups behind the plate.
-    const reachAdj = pos === 'C' && Math.hypot(ball.landingPoint.x, ball.landingPoint.y) < 20
-      ? reach * 0.7
+    // Slight bias toward the catcher for short fouls (within the
+    // configured radius of home), since C is best-positioned to read
+    // pop-ups behind the plate.
+    const reachAdj = pos === 'C'
+      && Math.hypot(ball.landingPoint.x, ball.landingPoint.y) < CONFIG.fielding.foulCatch.catcherShortRadiusFt
+      ? reach * CONFIG.fielding.foulCatch.catcherShortBiasMul
       : reach;
     if (!best || reachAdj < best.reach) {
       best = { pos, reach: reachAdj };
