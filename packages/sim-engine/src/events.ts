@@ -304,12 +304,16 @@ function emitBaseRunningEvents(
       // Only the very first segment off the bat counts as fromContact;
       // subsequent base-to-base legs use the secondary lead model.
       const fromContact = isBatter && segFrom === 'home';
-      const segSec = runnerTimeSec(
+      let segSec = runnerTimeSec(
         segFrom,
         segTo,
         runner.skills.speed,
         fromContact ? { fromContact: true, hand: runner.hand } : {},
       );
+      // Home-run trot: every runner (batter + anyone already on base)
+      // jogs the bases as a celebration. Slow each leg by ~60% so the
+      // visual reads as a trot rather than a sprint.
+      if (ab.result === 'home-run') segSec *= 1.6;
       pushAt({
         type: 'runner-advance',
         runnerId: runner.id,
