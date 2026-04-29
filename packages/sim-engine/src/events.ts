@@ -47,7 +47,32 @@ const TIME = {
   runnerReactionSec: 0.4,
   /** Time to traverse one 90-ft segment (home→1B, 1B→2B, etc.). */
   perBaseSec: 3.5,
+  /** Catcher pause before lobbing the ball back to the pitcher. */
+  catcherHoldSec: 0.5,
+  /** Fielder pause after fielding before throwing back to the pitcher
+   *  on a no-throw play (caught fly, ball ending up in their glove
+   *  at a base on an infield out). */
+  fielderHoldSec: 0.7,
+  /** Umpire delay handing a fresh ball to the pitcher after the live
+   *  ball leaves the field (HR, foul into stands). */
+  umpireHoldSec: 1.5,
+  /** Ball-flight speed (ft/sec) for a routine return throw to the
+   *  pitcher. "Slow" is the catcher's lazy lob, "normal" is a fielder
+   *  arc throw back to the mound. */
+  ballReturnSlowFtPerSec: 75,
+  ballReturnNormalFtPerSec: 110,
 } as const;
+
+/** Compute flight time for a ball-return throw based on distance. */
+function ballReturnFlightSec(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  slow: boolean,
+): number {
+  const d = Math.hypot(from.x - to.x, from.y - to.y);
+  const v = slow ? TIME.ballReturnSlowFtPerSec : TIME.ballReturnNormalFtPerSec;
+  return Math.max(0.4, d / v);
+}
 
 // ─── Event types ───────────────────────────────────────────────
 export interface BaseEvent {
@@ -109,6 +134,29 @@ export interface ThrowEvent extends BaseEvent {
   toBase: 'first' | 'second' | 'third' | 'home';
   toPoint: { x: number; y: number };
   flightSec: number;
+}
+
+/**
+ * Ball travelling back to the pitcher to end the dead-ball period.
+ *
+ *   `source = 'catcher'` : routine slow lob after a non-contact pitch
+ *                          (ball, called/swinging strike, hbp).
+ *   `source = 'fielder'` : the fielder who just made the play tosses
+ *                          (or relays) it back. Used after every
+ *                          batted-ball play except HR.
+ *   `source = 'umpire'`  : umpire hands a fresh ball to the pitcher.
+ *                          Used when the live ball left the field of
+ *                          play (HR over the wall, foul into the
+ *                          stands).
+ *
+ * The renderer animates only the ball — no fielder sprite moves.
+ */
+export interface BallReturnEvent extends BaseEvent {
+  type: 'ball-return';
+  fromPoint: { x: number; y: number };
+  toPoint: { x: number; y: number };
+  flightSec: number;
+  source: 'catcher' | 'fielder' | 'umpire';
 }
 
 /**
@@ -184,7 +232,7 @@ export interface GameEndEvent extends BaseEvent {
 export type SimEvent =
   | GameStartEvent | InningStartEvent | AtBatStartEvent
   | PitchEvt | ContactEvent | FielderConvergeEvent | ThrowEvent | CoverBaseEvent
-  | FielderDiveEvent
+  | FielderDiveEvent | BallReturnEvent
   | RunnerAdvanceEvent | OutEvent | RunScoredEvent
   | AtBatEndEvent | InningEndEvent | GameEndEvent;
 
@@ -589,6 +637,7 @@ export function buildEvents(g: GameResult): SimEvent[] {
         swung: p.swung, outcome: p.outcome,
         flightSec: TIME.pitchToHomeSec,
       }, TIME.betweenPitchesSec);
+      const pitchEventT = t;  // absolute time the pitch event was emitted
 
       // If contact → emit Contact + fielder/throw events
       if (p.outcome === 'in-play' && ab.battedBall) {
@@ -625,6 +674,37 @@ export function buildEvents(g: GameResult): SimEvent[] {
             reachSec: p.battedBall.hangTimeSec || TIME.contactToFieldedDefault,
           }, 0);
         }
+      }
+
+      // Per-pitch ball return to the pitcher.
+      //   non-contact pitch (ball, called/swinging strike, hbp): catcher
+      //     catches and lobs back, slow.
+      //   uncaught foul into the stands: umpire hands a fresh ball to
+      //     the pitcher.
+      //   in-play / foul-out: handled by the per-play return below
+      //     (fielder makes the play and throws it back).
+      // Use pushAt so the return animates inside the existing
+      // betweenPitchesSec gap without bloating the global clock.
+      const catcherPt = FIELDER_POSITIONS_FT.C;
+      const pitcherPt = FIELDER_POSITIONS_FT.P;
+      if (
+        p.outcome === 'ball' || p.outcome === 'called-strike' ||
+        p.outcome === 'swinging-strike' || p.outcome === 'hbp'
+      ) {
+        const flight = ballReturnFlightSec(catcherPt, pitcherPt, true);
+        pushAt({
+          type: 'ball-return',
+          fromPoint: catcherPt, toPoint: pitcherPt,
+          flightSec: flight, source: 'catcher',
+        }, pitchEventT + TIME.pitchToHomeSec + TIME.catcherHoldSec);
+      } else if (p.outcome === 'foul' && p.battedBall) {
+        // Foul left the field of play — umpire ball, slow.
+        const flight = ballReturnFlightSec(catcherPt, pitcherPt, true);
+        pushAt({
+          type: 'ball-return',
+          fromPoint: catcherPt, toPoint: pitcherPt,
+          flightSec: flight, source: 'umpire',
+        }, pitchEventT + TIME.pitchToHomeSec + TIME.umpireHoldSec);
       }
     }
 
@@ -670,6 +750,55 @@ export function buildEvents(g: GameResult): SimEvent[] {
     // Catch the global clock up to the latest runner/out event so
     // `at-bat-end` doesn't fire while a runner is still tweening.
     if (latestT > t) t = latestT;
+
+    // Per-play ball return to the pitcher. Determines where the live
+    // ball ended up and animates it (or a fresh umpire ball) back to
+    // the mound before at-bat-end. This guarantees the visual is
+    // "complete play": hit → fielded → thrown back.
+    if (ab.battedBall) {
+      const pitcherPt = FIELDER_POSITIONS_FT.P;
+      const playPoint = ab.battedBall.fieldedAtPoint ?? ab.battedBall.landingPoint;
+      const isCaughtFly = ['fly-out', 'line-out', 'pop-out',
+        'sac-fly', 'foul-out'].includes(ab.result);
+      const isInfieldThrow = ['ground-out', 'double-play',
+        'fielders-choice'].includes(ab.result);
+      let fromPoint: { x: number; y: number };
+      let absT: number;
+      let source: 'fielder' | 'umpire';
+      if (ab.battedBall.isHomeRun) {
+        // Ball cleared the wall — umpire flips a new ball to the pitcher
+        // sometime during the home-run trot.
+        fromPoint = FIELDER_POSITIONS_FT.C;
+        absT = (lastContactT ?? t) + TIME.umpireHoldSec + 2.0;
+        source = 'umpire';
+      } else if (isInfieldThrow && throwArrivesAt != null) {
+        // Ball ended at the bag in the cover fielder's glove — he
+        // tosses it back to the mound.
+        const targetBase = ab.result === 'double-play'
+          || ab.result === 'fielders-choice' ? 'second' : 'first';
+        fromPoint = BASE_COORDS_FT[targetBase];
+        absT = throwArrivesAt + TIME.fielderHoldSec;
+        source = 'fielder';
+      } else {
+        // Caught fly, hit, or error — ball is in the fielder's glove
+        // at the play point.
+        fromPoint = playPoint;
+        absT = (catchArrivesAt ?? (lastContactT ?? t)
+          + (ab.battedBall.hangTimeSec || TIME.contactToFieldedDefault))
+          + TIME.fielderHoldSec;
+        source = isCaughtFly ? 'fielder' : 'fielder';
+      }
+      const flight = ballReturnFlightSec(fromPoint, pitcherPt, false);
+      pushAt({
+        type: 'ball-return',
+        fromPoint, toPoint: pitcherPt,
+        flightSec: flight, source,
+      }, absT);
+      // Make at-bat-end wait for the return so the renderer doesn't
+      // snap the ball away mid-flight.
+      const returnLandT = absT + flight;
+      if (returnLandT > t) t = returnLandT;
+    }
 
     push({
       type: 'at-bat-end',

@@ -435,6 +435,17 @@ export function createScene(transform: FieldTransform): SceneAPI {
         startTween(ball, e.toPoint, e.flightSec, e.t, 'fly', apex);
         break;
       }
+      case 'ball-return': {
+        // Ball travels back to the pitcher. Slow lobs (catcher / umpire)
+        // get a higher apex; fielder relays from across the field use a
+        // flatter arc.
+        ball.cur = { ...e.fromPoint };
+        const dist = Math.hypot(e.toPoint.x - e.fromPoint.x, e.toPoint.y - e.fromPoint.y);
+        const apexBoost = e.source === 'fielder' ? 0.07 : 0.12;
+        const apex = Math.max(5, Math.min(18, dist * apexBoost));
+        startTween(ball, e.toPoint, e.flightSec, e.t, 'fly', apex);
+        break;
+      }
       case 'runner-advance': {
         const sp = runners.get(e.runnerId);
         if (!sp) break;
@@ -465,13 +476,20 @@ export function createScene(transform: FieldTransform): SceneAPI {
       }
       case 'at-bat-end': {
         currentBatterId = null;
-        // Snap ball back near pitcher for the next pitch
-        ball.cur = { ...FIELDER_POSITIONS_FT.P };
-        ball.from = { ...FIELDER_POSITIONS_FT.P };
-        ball.to = { ...FIELDER_POSITIONS_FT.P };
-        ball.durSec = 0;
-        const px = ftToPx(FIELDER_POSITIONS_FT.P, transform);
-        ball.gfx.position.set(px.x, px.y);
+        // The engine now emits a `ball-return` before at-bat-end so the
+        // ball animates all the way back to the pitcher. Only snap if it
+        // didn't make it (e.g. older saved games without ball-return
+        // events) — detected by ball still being well off the mound.
+        const moundPx = ftToPx(FIELDER_POSITIONS_FT.P, transform);
+        const curPx = ftToPx(ball.cur, transform);
+        const offMound = Math.hypot(curPx.x - moundPx.x, curPx.y - moundPx.y);
+        if (offMound > 30) {
+          ball.cur = { ...FIELDER_POSITIONS_FT.P };
+          ball.from = { ...FIELDER_POSITIONS_FT.P };
+          ball.to = { ...FIELDER_POSITIONS_FT.P };
+          ball.durSec = 0;
+          ball.gfx.position.set(moundPx.x, moundPx.y);
+        }
         // Reset every fielder to their home position. (Previously we only
         // reset fielders that had wandered > 6 ft, which left fielders who
         // had moved a small amount stuck off-position for the next at-bat.)
