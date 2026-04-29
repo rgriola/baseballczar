@@ -99,11 +99,23 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
       case 'contact': {
         const ev = Math.round(e.exitVeloMph);
         const la = Math.round(e.launchAngleDeg);
+        const sa = Math.round(e.sprayAngleDeg);
         const dist = Math.round(e.distanceFt);
+        // Spray convention: 0° = dead CF, -45° = LF foul line, +45° = RF.
+        // Annotate the angle with a side label so the reader doesn't have
+        // to remember which way negative goes.
+        const side =
+          sa < -45 ? 'foul-L' :
+          sa < -30 ? 'LF-line' :
+          sa < -10 ? 'LF' :
+          sa <  10 ? 'CF' :
+          sa <  30 ? 'RF' :
+          sa <= 45 ? 'RF-line' :
+          'foul-R';
         const tag = e.isHomeRun ? ' — HR!' : e.isFoul ? ' (foul)' : '';
         out.push({
           eventIdx: i, t: e.t, kind: 'play',
-          text: `  Contact: ${ev} mph, ${la}°, ${dist} ft${tag}`,
+          text: `  Contact: ${ev} mph, LA ${la}°, spray ${sa > 0 ? '+' : ''}${sa}° (${side}), ${dist} ft${tag}`,
         });
         break;
       }
