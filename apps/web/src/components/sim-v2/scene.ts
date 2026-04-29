@@ -10,14 +10,6 @@ import { Container, Graphics, Text } from 'pixi.js';
 import {
   type FieldTransform,
   ftToPx,
-  ftToPxXY,
-  arcLiftPx,
-  arcHeightFt,
-  grounderBouncePx,
-  grounderBounceHeightFt,
-  pitchLiftPx,
-  pitchHeightFt,
-  lerpFt,
 } from './coords';
 import { dugoutSpotFt } from './field/drawField';
 import {
@@ -27,6 +19,13 @@ import {
   type Position,
   type SimEvent,
 } from '@baseballczar/sim-engine';
+import {
+  type MovingSprite,
+  type RunnerSprite,
+  makeFielderSprite,
+  makeRunnerSprite,
+} from './scene/sprites';
+import { altitudeFt, advance, startTween } from './scene/tween';
 
 const TEAM_HOME = 0x4aa3ff;
 
@@ -38,27 +37,8 @@ const POSITION_ORDER: Position[] = [
 ];
 const TEAM_AWAY = 0xff6b6b;
 const BALL_COLOR = 0xfafafa;
-const TRAIL_COLOR = 0xfff8d4;
 
-interface MovingSprite {
-  gfx: Container;
-  /** Current position in engine feet. */
-  cur: { x: number; y: number };
-  /** Tween start. */
-  from: { x: number; y: number };
-  /** Tween end. */
-  to: { x: number; y: number };
-  /** Engine-time tween started. */
-  startT: number;
-  /** Tween duration (engine seconds). */
-  durSec: number;
-  /** 'line' = no arc, 'fly' = parabolic lift, 'grounder' = small bounces, 'pitch' = release→plate ramp. */
-  arc: 'line' | 'fly' | 'grounder' | 'pitch';
-  /** Apex altitude in feet (for fly arcs only). */
-  apexFt: number;
-}
-
-export interface SceneAPI {
+interface SceneAPI {
   root: Container;
   applyEvent: (e: SimEvent) => void;
   /** Called from rAF — update visual positions for current engine clock. */
@@ -66,6 +46,8 @@ export interface SceneAPI {
   /** Reset to game-start visual state. */
   reset: () => void;
 }
+
+export type { SceneAPI };
 
 export function createScene(transform: FieldTransform): SceneAPI {
   const root = new Container();
@@ -137,13 +119,7 @@ export function createScene(transform: FieldTransform): SceneAPI {
   };
 
   // ─── Runners (created on demand, keyed by runnerId) ───
-  interface RunnerSprite extends MovingSprite {
-    teamColor: number;
-    /** Sprint speed (skill 1–10). Drives walk/jog cadence in the renderer. */
-    speed: number;
-  }
   const runners = new Map<number, RunnerSprite>();
-  const battingTeamIdRef: { home: number | null; away: number | null } = { home: null, away: null };
   let homeTeamId = -1;
 
   // Track which side is currently batting so a fresh batter sprite gets the right color.
@@ -182,23 +158,6 @@ export function createScene(transform: FieldTransform): SceneAPI {
     inningText.text = `${halfArrow} ${inning}   ${outs} out${outs === 1 ? '' : 's'}`;
   };
   updateHud();
-
-  // ─── Tween starters ───
-  const startTween = (
-    sprite: MovingSprite,
-    to: { x: number; y: number },
-    durSec: number,
-    clockSec: number,
-    arc: 'line' | 'fly' | 'grounder' | 'pitch' = 'line',
-    apexFt = 0,
-  ) => {
-    sprite.from = { ...sprite.cur };
-    sprite.to = { ...to };
-    sprite.startT = clockSec;
-    sprite.durSec = Math.max(0.05, durSec);
-    sprite.arc = arc;
-    sprite.apexFt = apexFt;
-  };
 
   /**
    * Get-or-create a runner sprite, placed initially at the given base.
@@ -317,31 +276,6 @@ export function createScene(transform: FieldTransform): SceneAPI {
   };
 
   // ─── Per-frame tween advancer ───
-  /**
-   * Compute current parabolic altitude (in feet) for a tween. Returns 0
-   * for non-fly arcs or when the tween isn't running.
-   */
-  const altitudeFt = (sprite: MovingSprite, clockSec: number): number => {
-    if (sprite.durSec <= 0) return 0;
-    const u = Math.min(1, Math.max(0, (clockSec - sprite.startT) / sprite.durSec));
-    if (sprite.arc === 'fly') return arcHeightFt(u, sprite.apexFt);
-    if (sprite.arc === 'grounder') return grounderBounceHeightFt(u);
-    if (sprite.arc === 'pitch') return pitchHeightFt(u);
-    return 0;
-  };
-
-  const advance = (sprite: MovingSprite, clockSec: number) => {
-    if (sprite.durSec <= 0) return;
-    const u = Math.min(1, Math.max(0, (clockSec - sprite.startT) / sprite.durSec));
-    sprite.cur = lerpFt(sprite.from, sprite.to, u);
-    const px = ftToPx(sprite.cur, transform);
-    let yOffset = 0;
-    if (sprite.arc === 'fly') yOffset = arcLiftPx(u, sprite.apexFt, transform);
-    else if (sprite.arc === 'grounder') yOffset = grounderBouncePx(u, transform);
-    else if (sprite.arc === 'pitch') yOffset = pitchLiftPx(u, transform);
-    sprite.gfx.position.set(px.x, px.y - yOffset);
-    if (u >= 1) sprite.durSec = 0;
-  };
 
   /**
    * Update the ball's shadow + 3D-ish scaling based on its current
@@ -367,16 +301,14 @@ export function createScene(transform: FieldTransform): SceneAPI {
   };
 
   const tick = (clockSec: number) => {
-    advance(ball, clockSec);
-    for (const f of fielders.values()) advance(f, clockSec);
-    for (const r of runners.values()) advance(r, clockSec);
+    advance(ball, clockSec, transform);
+    for (const f of fielders.values()) advance(f, clockSec, transform);
+    for (const r of runners.values()) advance(r, clockSec, transform);
     updateBallShadow(clockSec);
   };
 
   // ─── Event handlers ───
-  let lastClockSec = 0;
   const applyEvent = (e: SimEvent) => {
-    lastClockSec = e.t;
     switch (e.type) {
       case 'game-start': {
         homeTeamId = e.homeTeamId;
@@ -596,8 +528,6 @@ export function createScene(transform: FieldTransform): SceneAPI {
       default:
         break;
     }
-    void battingTeamIdRef;
-    void lastClockSec;
   };
 
   const reset = () => {
@@ -623,48 +553,6 @@ export function createScene(transform: FieldTransform): SceneAPI {
     updateHud();
   };
 
-  void TRAIL_COLOR;
-  void ftToPxXY;
-
   return { root, applyEvent, tick, reset };
 }
 
-// ─── Sprite factories ───
-
-function makeFielderSprite(pos: Position, radiusPx: number): { c: Container; body: Graphics } {
-  const c = new Container();
-  // Shadow first so it draws beneath the body. Slightly offset down to
-  // suggest a sun overhead and to read as feet planted on the dirt.
-  const shadow = new Graphics()
-    .ellipse(0, radiusPx * 0.55, radiusPx * 1.05, radiusPx * 0.45)
-    .fill({ color: 0x000000, alpha: 0.32 });
-  c.addChild(shadow);
-  const body = new Graphics()
-    .circle(0, 0, radiusPx).fill(0xffffff)
-    .stroke({ color: 0x222222, width: 0.5 });
-  c.addChild(body);
-  // Only show the position label if the sprite is large enough to read it.
-  if (radiusPx >= 6) {
-    const lbl = new Text({
-      text: pos,
-      style: { fill: 0x222222, fontSize: Math.max(6, radiusPx * 1.1), fontFamily: 'system-ui', fontWeight: '700' },
-    });
-    lbl.anchor.set(0.5);
-    lbl.position.set(0, 0);
-    c.addChild(lbl);
-  }
-  return { c, body };
-}
-
-function makeRunnerSprite(color: number, radiusPx: number): Container {
-  const c = new Container();
-  const shadow = new Graphics()
-    .ellipse(0, radiusPx * 0.55, radiusPx * 1.05, radiusPx * 0.45)
-    .fill({ color: 0x000000, alpha: 0.32 });
-  c.addChild(shadow);
-  const body = new Graphics()
-    .circle(0, 0, radiusPx).fill(color)
-    .stroke({ color: 0x111111, width: 0.5 });
-  c.addChild(body);
-  return c;
-}
