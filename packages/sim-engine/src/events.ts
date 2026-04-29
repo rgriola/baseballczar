@@ -414,6 +414,15 @@ function emitBaseRunningEvents(
     case 'pop-out':
     case 'line-out':
     case 'fly-out': {
+      // With 2 outs, runners go on contact (no risk of being doubled
+      // off — the inning ends on the catch either way). Emit visual
+      // advances toward the next bag so they're caught in motion when
+      // the third out is recorded. Skip r3 → home since `advance()`
+      // would credit a phantom run; the inning ends on the catch.
+      if (outsBefore === 2) {
+        if (r2) advance(r2, 'second', 'third');
+        if (r1) advance(r1, 'first', 'second');
+      }
       recordOut(batter, ab.fieldedBy);
       break;
     }
@@ -421,6 +430,12 @@ function emitBaseRunningEvents(
       // Batter sprints toward first while the throw is in flight; out is
       // recorded when the throw arrives at the bag (see throwArrivesAt).
       advance(batter, 'home', 'first', true);
+      // With 2 outs, baserunners run on contact too. Skip r3 → home so
+      // a phantom run isn't credited; the inning ends on the throw.
+      if (outsBefore === 2) {
+        if (r2) advance(r2, 'second', 'third');
+        if (r1) advance(r1, 'first', 'second');
+      }
       recordOut(batter, ab.fieldedBy, throwArrivesAt);
       break;
     }
