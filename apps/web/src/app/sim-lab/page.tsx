@@ -26,7 +26,12 @@ function runSim(seed: number): SimRun {
   const result = simulateGame(home, away, rng);
   const rawEvents = buildEvents(result);
   // Compress dead air: clamp any gap > 1.5s to 1.5s so the sandbox is
-  // watchable without waiting 2 minutes between innings.
+  // watchable without waiting 2 minutes between innings. Exception: the
+  // pre-game gap (game-start → inning-start) and the first at-bat-start
+  // need to preserve enough time for the take-the-field intro jog (~12s)
+  // and the leadoff batter's walk-out from the dugout (~8s). Without
+  // this, those tweens are still in mid-flight when the first pitch
+  // fires.
   const events = compressTimeline(rawEvents, 1.5);
   let derivedHome = 0, derivedAway = 0;
   for (const e of events) {
@@ -41,15 +46,32 @@ function runSim(seed: number): SimRun {
 /**
  * Re-time an event stream so any gap larger than `maxGapSec` is clamped.
  * Preserves order; does not change anything else about the events.
+ *
+ * Exception: the pre-game gap before the first `inning-start`, and the
+ * gap before the leadoff `at-bat-start`, are preserved up to longer
+ * caps so the intro animations (take-the-field jog, batter walk-out)
+ * have time to play out before the first pitch.
  */
 function compressTimeline(events: SimEvent[], maxGapSec: number): SimEvent[] {
   if (events.length === 0) return events;
+  const PREGAME_MAX_SEC = 14;     // covers the 12s intro-jog cap
+  const FIRST_AB_MAX_SEC = 10;    // covers the ~8s leadoff walk-out
+  let firstInningStartSeen = false;
+  let firstAtBatStartSeen = false;
   const out: SimEvent[] = [];
   let prevOrigT = events[0].t;
   let prevNewT = 0;
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
-    const gap = i === 0 ? 0 : Math.min(maxGapSec, e.t - prevOrigT);
+    let cap = maxGapSec;
+    if (e.type === 'inning-start' && !firstInningStartSeen) {
+      cap = PREGAME_MAX_SEC;
+      firstInningStartSeen = true;
+    } else if (e.type === 'at-bat-start' && !firstAtBatStartSeen) {
+      cap = FIRST_AB_MAX_SEC;
+      firstAtBatStartSeen = true;
+    }
+    const gap = i === 0 ? 0 : Math.min(cap, e.t - prevOrigT);
     const newT = i === 0 ? e.t : prevNewT + gap;
     out.push({ ...e, t: newT });
     prevOrigT = e.t;
