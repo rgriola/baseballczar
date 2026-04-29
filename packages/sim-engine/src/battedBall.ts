@@ -131,6 +131,36 @@ function findConverger(
       + (fielder.skills.defense - 5) * 4.0
       + (fielder.skills.speed - 5) * 1.0;
     let reach = CONFIG.fielder.reactionSec + dist / Math.max(12, range);
+    // Direction-of-motion penalty: a fielder charging the ball (toward
+    // home plate) sees it cleanly and runs at full range; a fielder
+    // backpedaling toward the wall must turn his head, track the ball
+    // over his shoulder, and physically can't run as fast. Modeled as
+    // an effective-range multiplier based on the dot product between
+    // his motion vector and the toward-home unit vector. Lateral motion
+    // sits in between. Skipped for the catcher (always faces the ball)
+    // and for grounders (no flight to track over the shoulder).
+    if (!isGrounder && pos !== 'C' && pos !== 'P') {
+      const fieldPtMag = Math.hypot(fielderPt.x, fielderPt.y);
+      const motionDx = ball.landingPoint.x - fielderPt.x;
+      const motionDy = ball.landingPoint.y - fielderPt.y;
+      const motionMag = Math.hypot(motionDx, motionDy);
+      if (fieldPtMag > 1 && motionMag > 1) {
+        // Toward home unit vector from fielder is -fielderPt / |fielderPt|.
+        const towardHomeX = -fielderPt.x / fieldPtMag;
+        const towardHomeY = -fielderPt.y / fieldPtMag;
+        const motionUx = motionDx / motionMag;
+        const motionUy = motionDy / motionMag;
+        // forwardness ∈ [-1, 1]: +1 charging home, -1 backpedaling.
+        const forwardness = motionUx * towardHomeX + motionUy * towardHomeY;
+        const norm = (forwardness + 1) / 2;  // [0, 1]
+        const dirMul = CONFIG.fielding.backpedalMul
+          + (CONFIG.fielding.chargeMul - CONFIG.fielding.backpedalMul) * norm;
+        // Recompute reach with the direction-adjusted range. Reaction
+        // time is unchanged — the penalty is on the run, not the read.
+        reach = CONFIG.fielder.reactionSec
+          + dist / Math.max(12, range * dirMul);
+      }
+    }
     // Territory penalty: 0.012s per degree away from this fielder's
     // home zone. A 20° miss costs 0.24s — enough to keep CF from
     // poaching a routine LF flyball but small enough that a clear

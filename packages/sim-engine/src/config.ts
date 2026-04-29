@@ -115,6 +115,17 @@ export const CONFIG = {
      *  ball at 200 ft costs the IF an extra 1.0 sec, easily ceding the
      *  play to the OF unless no OF can possibly arrive. */
     infielderDepthPenaltySecPerFt: 0.025,
+    /** Direction-of-motion penalty. A fielder charging the ball (toward
+     *  home plate) runs at full effective range; a fielder backpedaling
+     *  toward the wall runs at reduced range — he can't see the ball
+     *  as well, has to track it over his shoulder, and physically moves
+     *  slower running backward. Effective-range multiplier =
+     *    backpedalMul + (chargeMul - backpedalMul) * (forwardness+1)/2
+     *  where forwardness = dot(motionDir, towardHomeDir) ∈ [-1, 1].
+     *  Default 0.6/1.0 means a full backpedal cuts range to 60%; pure
+     *  lateral motion is 80%; charging is 100%. */
+    chargeMul: 1.0,
+    backpedalMul: 0.6,
     /** Each fielder's natural spray angle (deg, CF=0). Reaching outside
      *  this zone costs `territoryPenaltySecPerDeg` per deg of miss. */
     naturalSprayAngleDeg: {
