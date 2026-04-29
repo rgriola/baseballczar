@@ -119,7 +119,22 @@ export function simulateAtBat(
             result = 'foul-out';
             break;
           }
-          if (strikes < 2) strikes++;
+          // Reclassify the pitch as a foul so PBP shows "Foul" and the
+          // event emitter uses p.battedBall for the foul visualization
+          // (otherwise events.ts re-emits ab.battedBall on every pitch
+          // whose outcome is still 'in-play', causing duplicate Contact
+          // lines with identical EV/LA/distance).
+          pitch.outcome = 'foul';
+          // The downstream `pitchRes.outcome` (still 'in-play') would
+          // otherwise leave `pitch.outcome` overwritten to 'in-play' by
+          // the assignment three lines above this case — but that
+          // assignment ran BEFORE we reached this branch, so the
+          // override here sticks. Battery stat (foulsPerPa) and the
+          // event stream both pick up `pitch.outcome === 'foul'`.
+          battedBall = undefined;  // don't carry it as the at-bat result
+          if (strikes < 2 || !CONFIG.pitch.twoStrikeFoulRetains) {
+            strikes = Math.min(2, strikes + 1);
+          }
           break;
         }
         const res = resolveBattedBall(battedBall, batter, ctx.defense, rng);
