@@ -105,6 +105,12 @@ function compressTimeline(events: SimEvent[], maxGapSec: number): SimEvent[] {
       inFlightDur = e.hangTimeSec || 1.5;
     } else if (e.type === 'throw' || e.type === 'ball-return') {
       inFlightDur = e.flightSec || 0;
+    } else if (e.type === 'runner-advance') {
+      // Each base-to-base trot/sprint takes its own travelSec; without
+      // this the next runner-advance fires after 1.5s and the runner
+      // is yanked diagonally to the next bag mid-stride (looks like a
+      // tight loop near the mound on a home-run trot).
+      inFlightDur = e.travelSec || 0;
     }
   }
   return out;
