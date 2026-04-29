@@ -14,6 +14,12 @@ export const TIME = {
   throwToBaseSec: 1.0,         // average infield throw
   betweenAtBatsSec: 25,
   betweenInningsSec: 120,
+  /** Pre-game warm-up gap before the FIRST inning-start. Long enough
+   *  to cover the take-the-field intro jog (capped at ~12s in the
+   *  renderer) but far shorter than the 120s used between later
+   *  innings, so the playback doesn't open with two minutes of dead
+   *  screen before anything moves. */
+  preGameSec: 15,
   /** Reaction time between contact and a runner taking off. */
   runnerReactionSec: 0.4,
   /** Time to traverse one 90-ft segment (home→1B, 1B→2B, etc.). */

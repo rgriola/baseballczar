@@ -88,12 +88,17 @@ export function buildEvents(g: GameResult): SimEvent[] {
       speed: ab.pitcher.skills.speed,
     });
     const battingTeam = ab.half === 'top' ? g.awayTeam : g.homeTeam;
+    // First inning of the game gets a short `preGameSec` warm-up gap
+    // (just long enough for the take-the-field intro jog). Subsequent
+    // innings get the full 120s break between innings.
+    const isFirstInning = ab.inning === 1 && ab.half === 'top';
+    const dt = isFirstInning ? TIME.preGameSec : TIME.betweenInningsSec;
     push({
       type: 'inning-start',
       inning: ab.inning, half: ab.half,
       battingTeamId: battingTeam.id, fieldingTeamId: fieldingTeam.id,
       defense,
-    }, TIME.betweenInningsSec);
+    }, dt);
   };
 
   for (const ab of g.atBats) {
