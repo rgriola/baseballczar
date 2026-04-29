@@ -305,6 +305,32 @@ function simulateHalfInning(
         bases = [bases[0], null, bases[1]];
         ab.runsScored = 1;
         ab.rbis = 1;
+      } else if (ab.result === 'ground-out' && runnerOn1) {
+        // Plain ground-out at 1B with R1 forced on contact: the lead
+        // runner has been running on contact and reaches the next bag
+        // safely (defense conceded the lead runner for the easy out).
+        // Cascade forced advances: r1 → 2B, r2 → 3B if r2, r3 → home
+        // if all three were on. Without this the runner just stood on
+        // 1B after a routine grounder — not legal baseball.
+        const r1 = bases[0];
+        const r2 = bases[1];
+        const r3 = bases[2];
+        if (r3 && r2 && r1) {
+          // Bases loaded: r3 forced home.
+          runsThisPa = 1;
+          batting.runs++;
+          const scs = batting.batterStats.get(r3.id);
+          if (scs) scs.runs++;
+          ab.runsScored = 1;
+          ab.rbis = 1;
+          bases = [null, r1, r2];
+        } else if (r2 && r1) {
+          // 1st & 2nd: r2 forced to 3B.
+          bases = [null, r1, r2];
+        } else {
+          // R1 only (or R1 + R3 — R3 not forced, holds): r1 → 2B.
+          bases = [null, r1, r3];
+        }
       }
     } else {
       const adv = advanceRunners(bases, batter, ab.result, { errorType: ab.errorType });

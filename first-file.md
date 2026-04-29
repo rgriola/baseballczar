@@ -53,3 +53,36 @@ Apr 28, there was an issue where a home run the runner did not touch the bases, 
 looks a lot better. The ball is still disappearing mid flight to the outfield. I notice the batter disappears in some views. On another note this play: Contact: 112 mph, LA -15°, spray +44° (RF-line), 259 ft
 Fielded by K. Zimmer (RF)
 → K. Foster: Single (off K. Zimmer, RF), it should
+
+...
+
+**_ Issue _**
+
+- This is an overall runner issue to be checked for.
+- The runner on base situations are limited :
+- No Runners, Runner at First, Runner at Second, Runner at 3rd
+- Runners at First and Second, Runners at First and Third, Runners at First, Second and Third
+- Runners at Second and Thrird
+
+- Fielders should have logic to make descisions based on each runner condition.
+- Fielders should know their responsibility when the ball is hit given each Runner Condition and Where the ball is hit.
+- Fielders logic for these conditions are also based on the number of outs; ie 2 outs get the easy out. less than 2 outs is there a double play possible?
+- Do we need to cut off the runner from scoring? This is a score based influence, if you are up by 5 runs with a hit to the outfield maybe the outfielder throws the ball to 2nd base to keep the runners from advancing rather than trying to get the runner at home, which would allow runners to advance on the long throw.
+- some are pure A happens do B, some should be "Can I make the throw in the moment?" which skill wise might be a roll.
+- what is the best approach to using player intellegence (PI) to help players (runners and fielders) make these descisions. Should we work out the logic together? This all came about becuiase
+
+- No runners - fielder focus on getting batter out.
+- Runner at 1st base - fielder could try for double play > 2nd base throw to 1st. If there are 2 outs get the easy runner ie; first baseman fields the ball runs and tags first base - the lead runner is not priority.
+- short stop fields the ball they could tag 2nd base or throw to the 2nd baseman on 2nd base. And vice versa for 2nd base.
+- 3rd baseman also makes these decisions.
+- Catcher makes this descision.
+- Pitcher may need to run to 1st base if the first baseman fields the ball and goes to 2nd base for the double play.
+
+**_ Context _**
+
+- When the batter hits a ground ball to an infielder or generally into the infield a runner at first base must move towards 2nd base. This also applies with runners at 1st and 2nd (1st to 2nd and 2nd to 3rd), or 1st, 2nd and 3rd (bases loaded), if runners are at 1st and 3rd the runner at 1st base runner must move towards 2nd base, while the 3rd base runner can hold to wait for the play to develop, unless there are two outs then the 3rd base runner would take off to home.
+
+- These situations allow fielders to make a decision about who to try and get out, and this is dependant on hit ball path and score. Fielder decisions - Double Play Ball? Go to First? Do I look the runner back then throw to first?
+
+- These are pretty standard decsion making trees in baseball.
+- The outfielders would be backing up bases incase the throw is off or the player misses the ball.

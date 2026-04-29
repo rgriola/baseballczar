@@ -112,13 +112,21 @@ export const CONFIG = {
   },
 
   doublePlay: {
-    baseProb: 0.30,              // GIDP / opportunity
+    // GIDP / opportunity. With baseline 0.42 and skill leverage,
+    // average MIF turns ~42%; elite glove (def 9) turns ~58%.
+    // Roughly matches MLB GIDP-per-opportunity rates.
+    baseProb: 0.42,
     skillLeverage: 0.04,
   },
 
   baserunning: {
     sacFlyTagProb: 0.85,
-    fcProb: 0.20,
+    // Probability that a non-DP ground-out with a forced runner is
+    // scored as a fielder's choice (lead runner out at the next bag,
+    // batter safe). Combined with DP, ~70% of MIF grounders with R1
+    // & < 2 outs put the lead runner out; the residual ~30% becomes
+    // a routine ground-out at 1B with the forced runner advancing.
+    fcProb: 0.50,
   },
 
   // ─── Manager logic ────────────────────────────────────────────

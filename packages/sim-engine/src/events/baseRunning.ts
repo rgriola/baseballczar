@@ -237,11 +237,19 @@ export function emitBaseRunningEvents(
       // Batter sprints toward first while the throw is in flight; out is
       // recorded when the throw arrives at the bag (see throwArrivesAt).
       advance(batter, 'home', 'first', true);
-      // With 2 outs, baserunners run on contact too. Skip r3 → home so
-      // a phantom run isn't credited; the inning ends on the throw.
-      if (outsBefore === 2) {
+      // Forced runners advance one base on a plain ground-out (defense
+      // took the easy out at 1B). With 2 outs this is academic—inning
+      // ends on the throw—but we still emit the visual.
+      if (r1) {
+        advance(r1, 'first', 'second');
+        if (r2) {
+          advance(r2, 'second', 'third');
+          if (r3) advance(r3, 'third', 'home');
+        }
+      } else if (outsBefore === 2) {
+        // No forced runners; only emit the heads-up advances when the
+        // inning is about to end on the throw (matches old behavior).
         if (r2) advance(r2, 'second', 'third');
-        if (r1) advance(r1, 'first', 'second');
       }
       recordOut(batter, ab.fieldedBy, throwArrivesAt);
       break;
