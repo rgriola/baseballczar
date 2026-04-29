@@ -202,8 +202,9 @@ function simulateHalfInning(
     // ─── Resolve runner advance (single source of truth) ─────────
     // Phase 4 PI gate: r1→3rd on a single is the runner's read.
     let r1HoldsAtSecond = false;
-    if (ab.result === 'single' && bases[0]) {
-      const goes = decideRunnerAdvance('r1-to-3rd-single', bases[0]!, rng);
+    const r1OnBase = bases[0];
+    if (ab.result === 'single' && r1OnBase) {
+      const goes = decideRunnerAdvance('r1-to-3rd-single', r1OnBase, rng);
       r1HoldsAtSecond = !goes;
       ab.runnerAdvances = { r1OnSingle: goes ? 'third' : 'second' };
     }

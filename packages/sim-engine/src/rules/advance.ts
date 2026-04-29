@@ -110,18 +110,21 @@ export function resolveBaseAdvance(
       // on top of the force. Preserve the post-force snapshot.
       if (result === 'reached-on-error' && opts.errorType === 'throw') {
         const a = after.slice();
-        if (a[2] && a[2] !== batter) {
-          trip(a[2]!, 'third', 'home');
+        const r3 = a[2];
+        if (r3 && r3 !== batter) {
+          trip(r3, 'third', 'home');
           after[2] = null;
         }
-        if (a[1] && a[1] !== batter) {
-          trip(a[1]!, 'second', 'third');
-          after[2] = a[1];
+        const r2 = a[1];
+        if (r2 && r2 !== batter) {
+          trip(r2, 'second', 'third');
+          after[2] = r2;
           after[1] = null;
         }
-        if (a[0] && a[0] !== batter) {
-          trip(a[0]!, 'first', 'second');
-          after[1] = a[0];
+        const r1 = a[0];
+        if (r1 && r1 !== batter) {
+          trip(r1, 'first', 'second');
+          after[1] = r1;
           after[0] = batter;
         }
       }

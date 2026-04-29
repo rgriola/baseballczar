@@ -148,8 +148,12 @@ function findConverger(
     }
   }
   // For very weak grounders, prefer infielder closest to ball
-  // (the loop above already considers all of them, so `best` is correct)
-  return best!;
+  // (the loop above already considers all of them, so `best` is correct).
+  // `defense` is invariantly the 9 starters — the loop always assigns
+  // best at least once. Throw on the impossible empty case so callers
+  // never receive an undefined Convergence.
+  if (!best) throw new Error('findConverger: no fielders in defense map');
+  return best;
 }
 
 // ─── Step 3: Resolve full batted-ball outcome ──────────────────
