@@ -24,4 +24,5 @@ export { FIELDER_POSITIONS_FT } from './physics/positions';
 export { isInfieldFly, INFIELD_FLY } from './rules/infieldFly';
 export { getCoverage } from './defense/responsibilities';
 export type { CoverageAssignments, Base, CoverAssignment, CutoffAssignment, BackupAssignment } from './defense/responsibilities';
-export { decideThrowTarget, getPlayIntelligence, rollPI } from './defense/decide';
+export { decideThrowTarget, getPlayIntelligence, rollPI, decideRunnerAdvance } from './defense/decide';
+export type { GameContext, RunnerDecision } from './defense/decide';

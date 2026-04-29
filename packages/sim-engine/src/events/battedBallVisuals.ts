@@ -13,7 +13,7 @@ import type { Position } from '../config';
 import { FIELDER_POSITIONS_FT } from '../physics/positions';
 import { throwTimeSec } from '../physics/throw';
 import { getCoverage } from '../defense/responsibilities';
-import { decideThrowTarget } from '../defense/decide';
+import { decideThrowTarget, type GameContext } from '../defense/decide';
 import type { Rng } from '../rng';
 import type { SimEventInit } from './types';
 import { TIME, basePoint } from './timing';
@@ -31,6 +31,9 @@ export function emitBattedBallVisuals(
   /** Optional Rng for PI rolls on throw target. If omitted, the
    *  textbook coverage is used unconditionally (legacy behavior). */
   rng?: Rng,
+  /** Phase 4: game-state context for score/inning-aware difficulty
+   *  modifiers on the throw-home decision. */
+  gameContext?: GameContext,
 ): void {
   // The play happens at `fieldedAtPoint` for grounders the IF intercepts
   // mid-roll; for everything else it's the ball's natural landing point.
@@ -102,8 +105,9 @@ export function emitBattedBallVisuals(
   // PI gate: low-PI fielder may downgrade the throw target to a
   // safer base, conceding the lead runner. High-PI fielders execute
   // the textbook play almost every time. Pure replay-time roll
-  // seeded from team ids in buildEvents — reproducible.
-  const coverage = rng ? decideThrowTarget(coverage0, fielderPlayer, rng) : coverage0;
+  // seeded from team ids in buildEvents — reproducible. Phase 4
+  // adds score/inning-aware difficulty modifiers via gameContext.
+  const coverage = rng ? decideThrowTarget(coverage0, fielderPlayer, rng, gameContext) : coverage0;
 
   // All cover / cutoff / backup fielders break at contact (dt=0). The
   // renderer tweens them to their assigned point.

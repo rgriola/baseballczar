@@ -180,9 +180,11 @@ export function emitBaseRunningEvents(
     case 'single': {
       if (r3) advance(r3, 'third', 'home');
       if (r2) advance(r2, 'second', 'home');
-      if (r1) advance(r1, 'first', 'third');
+      // Honor the engine's PI-gated decision (Phase 4). Default 'third'.
+      const r1Dest = ab.runnerAdvances?.r1OnSingle ?? 'third';
+      if (r1) advance(r1, 'first', r1Dest);
       advance(batter, 'home', 'first', true);
-      nb = [batter, null, r1 ?? null];
+      nb = [batter, r1Dest === 'second' ? r1 ?? null : null, r1Dest === 'third' ? r1 ?? null : null];
       break;
     }
     case 'double': {

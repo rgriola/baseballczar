@@ -162,7 +162,16 @@ export function buildEvents(g: GameResult): SimEvent[] {
       if (p.outcome === 'in-play' && ab.battedBall) {
         // Capture contact time BEFORE emitBattedBallVisuals advances `t`.
         lastContactT = t;
-        emitBattedBallVisuals(ab.battedBall, ab, push, currentDefenseMap, bases, outsInInning, rng);
+        // Phase 4: feed live game-state to the throw-home PI gate.
+        const defenseIsHome = ab.half === 'top';
+        const defenseLeadDeficit = defenseIsHome
+          ? scoreHome.v - scoreAway.v
+          : scoreAway.v - scoreHome.v;
+        const gameContext = { defenseLeadDeficit, inning: ab.inning };
+        emitBattedBallVisuals(
+          ab.battedBall, ab, push, currentDefenseMap, bases,
+          outsInInning, rng, gameContext,
+        );
       } else if (p.battedBall) {
         // Foul ball — emit a contact event so the renderer can show the
         // launch + landing in foul territory. If the foul was caught for

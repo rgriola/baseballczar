@@ -133,6 +133,17 @@ export interface AtBatRecord {
   };
   rbis: number;
   runsScored: number;
+  /**
+   * Phase 4 — Per-runner advance decisions made by the engine. Lets
+   * the visualizer (events/baseRunning.ts) emit the same path the
+   * engine resolved instead of re-deciding from `result` alone.
+   * Currently only `r1` on a single is PI-gated; future fields can
+   * carry tag-up reads, etc. Absent fields = use the textbook default.
+   */
+  runnerAdvances?: {
+    /** Where r1 ended up on a single. Default 'third'. */
+    r1OnSingle?: 'second' | 'third';
+  };
 }
 
 export interface PitcherGameStats {

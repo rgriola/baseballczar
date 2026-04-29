@@ -11,6 +11,7 @@ import { CONFIG } from './config';
 import { simulateAtBat } from './atBat';
 import { shouldPullPitcher, pickReliever, type ManagerState } from './manager';
 import { isInfieldFly } from './rules/infieldFly';
+import { decideRunnerAdvance } from './defense/decide';
 import type { Rng } from './rng';
 
 interface TeamGameState {
@@ -97,7 +98,7 @@ function advanceRunners(
   bases: (Player | null)[],   // [1B, 2B, 3B] runners
   batter: Player,
   result: AtBatResult,
-  opts: { errorType?: 'fielding' | 'throw' } = {},
+  opts: { errorType?: 'fielding' | 'throw'; r1HoldsAtSecond?: boolean } = {},
 ): { newBases: (Player | null)[]; runsScored: number; scorers: Player[] } {
   const [r1, r2, r3] = bases;
   const scorers: Player[] = [];
@@ -139,11 +140,13 @@ function advanceRunners(
       nb = [batter, r1, null];
       if (r2) scorers.push(r2);
       if (r3) scorers.push(r3);
-      // r1 advances to 3B (assume runner-on-1st hold-up)
-      nb[2] = r1 ?? null;
-      nb[1] = null;
-      // Re-place: batter on 1B, r1 → 3B, r2/r3 score
-      nb = [batter, null, r1 ?? null];
+      // r1 advances to 3B unless the PI/speed gate held him at 2B
+      // (Phase 4: low-PI / slow runners are conservative).
+      if (opts.r1HoldsAtSecond) {
+        nb = [batter, r1 ?? null, null];
+      } else {
+        nb = [batter, null, r1 ?? null];
+      }
       if (r2) scorers.push(r2);  // already pushed above; dedupe below
       break;
     }
@@ -346,7 +349,20 @@ function simulateHalfInning(
         }
       }
     } else {
-      const adv = advanceRunners(bases, batter, ab.result, { errorType: ab.errorType });
+      // Phase 4: PI-gate r1→3rd on a single. The runner is the
+      // decision-maker; speed gives a small bonus. On a failed read
+      // the runner holds at 2B (engine truth + visual will match via
+      // ab.runnerAdvances).
+      let r1HoldsAtSecond = false;
+      if (ab.result === 'single' && bases[0]) {
+        const goes = decideRunnerAdvance('r1-to-3rd-single', bases[0]!, rng);
+        r1HoldsAtSecond = !goes;
+        ab.runnerAdvances = { r1OnSingle: goes ? 'third' : 'second' };
+      }
+      const adv = advanceRunners(bases, batter, ab.result, {
+        errorType: ab.errorType,
+        r1HoldsAtSecond,
+      });
       bases = adv.newBases;
       runsThisPa = adv.runsScored;
       batting.runs += runsThisPa;
