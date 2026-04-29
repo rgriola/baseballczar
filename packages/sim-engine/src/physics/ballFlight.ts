@@ -47,7 +47,20 @@ export function flight(input: FlightInput): FlightResult {
     // 60mph weak roller ≈ 30ft to mound; 105mph rocket ≈ 220ft to OF
     const evNorm = Math.max(0, (exitVeloMph - 50) / 60);  // 0..1 over [50,110]
     distanceFt = 30 + evNorm * 220;
-    hangTime = 0.4 + 0.3 * (1 - evNorm);  // weaker grounders take longer to reach IF
+    // Hang time = time for the ball to travel `distanceFt` along the
+    // ground, decelerating from v0 at ~10 ft/s² (grass + bounces).
+    // Solving d = v0·t − ½·a·t² for t gives:
+    //     t = (v0 − √(v0² − 2·a·d)) / a
+    // This couples time to physics so a 112mph hot shot to the OF
+    // takes ~1.6s rather than the previous fixed 0.4s.
+    const decel = 10;  // ft/sec² avg deceleration on grass
+    const disc = v0 * v0 - 2 * decel * distanceFt;
+    hangTime = disc > 0
+      ? (v0 - Math.sqrt(disc)) / decel
+      // Ball would decelerate to a stop before reaching `distanceFt`
+      // (very weak roller). Fall back to average-speed approximation.
+      : distanceFt / Math.max(20, v0 * 0.45);
+    hangTime = Math.max(0.3, hangTime);
     peakHeight = 2;
   } else {
     const angleRad = (Math.min(50, launchAngleDeg) * Math.PI) / 180;
