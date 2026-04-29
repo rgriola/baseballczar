@@ -23,6 +23,7 @@ import { dugoutSpotFt } from './field/drawField';
 import {
   BASE_COORDS_FT,
   FIELDER_POSITIONS_FT,
+  sprintFtPerSec,
   type Position,
   type SimEvent,
 } from '@baseballczar/sim-engine';
@@ -138,6 +139,8 @@ export function createScene(transform: FieldTransform): SceneAPI {
   // ─── Runners (created on demand, keyed by runnerId) ───
   interface RunnerSprite extends MovingSprite {
     teamColor: number;
+    /** Sprint speed (skill 1–10). Drives walk/jog cadence in the renderer. */
+    speed: number;
   }
   const runners = new Map<number, RunnerSprite>();
   const battingTeamIdRef: { home: number | null; away: number | null } = { home: null, away: null };
@@ -214,6 +217,7 @@ export function createScene(transform: FieldTransform): SceneAPI {
     layerRunners.addChild(gfx);
     r = {
       gfx, teamColor,
+      speed: 5,
       cur: { ...ft }, from: { ...ft }, to: { ...ft },
       startT: 0, durSec: 0, arc: 'line', apexFt: 0,
     };
@@ -237,6 +241,7 @@ export function createScene(transform: FieldTransform): SceneAPI {
     hand: 'L' | 'R' | 'S',
     pitcherHand: 'L' | 'R',
     teamColor: number,
+    speedSkill: number,
     walkOutAtT?: number,
   ) => {
     if (runners.has(batterId)) return; // already on base from prev AB? unlikely
@@ -259,14 +264,17 @@ export function createScene(transform: FieldTransform): SceneAPI {
     layerRunners.addChild(gfx);
     const sprite: RunnerSprite = {
       gfx, teamColor,
+      speed: speedSkill,
       cur: { ...startFt }, from: { ...startFt }, to: { ...startFt },
       startT: 0, durSec: 0, arc: 'line', apexFt: 0,
     };
     runners.set(batterId, sprite);
     if (walkOutAtT != null) {
-      // ~22 ft/sec brisk walk — a leisurely "step into the box" pace.
+      // Walk pace = ~50% of sprint speed, so a slow slugger ambles in
+      // around 11 ft/s and a burner trots at 14 ft/s.
+      const walkFps = sprintFtPerSec(speedSkill) * 0.50;
       const distFt = Math.hypot(ft.x - startFt.x, ft.y - startFt.y);
-      const walkSec = Math.max(1.5, distFt / 22);
+      const walkSec = Math.max(1.5, distFt / walkFps);
       startTween(sprite, ft, walkSec, walkOutAtT, 'line');
     }
   };
@@ -290,9 +298,10 @@ export function createScene(transform: FieldTransform): SceneAPI {
     const homeSide = r.teamColor === TEAM_HOME;
     const alongOffset = ((runnerId * 37) % 41) - 20; // -20..+20 ft along bench
     const dest = dugoutSpotFt(homeSide, alongOffset, 5);
-    // Hustle pace: ~22 ft/sec (brisk jog off the field).
+    // Hustle pace off the field: ~80% of sprint (jogging, not sprinting).
+    const jogFps = sprintFtPerSec(r.speed) * 0.80;
     const distFt = Math.hypot(dest.x - r.cur.x, dest.y - r.cur.y);
-    const walkSec = Math.max(0.6, distFt / 22);
+    const walkSec = Math.max(0.6, distFt / jogFps);
     startTween(r, dest, walkSec, atClockSec, 'line');
     // Once they arrive, fade + shrink so they read as INSIDE the dugout
     // (sitting on the bench / in shadow) rather than perched on the rim.
@@ -402,26 +411,30 @@ export function createScene(transform: FieldTransform): SceneAPI {
             .circle(0, 0, playerRadiusPx).fill(defenseColor)
             .stroke({ color: 0x111111, width: 0.5 });
         }
+        // Index this inning's defense by position so we can drive jog
+        // duration by each fielder's speed skill.
+        const speedByPos = new Map<Position, number>();
+        for (const d of e.defense) speedByPos.set(d.position, d.speed);
         // First inning of the game: jog the home team out of the dugout
         // to their positions in a staggered pre-pitch intro. Subsequent
-        // innings just snap them back into place.
+        // innings just snap them back into place. Jog speed = ~70% of
+        // each fielder's sprint speed (skills.speed 1–10 → 22–28 ft/s),
+        // so a fast CF outpaces a slow 1B naturally without a fixed
+        // cascade. Reach time is distance / jog speed.
         const introMode = !firstInningOpened;
         firstInningOpened = true;
-        let i = 0;
         for (const [pos, sp] of fielders) {
           const home = FIELDER_POSITIONS_FT[pos];
           if (introMode) {
-            // Stagger by ~0.15s per fielder, ~3.5s jog from dugout to
-            // position. Pitcher leads (idx 0) so he's set first.
-            const order = POSITION_ORDER.indexOf(pos);
-            const delay = Math.max(0, order) * 0.15;
-            startTween(sp, home, 3.5, e.t + delay, 'line');
+            const speed = speedByPos.get(pos) ?? 5;
+            const jogFps = sprintFtPerSec(speed) * 0.70;
+            const dist = Math.hypot(home.x - sp.cur.x, home.y - sp.cur.y);
+            const dur = Math.max(2.0, dist / jogFps);
+            startTween(sp, home, dur, e.t, 'line');
           } else {
             startTween(sp, home, 0.5, e.t, 'line');
           }
-          i++;
         }
-        void i;
         updateHud();
         break;
       }
@@ -455,7 +468,7 @@ export function createScene(transform: FieldTransform): SceneAPI {
         // the intro; everyone after that just appears in the box.
         const walkOutAt = !firstBatterShown ? e.t : undefined;
         firstBatterShown = true;
-        ensureBatter(e.batter.id, e.batter.hand, e.pitcher.hand, offenseColor, walkOutAt);
+        ensureBatter(e.batter.id, e.batter.hand, e.pitcher.hand, offenseColor, e.batter.speed, walkOutAt);
         break;
       }
       case 'pitch': {

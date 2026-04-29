@@ -90,13 +90,13 @@ export interface InningStartEvent extends BaseEvent {
   type: 'inning-start';
   inning: number; half: 'top' | 'bottom';
   battingTeamId: number; fieldingTeamId: number;
-  defense: { position: Position; playerId: number; firstName: string; lastName: string }[];
+  defense: { position: Position; playerId: number; firstName: string; lastName: string; speed: number }[];
 }
 
 export interface AtBatStartEvent extends BaseEvent {
   type: 'at-bat-start';
   inning: number; half: 'top' | 'bottom'; outs: number;
-  batter: { id: number; firstName: string; lastName: string; hand: 'L' | 'R' | 'S' };
+  batter: { id: number; firstName: string; lastName: string; hand: 'L' | 'R' | 'S'; speed: number };
   pitcher: { id: number; firstName: string; lastName: string; hand: 'L' | 'R' };
   runners: (number | null)[];   // [1B, 2B, 3B] — playerIds or null
 }
@@ -572,11 +572,13 @@ export function buildEvents(g: GameResult): SimEvent[] {
       defense.push({
         position: p.position, playerId: p.id,
         firstName: p.firstName, lastName: p.lastName,
+        speed: p.skills.speed,
       });
     }
     defense.push({
       position: 'P', playerId: ab.pitcher.id,
       firstName: ab.pitcher.firstName, lastName: ab.pitcher.lastName,
+      speed: ab.pitcher.skills.speed,
     });
     const battingTeam = ab.half === 'top' ? g.awayTeam : g.homeTeam;
     push({
@@ -617,6 +619,7 @@ export function buildEvents(g: GameResult): SimEvent[] {
       batter: {
         id: ab.batter.id, firstName: ab.batter.firstName,
         lastName: ab.batter.lastName, hand: ab.batter.hand,
+        speed: ab.batter.skills.speed,
       },
       pitcher: {
         id: ab.pitcher.id, firstName: ab.pitcher.firstName,
