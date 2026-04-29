@@ -48,3 +48,8 @@ Yes > we are migrating to a new engine all together > Path — Full migration to
 ...
 
 Apr 28, there was an issue where a home run the runner did not touch the bases, rather traveled around the pitchers mound .
+
+...
+looks a lot better. The ball is still disappearing mid flight to the outfield. I notice the batter disappears in some views. On another note this play: Contact: 112 mph, LA -15°, spray +44° (RF-line), 259 ft
+Fielded by K. Zimmer (RF)
+→ K. Foster: Single (off K. Zimmer, RF), it should

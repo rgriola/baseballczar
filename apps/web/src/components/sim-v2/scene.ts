@@ -28,6 +28,13 @@ import {
 } from '@baseballczar/sim-engine';
 
 const TEAM_HOME = 0x4aa3ff;
+
+// Order in which fielders jog out of the dugout for the pre-game intro.
+// Pitcher leads (he needs to be on the mound first to throw warmups),
+// then catcher, then infielders close to far, then outfielders.
+const POSITION_ORDER: Position[] = [
+  'P', 'C', 'B1', 'B2', 'B3', 'SS', 'LF', 'CF', 'RF',
+];
 const TEAM_AWAY = 0xff6b6b;
 const BALL_COLOR = 0xfafafa;
 const TRAIL_COLOR = 0xfff8d4;
@@ -160,6 +167,12 @@ export function createScene(transform: FieldTransform): SceneAPI {
   let half: 'top' | 'bottom' = 'top';
   let outs = 0;
 
+  // Pre-game intro state. The home team takes the field at the start
+  // of T1, and the leadoff batter walks out from the away dugout to
+  // the box. Both run only once per game.
+  let firstInningOpened = false;
+  let firstBatterShown = false;
+
   const updateHud = () => {
     scoreText.text = `${scoreAway}–${scoreHome}`;
     const halfArrow = half === 'top' ? '▲' : '▼';
@@ -224,6 +237,7 @@ export function createScene(transform: FieldTransform): SceneAPI {
     hand: 'L' | 'R' | 'S',
     pitcherHand: 'L' | 'R',
     teamColor: number,
+    walkOutAtT?: number,
   ) => {
     if (runners.has(batterId)) return; // already on base from prev AB? unlikely
     const xMag = 3.208;
@@ -234,14 +248,27 @@ export function createScene(transform: FieldTransform): SceneAPI {
     const standsRight = effectiveHand === 'R';
     const ft = { x: standsRight ? -xMag : xMag, y: 0 };
     const gfx = makeRunnerSprite(teamColor, playerRadiusPx);
-    const px = ftToPx(ft, transform);
+    // For the pre-game leadoff, start the batter in the away dugout
+    // (3B side) and walk them to the box. Subsequent batters just
+    // appear in the box (they're already "on deck").
+    const startFt = walkOutAtT != null
+      ? dugoutSpotFt(false, standsRight ? -8 : 8, 5)
+      : ft;
+    const px = ftToPx(startFt, transform);
     gfx.position.set(px.x, px.y);
     layerRunners.addChild(gfx);
-    runners.set(batterId, {
+    const sprite: RunnerSprite = {
       gfx, teamColor,
-      cur: { ...ft }, from: { ...ft }, to: { ...ft },
+      cur: { ...startFt }, from: { ...startFt }, to: { ...startFt },
       startT: 0, durSec: 0, arc: 'line', apexFt: 0,
-    });
+    };
+    runners.set(batterId, sprite);
+    if (walkOutAtT != null) {
+      // ~22 ft/sec brisk walk — a leisurely "step into the box" pace.
+      const distFt = Math.hypot(ft.x - startFt.x, ft.y - startFt.y);
+      const walkSec = Math.max(1.5, distFt / 22);
+      startTween(sprite, ft, walkSec, walkOutAtT, 'line');
+    }
   };
 
   const removeRunner = (runnerId: number) => {
@@ -344,6 +371,22 @@ export function createScene(transform: FieldTransform): SceneAPI {
     switch (e.type) {
       case 'game-start': {
         homeTeamId = e.homeTeamId;
+        // Stage the home team in their dugout (1B side) so the first
+        // inning-start can animate them jogging out to their positions.
+        // We tween 0.01s to instantly place them there without snapping
+        // through the field; the actual jog-out happens at inning-start.
+        for (const [pos, sp] of fielders) {
+          // Stagger fielders along the dugout so they don't stack on
+          // top of each other before they break.
+          const seed = (POSITION_ORDER.indexOf(pos) + 1) * 6 - 21; // -15..+27 ft
+          const dugoutPt = dugoutSpotFt(true, seed, 4);
+          sp.cur = { ...dugoutPt };
+          sp.from = { ...dugoutPt };
+          sp.to = { ...dugoutPt };
+          sp.durSec = 0;
+          const px = ftToPx(dugoutPt, transform);
+          sp.gfx.position.set(px.x, px.y);
+        }
         break;
       }
       case 'inning-start': {
@@ -359,11 +402,26 @@ export function createScene(transform: FieldTransform): SceneAPI {
             .circle(0, 0, playerRadiusPx).fill(defenseColor)
             .stroke({ color: 0x111111, width: 0.5 });
         }
-        // Snap fielders home (in case last inning left them displaced)
+        // First inning of the game: jog the home team out of the dugout
+        // to their positions in a staggered pre-pitch intro. Subsequent
+        // innings just snap them back into place.
+        const introMode = !firstInningOpened;
+        firstInningOpened = true;
+        let i = 0;
         for (const [pos, sp] of fielders) {
           const home = FIELDER_POSITIONS_FT[pos];
-          startTween(sp, home, 0.5, e.t, 'line');
+          if (introMode) {
+            // Stagger by ~0.15s per fielder, ~3.5s jog from dugout to
+            // position. Pitcher leads (idx 0) so he's set first.
+            const order = POSITION_ORDER.indexOf(pos);
+            const delay = Math.max(0, order) * 0.15;
+            startTween(sp, home, 3.5, e.t + delay, 'line');
+          } else {
+            startTween(sp, home, 0.5, e.t, 'line');
+          }
+          i++;
         }
+        void i;
         updateHud();
         break;
       }
@@ -393,7 +451,11 @@ export function createScene(transform: FieldTransform): SceneAPI {
         // Place the batter in the appropriate batter's box. Registered as a
         // runner under batter.id so a subsequent 'runner-advance' from 'home'
         // animates them out of the box toward first base.
-        ensureBatter(e.batter.id, e.batter.hand, e.pitcher.hand, offenseColor);
+        // First batter of the game walks out from the away dugout for
+        // the intro; everyone after that just appears in the box.
+        const walkOutAt = !firstBatterShown ? e.t : undefined;
+        firstBatterShown = true;
+        ensureBatter(e.batter.id, e.batter.hand, e.pitcher.hand, offenseColor, walkOutAt);
         break;
       }
       case 'pitch': {

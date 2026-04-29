@@ -5,19 +5,57 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Feet Per Second Calculator</title>
   <style>
-    body { font-family: sans-serif; background: #181e24; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 100vh; margin: 0; padding: 2rem 1rem; gap: 1.5rem; }
-    .container { background: #232b36; padding: 2rem 2.5rem; border-radius: 12px; box-shadow: 0 2px 12px #0004; width: 320px; }
-    label { display: block; margin-top: 1rem; font-weight: bold; }
-    input[type="number"] { width: 100%; box-sizing: border-box; padding: 0.4rem; border-radius: 4px; border: 1px solid #444; background: #222; color: #fff; font-size: 1rem; }
-    .result { margin-top: 1.5rem; font-size: 1.2rem; font-weight: bold; min-height: 1.4em; }
-    button { margin-top: 1.5rem; padding: 0.5rem 1.2rem; border: none; border-radius: 4px; background: #3366ff; color: #fff; font-size: 1rem; cursor: pointer; }
+    :root { color-scheme: dark; }
+    body {
+      font-family: sans-serif; background: #181e24; color: #fff;
+      margin: 0; padding: 2rem 1rem; min-height: 100vh;
+    }
+    h1 {
+      text-align: center; margin: 0 auto 1.5rem; font-size: 1.4rem;
+      font-weight: 600; letter-spacing: 0.02em; color: #cfd6e0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.25rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .container {
+      background: #232b36; padding: 1.5rem 1.75rem;
+      border-radius: 12px; box-shadow: 0 2px 12px #0004;
+      display: flex; flex-direction: column;
+    }
+    .container h2 {
+      margin: 0 0 0.75rem; font-size: 1.1rem; color: #9ec5ff;
+    }
+    .fields { display: flex; flex-direction: column; }
+    label { display: block; margin-top: 0.75rem; font-weight: bold; font-size: 0.9rem; }
+    input[type="number"] {
+      width: 100%; box-sizing: border-box; padding: 0.45rem;
+      border-radius: 4px; border: 1px solid #444; background: #222;
+      color: #fff; font-size: 1rem; margin-top: 0.25rem;
+    }
+    input[type="number"]:focus { outline: 2px solid #3366ff; border-color: #3366ff; }
+    .result {
+      margin-top: auto; padding-top: 1.25rem;
+      font-size: 1.1rem; font-weight: bold; min-height: 1.4em;
+      color: #f5d76a;
+    }
+    button {
+      margin-top: 1rem; padding: 0.5rem 1.2rem; border: none;
+      border-radius: 4px; background: #3366ff; color: #fff;
+      font-size: 0.95rem; cursor: pointer; align-self: flex-start;
+    }
     button:hover { background: #274bb3; }
   </style>
 </head>
 <body>
+  <h1>Speed / Distance / Time Calculators</h1>
+  <div class="grid">
   <div class="container">
     <h2>Feet Per Second Calculator</h2>
-    <div>
+    <div class="fields">
       <label for="distance">Distance (feet):</label>
       <input type="number" id="distance" min="0" step="0.01" inputmode="decimal" autocomplete="off">
 
@@ -31,7 +69,7 @@
 
   <div class="container">
     <h2>Time to Travel Calculator</h2>
-    <div>
+    <div class="fields">
       <label for="distance2">Distance (feet):</label>
       <input type="number" id="distance2" min="0" step="0.01" inputmode="decimal" autocomplete="off">
 
@@ -42,6 +80,35 @@
     </div>
     <div class="result" id="result2"></div>
   </div>
+
+  <div class="container">
+    <h2>MPH Calculator</h2>
+    <div class="fields">
+      <label for="distance3">Distance (feet):</label>
+      <input type="number" id="distance3" min="0" step="0.01" inputmode="decimal" autocomplete="off">
+
+      <label for="time3">Time (seconds):</label>
+      <input type="number" id="time3" min="0.01" step="0.01" inputmode="decimal" autocomplete="off">
+
+      <button type="button" id="mphBtn">Calculate</button>
+    </div>
+    <div class="result" id="result3"></div>
+  </div>
+
+  <div class="container">
+    <h2>Time at MPH Calculator</h2>
+    <div class="fields">
+      <label for="mph4">Speed (mph):</label>
+      <input type="number" id="mph4" min="0.01" step="0.01" inputmode="decimal" autocomplete="off">
+
+      <label for="distance4">Distance (feet):</label>
+      <input type="number" id="distance4" min="0" step="0.01" inputmode="decimal" autocomplete="off">
+
+      <button type="button" id="mphTimeBtn">Calculate</button>
+    </div>
+    <div class="result" id="result4"></div>
+  </div>
+  </div><!-- /.grid -->
 
   <script>
     const $ = (id) => document.getElementById(id);
@@ -66,12 +133,46 @@
       $('result2').textContent = `Time: ${(d / s).toFixed(2)} seconds`;
     }
 
+    // 1 mph = 5280 ft / 3600 sec = 1.46667 ft/sec
+    // → mph = (ft/sec) * 3600 / 5280 = (ft/sec) * 0.681818...
+    const FPS_TO_MPH = 3600 / 5280;
+    const MPH_TO_FPS = 5280 / 3600;
+    function calcMph() {
+      const d = parseFloat($('distance3').value);
+      const t = parseFloat($('time3').value);
+      if (!isFinite(d) || !isFinite(t) || t <= 0) {
+        $('result3').textContent = 'Enter a distance and a time > 0.';
+        return;
+      }
+      const fps = d / t;
+      const mph = fps * FPS_TO_MPH;
+      $('result3').textContent =
+        `Speed: ${mph.toFixed(2)} mph (${fps.toFixed(2)} ft/sec)`;
+    }
+
+    function calcTimeAtMph() {
+      const mph = parseFloat($('mph4').value);
+      const d = parseFloat($('distance4').value);
+      if (!isFinite(mph) || !isFinite(d) || mph <= 0) {
+        $('result4').textContent = 'Enter a speed > 0 and a distance.';
+        return;
+      }
+      const fps = mph * MPH_TO_FPS;
+      const time = d / fps;
+      $('result4').textContent =
+        `Time: ${time.toFixed(3)} seconds  (${mph.toFixed(2)} mph = ${fps.toFixed(2)} ft/sec)`;
+    }
+
     $('fpsBtn').addEventListener('click', calcFps);
     $('timeBtn').addEventListener('click', calcTime);
+    $('mphBtn').addEventListener('click', calcMph);
+    $('mphTimeBtn').addEventListener('click', calcTimeAtMph);
 
     // Live update as you type, so values are never lost on click.
     ['distance', 'time'].forEach(id => $(id).addEventListener('input', calcFps));
     ['distance2', 'fps'].forEach(id => $(id).addEventListener('input', calcTime));
+    ['distance3', 'time3'].forEach(id => $(id).addEventListener('input', calcMph));
+    ['mph4', 'distance4'].forEach(id => $(id).addEventListener('input', calcTimeAtMph));
 
     // Allow Enter key to recalc without submitting any form.
     document.addEventListener('keydown', (e) => {
@@ -79,6 +180,8 @@
       const t = e.target;
       if (t.id === 'distance' || t.id === 'time') { e.preventDefault(); calcFps(); }
       if (t.id === 'distance2' || t.id === 'fps') { e.preventDefault(); calcTime(); }
+      if (t.id === 'distance3' || t.id === 'time3') { e.preventDefault(); calcMph(); }
+      if (t.id === 'mph4' || t.id === 'distance4') { e.preventDefault(); calcTimeAtMph(); }
     });
   </script>
 </body>
