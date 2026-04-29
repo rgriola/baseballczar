@@ -11,6 +11,8 @@ import { CONFIG } from './config';
 import { simulateAtBat } from './atBat';
 import { shouldPullPitcher, pickReliever, type ManagerState } from './manager';
 import { isInfieldFly } from './rules/infieldFly';
+import { classifySituationalOut } from './rules/situationalOuts';
+import { resolveBaseAdvance } from './rules/advance';
 import { decideRunnerAdvance } from './defense/decide';
 import type { Rng } from './rng';
 
@@ -94,91 +96,9 @@ function initTeamState(team: Team): TeamGameState {
 }
 
 /** Advance baserunners on a hit. Returns runs scored. */
-function advanceRunners(
-  bases: (Player | null)[],   // [1B, 2B, 3B] runners
-  batter: Player,
-  result: AtBatResult,
-  opts: { errorType?: 'fielding' | 'throw'; r1HoldsAtSecond?: boolean } = {},
-): { newBases: (Player | null)[]; runsScored: number; scorers: Player[] } {
-  const [r1, r2, r3] = bases;
-  const scorers: Player[] = [];
-  let nb: (Player | null)[] = [null, null, null];
-  switch (result) {
-    case 'walk':
-    case 'hbp':
-    case 'reached-on-error': {
-      // Force advances only if next base is occupied. Runners not forced
-      // hold their bag — start nb as a copy of bases so untouched runners
-      // are preserved (fixes a bug where r3 was dropped on a walk with
-      // [r1, _, r3]).
-      nb = [r1, r2, r3];
-      let push: Player | null = batter;
-      let i = 0;
-      while (push && i < 3) {
-        const occupant = bases[i];
-        nb[i] = push;
-        push = occupant;
-        if (!occupant) { push = null; break; }
-        i++;
-      }
-      // Anyone forced past 3B scores
-      if (push) scorers.push(push);
-
-      // Throw errors (E-throw): the wild throw lets every existing
-      // runner take an extra base on top of the force.
-      if (result === 'reached-on-error' && opts.errorType === 'throw') {
-        const after = [nb[0], nb[1], nb[2]];
-        // r3-equivalent (whoever ended up on 3B) scores
-        if (after[2]) scorers.push(after[2]);
-        // r2-equivalent advances to 3B; r1-equivalent (NOT the batter)
-        // advances to 2B; batter holds 1B.
-        nb = [batter, after[0] !== batter ? after[0] : null, after[1]];
-      }
-      break;
-    }
-    case 'single': {
-      nb = [batter, r1, null];
-      if (r2) scorers.push(r2);
-      if (r3) scorers.push(r3);
-      // r1 advances to 3B unless the PI/speed gate held him at 2B
-      // (Phase 4: low-PI / slow runners are conservative).
-      if (opts.r1HoldsAtSecond) {
-        nb = [batter, r1 ?? null, null];
-      } else {
-        nb = [batter, null, r1 ?? null];
-      }
-      if (r2) scorers.push(r2);  // already pushed above; dedupe below
-      break;
-    }
-    case 'double': {
-      nb = [null, batter, r1 ?? null];
-      if (r2) scorers.push(r2);
-      if (r3) scorers.push(r3);
-      break;
-    }
-    case 'triple': {
-      nb = [null, null, batter];
-      if (r1) scorers.push(r1);
-      if (r2) scorers.push(r2);
-      if (r3) scorers.push(r3);
-      break;
-    }
-    case 'home-run': {
-      scorers.push(batter);
-      if (r1) scorers.push(r1);
-      if (r2) scorers.push(r2);
-      if (r3) scorers.push(r3);
-      break;
-    }
-    default:
-      // Outs handled by caller — just keep bases as-is
-      nb = [r1, r2, r3];
-  }
-  // Dedupe scorers (single double-pushed r2 above)
-  const unique: Player[] = [];
-  for (const p of scorers) if (!unique.includes(p)) unique.push(p);
-  return { newBases: nb, runsScored: unique.length, scorers: unique };
-}
+// (Legacy `advanceRunners` removed in Phase A refactor; logic now
+//  lives in `rules/advance.ts` so the visualizer (events/baseRunning)
+//  walks the exact same trips the engine resolved.)
 
 function isOut(result: AtBatResult): boolean {
   return ['strikeout', 'ground-out', 'fly-out', 'line-out',
@@ -269,113 +189,39 @@ function simulateHalfInning(
       ab.fielding = { putoutBy: ab.fieldedBy ?? 'P' };
     }
 
-    // ─── Phase 5: situational reclassification ──────────────────
-    // Convert generic ground-out / fly-out into DP, FC, or sac-fly
-    // based on base state and outs.
-    const runnerOn1 = bases[0] !== null;
-    const runnerOn3 = bases[2] !== null;
+    // ─── Phase 5: situational reclassification (DP / FC / sac-fly) ─
     const fielderDef = ab.fieldedBy
       ? fielding.defenseMap.get(ab.fieldedBy)?.skills.defense ?? 5
       : 5;
+    ab.result = classifySituationalOut(ab.result, {
+      outs, bases,
+      fieldedBy: ab.fieldedBy,
+      fielderDefense: fielderDef,
+    }, rng);
 
-    if (ab.result === 'ground-out' && runnerOn1 && outs < 2) {
-      // DPs realistically only on grounders to MIF or 3B (6-4-3, 4-6-3, 5-4-3).
-      const dpFeasible = ab.fieldedBy === 'SS' || ab.fieldedBy === 'B2' || ab.fieldedBy === 'B3';
-      const dpProb = dpFeasible
-        ? CONFIG.doublePlay.baseProb + (fielderDef - 5) * CONFIG.doublePlay.skillLeverage
-        : 0;
-      if (rng.bool(Math.max(0, Math.min(0.85, dpProb)))) {
-        ab.result = 'double-play';
-      } else if (rng.bool(CONFIG.baserunning.fcProb)) {
-        // Fielder's choice: lead runner out, batter safe at 1B
-        ab.result = 'fielders-choice';
-      }
-    } else if (ab.result === 'fly-out' && runnerOn3 && outs < 2) {
-      // Sac fly: must be OF fly (not infield popup)
-      const isOFfly = ab.fieldedBy === 'LF' || ab.fieldedBy === 'CF' || ab.fieldedBy === 'RF';
-      if (isOFfly && rng.bool(CONFIG.baserunning.sacFlyTagProb)) {
-        ab.result = 'sac-fly';
-      }
+    // ─── Resolve runner advance (single source of truth) ─────────
+    // Phase 4 PI gate: r1→3rd on a single is the runner's read.
+    let r1HoldsAtSecond = false;
+    if (ab.result === 'single' && bases[0]) {
+      const goes = decideRunnerAdvance('r1-to-3rd-single', bases[0]!, rng);
+      r1HoldsAtSecond = !goes;
+      ab.runnerAdvances = { r1OnSingle: goes ? 'third' : 'second' };
+    }
+    const adv = resolveBaseAdvance(bases, batter, ab.result, {
+      errorType: ab.errorType,
+      r1HoldsAtSecond,
+    });
+    bases = adv.newBases;
+    outs += adv.outsRecorded;
+    const runsThisPa = adv.runsScored;
+    batting.runs += runsThisPa;
+    ab.runsScored = runsThisPa;
+    ab.rbis = runsThisPa;
+    for (const sc of adv.scorers) {
+      const bs = batting.batterStats.get(sc.id);
+      if (bs) bs.runs++;
     }
 
-    let runsThisPa = 0;
-    if (isOut(ab.result)) {
-      outs += ab.result === 'double-play' ? 2 : 1;
-      // Apply special-case base/run effects for situational outs
-      if (ab.result === 'double-play') {
-        // Batter out at 1B, lead runner (on 1B) out at 2B. Runners on
-        // 2B/3B were not forced and hold their bases. (Previously this
-        // line moved bases[0] — the now-OUT r1 — onto 2B, creating a
-        // ghost runner that could 'score' on later hits.)
-        bases = [null, bases[1], bases[2]];
-      } else if (ab.result === 'fielders-choice') {
-        // Lead runner (on 1B) out; batter takes 1B; other runners advance
-        bases = [batter, null, bases[1]];
-      } else if (ab.result === 'sac-fly') {
-        // Runner on 3B scores; runner on 2B may advance to 3B
-        runsThisPa = 1;
-        batting.runs++;
-        const scorer = bases[2]!;
-        const scs = batting.batterStats.get(scorer.id);
-        if (scs) scs.runs++;
-        bases = [bases[0], null, bases[1]];
-        ab.runsScored = 1;
-        ab.rbis = 1;
-      } else if (ab.result === 'ground-out' && runnerOn1) {
-        // Plain ground-out at 1B with R1 forced on contact: the lead
-        // runner has been running on contact and reaches the next bag
-        // safely (defense conceded the lead runner for the easy out).
-        // Cascade forced advances: r1 → 2B, r2 → 3B if r2, r3 → home
-        // if all three were on. Without this the runner just stood on
-        // 1B after a routine grounder — not legal baseball.
-        const r1 = bases[0];
-        const r2 = bases[1];
-        const r3 = bases[2];
-        if (r3 && r2 && r1) {
-          // Bases loaded: r3 forced home.
-          runsThisPa = 1;
-          batting.runs++;
-          const scs = batting.batterStats.get(r3.id);
-          if (scs) scs.runs++;
-          ab.runsScored = 1;
-          ab.rbis = 1;
-          bases = [null, r1, r2];
-        } else if (r2 && r1) {
-          // 1st & 2nd: r2 forced to 3B.
-          bases = [null, r1, r2];
-        } else {
-          // R1 only (or R1 + R3 — R3 not forced, holds): r1 → 2B.
-          bases = [null, r1, r3];
-        }
-      }
-    } else {
-      // Phase 4: PI-gate r1→3rd on a single. The runner is the
-      // decision-maker; speed gives a small bonus. On a failed read
-      // the runner holds at 2B (engine truth + visual will match via
-      // ab.runnerAdvances).
-      let r1HoldsAtSecond = false;
-      if (ab.result === 'single' && bases[0]) {
-        const goes = decideRunnerAdvance('r1-to-3rd-single', bases[0]!, rng);
-        r1HoldsAtSecond = !goes;
-        ab.runnerAdvances = { r1OnSingle: goes ? 'third' : 'second' };
-      }
-      const adv = advanceRunners(bases, batter, ab.result, {
-        errorType: ab.errorType,
-        r1HoldsAtSecond,
-      });
-      bases = adv.newBases;
-      runsThisPa = adv.runsScored;
-      batting.runs += runsThisPa;
-      ab.runsScored = runsThisPa;
-      ab.rbis = ab.result === 'home-run' || ab.result === 'sac-fly'
-        ? runsThisPa
-        : runsThisPa;
-      // Record runs-scored stat for each scorer
-      for (const sc of adv.scorers) {
-        const bs = batting.batterStats.get(sc.id);
-        if (bs) bs.runs++;
-      }
-    }
     const batterStats = batting.batterStats.get(batter.id);
     if (batterStats) {
       const scoredSelf = ab.result === 'home-run';
