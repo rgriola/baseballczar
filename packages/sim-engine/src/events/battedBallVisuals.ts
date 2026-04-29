@@ -12,6 +12,7 @@ import type { AtBatRecord, BattedBall, Player } from '../types';
 import type { Position } from '../config';
 import { FIELDER_POSITIONS_FT } from '../physics/positions';
 import { throwTimeSec } from '../physics/throw';
+import { getCoverage } from '../defense/responsibilities';
 import type { SimEventInit } from './types';
 import { TIME, basePoint } from './timing';
 
@@ -20,6 +21,11 @@ export function emitBattedBallVisuals(
   ab: AtBatRecord,
   push: (e: SimEventInit, dt: number) => void,
   defenseMap?: Map<Position, Player>,
+  /** Pre-play base occupancy [r1, r2, r3]. Used by the coverage
+   *  responsibility table to decide where the ball gets thrown.
+   *  Optional for backwards compatibility — defaults to empty bases. */
+  bases?: readonly (unknown | null)[],
+  outsBefore = 0,
 ): void {
   // The play happens at `fieldedAtPoint` for grounders the IF intercepts
   // mid-roll; for everything else it's the ball's natural landing point.
@@ -75,39 +81,66 @@ export function emitBattedBallVisuals(
   // Infielder throw to 1B for ground-outs / FCs
   const isInfielder = !['LF', 'CF', 'RF'].includes(ab.fieldedBy);
   const isCaught = ['fly-out', 'line-out', 'pop-out', 'sac-fly'].includes(ab.result);
+
+  // ─── Coverage / cutoff / backup positioning (Phase 2) ───
+  // Driven by the deterministic responsibility table. Emit
+  // cover/cutoff/backup converges in parallel with the throw so the
+  // whole defense rotates correctly on every play.
+  const coverage = getCoverage({
+    fielder: ab.fieldedBy,
+    fieldedAt: playPoint,
+    result: ab.result,
+    bases: bases ?? [null, null, null],
+    outs: outsBefore,
+    sprayAngleDeg: ball.sprayAngleDeg,
+  });
+
+  // All cover / cutoff / backup fielders break at contact (dt=0). The
+  // renderer tweens them to their assigned point.
+  for (const c of coverage.covers) {
+    push({
+      type: 'cover-base',
+      position: c.position,
+      base: c.base,
+      fromPoint: FIELDER_POSITIONS_FT[c.position],
+      toPoint: c.toPoint,
+      arriveSec: Math.max(0.6, ball.hangTimeSec || TIME.contactToFieldedDefault),
+    }, 0);
+  }
+  if (coverage.cutoff) {
+    push({
+      type: 'fielder-converge',
+      position: coverage.cutoff.position,
+      playerId: defenseMap?.get(coverage.cutoff.position)?.id ?? -1,
+      fromPoint: FIELDER_POSITIONS_FT[coverage.cutoff.position],
+      toPoint: coverage.cutoff.toPoint,
+      reachSec: Math.max(0.8, (ball.hangTimeSec || TIME.contactToFieldedDefault) * 0.9),
+    }, 0);
+  }
+  for (const bk of coverage.backups) {
+    push({
+      type: 'fielder-converge',
+      position: bk.position,
+      playerId: defenseMap?.get(bk.position)?.id ?? -1,
+      fromPoint: FIELDER_POSITIONS_FT[bk.position],
+      toPoint: bk.toPoint,
+      reachSec: Math.max(1.0, (ball.hangTimeSec || TIME.contactToFieldedDefault) * 1.1),
+    }, 0);
+  }
+
+  // ─── Throws ───
+  // Infield grounder/FC/DP throws keep the existing single-hop path
+  // (the cover assignments above already supplied the receiver).
+  // OF hits with a non-null cutoff get a TWO-hop relay: OF → cutoff,
+  // then cutoff → final base.
   if (!isCaught && isInfielder) {
     const targetBase = ab.result === 'double-play' || ab.result === 'fielders-choice'
       ? 'second' as const
       : 'first' as const;
-    // Pick who covers the target base. Default cover fielder for the bag,
-    // but if the cover fielder is the one who just fielded the ball, fall
-    // back to a sensible alternate (e.g. P covers 1B if B1 fielded it).
-    const defaultCover: Record<'first' | 'second' | 'third' | 'home', Position> = {
-      first: 'B1', second: 'B2', third: 'B3', home: 'C',
-    };
-    let coverPos: Position = defaultCover[targetBase];
-    if (coverPos === ab.fieldedBy) {
-      if (targetBase === 'first') coverPos = 'P';
-      else if (targetBase === 'second') coverPos = ab.fieldedBy === 'B2' ? 'SS' : 'B2';
-      else if (targetBase === 'third') coverPos = 'SS';
-      else coverPos = 'P';
-    }
-    // Cover fielder breaks the moment the ball is fielded (same time the
-    // throw is released). Time to the bag is the throw flight minus a
-    // small head-start so they're set when the ball arrives.
     const targetPt = basePoint(targetBase);
     const throwFlightSec = fielderPlayer
       ? throwTimeSec(playPoint, targetPt, ab.fieldedBy, fielderPlayer.skills.defense)
       : TIME.throwToBaseSec;
-    const coverArrive = Math.max(0.4, throwFlightSec - 0.2);
-    push({
-      type: 'cover-base',
-      position: coverPos,
-      base: targetBase,
-      fromPoint: FIELDER_POSITIONS_FT[coverPos],
-      toPoint: targetPt,
-      arriveSec: coverArrive,
-    }, 0);
     push({
       type: 'throw',
       fromPosition: ab.fieldedBy, fromPlayerId: fielderPlayer?.id ?? -1,
@@ -118,8 +151,7 @@ export function emitBattedBallVisuals(
     }, TIME.fieldedToThrowSec);
 
     // Phase 5.15: backup fielder chases behind the bag on a throwing
-    // error so the visual reads as a wild throw being run down. Backup
-    // assignments mirror standard MLB practice (OF behind same-side IF).
+    // error so the visual reads as a wild throw being run down.
     if (ab.result === 'reached-on-error' && ab.errorType === 'throw') {
       const backupMap: Record<'first' | 'second' | 'third' | 'home', Position> = {
         first: 'RF', second: 'CF', third: 'LF', home: 'P',
@@ -133,6 +165,51 @@ export function emitBattedBallVisuals(
         toPoint: targetPt,
         reachSec: throwFlightSec + 0.4,
       }, 0);
+    }
+  } else if (!isCaught && !isInfielder && coverage.throwTarget) {
+    // Outfield hit → primary throw, optionally relayed through cutoff.
+    const targetBase = coverage.throwTarget;
+    const targetPt = basePoint(targetBase);
+    const ofDef = fielderPlayer?.skills.defense ?? 5;
+    if (coverage.cutoff) {
+      // Two-hop relay: OF → cutoff IF, then cutoff → final base.
+      const cutoffPt = coverage.cutoff.toPoint;
+      const cutoffPos = coverage.cutoff.position;
+      const cutoffPlayer = defenseMap?.get(cutoffPos);
+      const flight1 = throwTimeSec(playPoint, cutoffPt, ab.fieldedBy, ofDef);
+      const flight2 = cutoffPlayer
+        ? throwTimeSec(cutoffPt, targetPt, cutoffPos, cutoffPlayer.skills.defense)
+        : TIME.throwToBaseSec;
+      // Throw 1: OF → cutoff
+      push({
+        type: 'throw',
+        fromPosition: ab.fieldedBy, fromPlayerId: fielderPlayer?.id ?? -1,
+        fromPoint: playPoint,
+        toBase: targetBase,             // ultimate intent (renderer can label)
+        toPoint: cutoffPt,
+        flightSec: flight1,
+      }, TIME.fieldedToThrowSec);
+      // Throw 2: cutoff → base. Small relay-handle delay between catches.
+      push({
+        type: 'throw',
+        fromPosition: cutoffPos, fromPlayerId: cutoffPlayer?.id ?? -1,
+        fromPoint: cutoffPt,
+        toBase: targetBase,
+        toPoint: targetPt,
+        flightSec: flight2,
+      }, flight1 + 0.25);
+    } else {
+      // Direct OF throw (rare with our table — only "no runners on,
+      // sac-fly" type exceptions). Keep single-hop.
+      const flight = throwTimeSec(playPoint, targetPt, ab.fieldedBy, ofDef);
+      push({
+        type: 'throw',
+        fromPosition: ab.fieldedBy, fromPlayerId: fielderPlayer?.id ?? -1,
+        fromPoint: playPoint,
+        toBase: targetBase,
+        toPoint: targetPt,
+        flightSec: flight,
+      }, TIME.fieldedToThrowSec);
     }
   }
 }

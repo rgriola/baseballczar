@@ -158,7 +158,7 @@ export function buildEvents(g: GameResult): SimEvent[] {
       if (p.outcome === 'in-play' && ab.battedBall) {
         // Capture contact time BEFORE emitBattedBallVisuals advances `t`.
         lastContactT = t;
-        emitBattedBallVisuals(ab.battedBall, ab, push, currentDefenseMap);
+        emitBattedBallVisuals(ab.battedBall, ab, push, currentDefenseMap, bases, outsInInning);
       } else if (p.battedBall) {
         // Foul ball — emit a contact event so the renderer can show the
         // launch + landing in foul territory. If the foul was caught for
