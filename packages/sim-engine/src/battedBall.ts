@@ -99,7 +99,15 @@ function findConverger(
   defense: Map<Position, Player>,
 ): Convergence {
   const isGrounder = ball.launchAngleDeg < 5;
-  // Each fielder has a "natural" angular zone — the spray angle his
+  // C and P field grounders, but they should also handle squibbers /
+  // choppers / weak pop-ups that land in front of the plate even when
+  // the launch angle technically reads above 5\u00b0. Otherwise an 8\u00b0
+  // chopper that travels 12 ft gets given to the 3rd baseman 89 ft
+  // away. Treat anything inside ~45 ft of home as "in front of the
+  // plate" and let C/P compete for it.
+  const distFromHome = Math.hypot(ball.landingPoint.x, ball.landingPoint.y);
+  const isShortBall = distFromHome < 45;
+  // Each fielder has a "natural" angular zone \u2014 the spray angle his
   // home position covers. Reaching outside that zone costs a small
   // territory penalty so the right fielder doesn't routinely steal
   // balls hit into the left fielder's area when his speed/range edges
@@ -112,8 +120,9 @@ function findConverger(
   const ballAngle = ball.sprayAngleDeg;
   let best: Convergence | null = null;
   for (const [pos, fielder] of defense) {
-    // P and C only field grounders (comebackers, squibbers, bunts).
-    if ((pos === 'P' || pos === 'C') && !isGrounder) continue;
+    // P and C only field grounders (comebackers, squibbers, bunts) or
+    // anything that lands close to home plate (choppers, weak pop-ups).
+    if ((pos === 'P' || pos === 'C') && !isGrounder && !isShortBall) continue;
     const fielderPt = FIELDER_POSITIONS_FT[pos];
     const dist = distanceFt(fielderPt, ball.landingPoint);
     // Defense leverage: skill 1 ≈ 14 ft/sec, skill 10 ≈ 44 ft/sec
