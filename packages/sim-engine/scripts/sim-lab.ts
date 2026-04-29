@@ -46,6 +46,60 @@ for (let i = 0; i < games; i++) {
 const report = aggregate(results);
 console.log(formatReport(report));
 
+// ─── Spray-angle diagnostic ─────────────────────────────────────
+// Histogram of every batted-ball spray angle so we can see what the
+// engine is producing under the current convention. Helpful for
+// retuning pullCenterDeg / sprayStdDevDeg.
+//   Convention: 0° = dead CF, -45° = LF foul line, +45° = RF foul line.
+//   |spray| > 45° = foul.
+{
+  const buckets: Record<string, { fair: number; foul: number }> = {};
+  const labels = [
+    'foul-L (<-45)',
+    'LF-line (-45..-30)',
+    'LF (-30..-10)',
+    'CF (-10..+10)',
+    'RF (+10..+30)',
+    'RF-line (+30..+45)',
+    'foul-R (>+45)',
+  ];
+  for (const l of labels) buckets[l] = { fair: 0, foul: 0 };
+  let total = 0, foulCount = 0, fairCount = 0;
+  let sumSpray = 0, sumAbs = 0;
+  for (const g of results) {
+    for (const ab of g.atBats) {
+      for (const p of ab.pitches) {
+        const bb = p.battedBall ?? (p === ab.pitches[ab.pitches.length - 1] ? ab.battedBall : null);
+        if (!bb) continue;
+        total++;
+        const s = bb.sprayAngleDeg;
+        sumSpray += s; sumAbs += Math.abs(s);
+        const isFoul = s < -45 || s > 45;
+        if (isFoul) foulCount++; else fairCount++;
+        let label: string;
+        if (s < -45) label = 'foul-L (<-45)';
+        else if (s < -30) label = 'LF-line (-45..-30)';
+        else if (s < -10) label = 'LF (-30..-10)';
+        else if (s <  10) label = 'CF (-10..+10)';
+        else if (s <  30) label = 'RF (+10..+30)';
+        else if (s <= 45) label = 'RF-line (+30..+45)';
+        else label = 'foul-R (>+45)';
+        if (isFoul) buckets[label].foul++; else buckets[label].fair++;
+      }
+    }
+  }
+  console.log('\nSpray-angle distribution (every batted ball, fair + foul):');
+  console.log(`  total=${total}  fair=${fairCount} (${(100*fairCount/total).toFixed(1)}%)  foul=${foulCount} (${(100*foulCount/total).toFixed(1)}%)`);
+  console.log(`  mean spray=${(sumSpray/total).toFixed(1)}°   mean |spray|=${(sumAbs/total).toFixed(1)}°`);
+  console.log('  bucket                    fair    foul');
+  for (const l of labels) {
+    const b = buckets[l];
+    const fairPct = total > 0 ? (100 * b.fair / total).toFixed(1) : '0.0';
+    const foulPct = total > 0 ? (100 * b.foul / total).toFixed(1) : '0.0';
+    console.log(`  ${l.padEnd(22)} ${String(b.fair).padStart(5)} (${fairPct.padStart(4)}%)  ${String(b.foul).padStart(5)} (${foulPct.padStart(4)}%)`);
+  }
+}
+
 if (verbose && results.length > 0) {
   console.log('\n─── GAME 1 BOXSCORE ───');
   printBoxscore(results[0]);
@@ -121,11 +175,11 @@ function printPbp(g: GameResult): void {
 }
 
 function spray(deg: number): string {
-  if (deg < 0)  return 'foul-L';
-  if (deg < 22) return 'LF-line';
-  if (deg < 35) return 'LF';
-  if (deg < 55) return 'CF';
-  if (deg < 68) return 'RF';
-  if (deg < 90) return 'RF-line';
+  if (deg < -45) return 'foul-L';
+  if (deg < -30) return 'LF-line';
+  if (deg < -10) return 'LF';
+  if (deg <  10) return 'CF';
+  if (deg <  30) return 'RF';
+  if (deg <= 45) return 'RF-line';
   return 'foul-R';
 }

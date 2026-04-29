@@ -1,6 +1,9 @@
 /**
  * Park geometry. Wall distance varies smoothly with spray angle.
- *   sprayAngleDeg: 0° = LF foul line, 45° = straightaway CF, 90° = RF foul line.
+ * Convention (now consistent end-to-end):
+ *   sprayAngleDeg  -45° = LF foul line
+ *   sprayAngleDeg    0° = straightaway CF
+ *   sprayAngleDeg  +45° = RF foul line
  */
 import { CONFIG } from '../config';
 
@@ -22,27 +25,29 @@ const DEFAULT_PARK: ParkGeometry = {
   wallHeightFt: CONFIG.park.wallHeightFt,
 };
 
-/** Linear interpolate between four anchor points (LL, LCF, CF, RCF, RL). */
+/**
+ * Linear interpolate wall distance between five anchor points across the
+ * fair wedge: LL (-45°), LCF (-22.5°), CF (0°), RCF (+22.5°), RL (+45°).
+ */
 export function wallDistanceFt(sprayAngleDeg: number, park: ParkGeometry = DEFAULT_PARK): number {
-  const a = Math.max(0, Math.min(90, sprayAngleDeg));
-  // Anchors at 0°, 22.5°, 45°, 67.5°, 90°
-  if (a <= 22.5) {
-    const t = a / 22.5;
+  const a = Math.max(-45, Math.min(45, sprayAngleDeg));
+  if (a <= -22.5) {
+    const t = (a + 45) / 22.5; // 0..1 from LL to LCF
     return park.leftLineFt + t * (park.leftCenterFt - park.leftLineFt);
   }
-  if (a <= 45) {
-    const t = (a - 22.5) / 22.5;
+  if (a <= 0) {
+    const t = (a + 22.5) / 22.5; // 0..1 from LCF to CF
     return park.leftCenterFt + t * (park.centerFt - park.leftCenterFt);
   }
-  if (a <= 67.5) {
-    const t = (a - 45) / 22.5;
+  if (a <= 22.5) {
+    const t = a / 22.5; // 0..1 from CF to RCF
     return park.centerFt + t * (park.rightCenterFt - park.centerFt);
   }
-  const t = (a - 67.5) / 22.5;
+  const t = (a - 22.5) / 22.5; // 0..1 from RCF to RL
   return park.rightCenterFt + t * (park.rightLineFt - park.rightCenterFt);
 }
 
-/** True if the spray angle is within fair territory (0..90 inclusive). */
+/** True if the spray angle is within the fair wedge (±45° of dead CF). */
 export function isFair(sprayAngleDeg: number): boolean {
-  return sprayAngleDeg >= 0 && sprayAngleDeg <= 90;
+  return sprayAngleDeg >= -45 && sprayAngleDeg <= 45;
 }

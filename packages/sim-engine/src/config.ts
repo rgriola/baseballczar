@@ -77,9 +77,11 @@ export const CONFIG = {
     dhrToLaunchAngleDeg: { min: -15, max: 25 },
     launchAngleStdDevDeg: 12,    // gaussian noise around the bias
     exitVeloStdDevMph: 8,
-    // Spray angle: 0° = pull-side foul line, 45° = straight CF, 90° = oppo foul line
-    pullCenterDeg: 30,           // most batted balls are pulled
-    sprayStdDevDeg: 22,
+    // Spray angle convention: 0° = dead CF, -45° = LF foul line, +45° = RF.
+    // RHB pulls to -pullCenterDeg, LHB to +pullCenterDeg. StdDev keeps most
+    // contact inside the fair wedge while still allowing oppo-field hits.
+    pullCenterDeg: 22,
+    sprayStdDevDeg: 18,
   },
 
   // ─── Pitch-by-pitch outcome rolls ─────────────────────────────

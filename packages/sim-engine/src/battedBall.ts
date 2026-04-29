@@ -49,22 +49,23 @@ export function rollBattedBall(
   const launchAngleDeg = Math.max(-15, Math.min(60,
     rng.gaussian(laMean, launchAngleStdDevDeg)));
 
-  // Spray: pull-side bias by handedness
-  // Lefty pulls toward RF (90°), righty pulls toward LF (0°)
+  // Spray: pull-side bias by handedness.
+  // Convention: 0° = dead CF, -45° = LF foul line, +45° = RF foul line.
+  // RHB pulls toward LF (negative spray); LHB pulls toward RF (positive).
   const pullBase = hitter.hand === 'L'
-    ? 90 - pullCenterDeg
-    : pullCenterDeg;
+    ?  pullCenterDeg
+    : -pullCenterDeg;
   let sprayAngleDeg = rng.gaussian(pullBase, sprayStdDevDeg);
 
   // Caller forced this contact to be foul (e.g. resolvePitch said
   // 'foul'). Push spray a few degrees past the nearest foul line so
   // the physics actually lands in foul territory but stays close to
   // the line — most fouls are line-drives or pop-ups near the bag.
-  if (opts.forceFoul && sprayAngleDeg >= 0 && sprayAngleDeg <= 90) {
-    const toLeft = sprayAngleDeg < 45;
+  if (opts.forceFoul && sprayAngleDeg >= -45 && sprayAngleDeg <= 45) {
+    const toLeft = sprayAngleDeg < 0;
     sprayAngleDeg = toLeft
-      ? -Math.abs(rng.gaussian(8, 6))    // LF foul side
-      : 90 + Math.abs(rng.gaussian(8, 6)); // RF foul side
+      ? -45 - Math.abs(rng.gaussian(8, 6))   // LF foul side (< -45°)
+      :  45 + Math.abs(rng.gaussian(8, 6));  // RF foul side (> +45°)
   }
 
   const f = flight({ exitVeloMph, launchAngleDeg, sprayAngleDeg });
@@ -112,8 +113,11 @@ function findConverger(
     // Catch radius scales with defense (±6 ft across 1-10).
     const effectiveCatchRadius = CONFIG.fielder.catchRadiusFt
       + (fielder.skills.defense - 5) * 1.5;
+    // Hangtime tolerance: fielder must basically arrive coincident with
+    // the ball. Slack 0 = league-average catch rate; positive slack
+    // would let blooper-singles get caught.
     const caught = !isGrounder
-      && (reach <= ball.hangTimeSec + 0.2 || dist <= effectiveCatchRadius + 4);
+      && (reach <= ball.hangTimeSec || dist <= effectiveCatchRadius + 4);
     if (!best || reach < best.reachTimeSec) {
       best = { position: pos, fielder, reachTimeSec: reach, caught };
     }
@@ -244,7 +248,11 @@ export function resolveBattedBall(
   }
 
   // Outfielder fielded — base hit. How many bases?
-  // Throw to 2B to hold runner.
+  // Throw to 2B to hold runner. The slack here decides single vs double:
+  // smaller slack means more aggressive baserunning + more doubles. Real
+  // MLB ≈ 1.5 doubles/team-game; the +0.5 slack used to make every OF
+  // hit a single because fielders are aligned with the fair wedge under
+  // the symmetric spray convention.
   const throwTo2 = throwTimeSec(fielderPt, BASE_COORDS_FT.second,
     conv.position, conv.fielder.skills.defense);
   const runnerToSecond = runnerTimeSec('home', 'first', hitter.skills.speed,
@@ -252,7 +260,7 @@ export function resolveBattedBall(
     + runnerTimeSec('first', 'second', hitter.skills.speed);
   const fielderToSecond = totalToBall + throwTo2;
 
-  if (runnerToSecond > fielderToSecond + 0.5) {
+  if (runnerToSecond > fielderToSecond - 0.5) {
     // Runner wisely stops at first
     return { result: 'single', fieldedBy: conv.position };
   }

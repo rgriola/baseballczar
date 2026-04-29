@@ -60,16 +60,13 @@ export function flight(input: FlightInput): FlightResult {
   }
 
   // Project landing point onto field plane.
-  // Convention used by the engine end-to-end (battedBall pullBase + park.ts):
-  //   sprayAngleDeg  0° → straight CF (+y)
-  //   sprayAngleDeg +90° → RF foul line (+x)
-  //   sprayAngleDeg -90° → LF foul line (-x)
-  // (NOTE: park.ts `isFair` historically only treats 0..90 as fair, so
-  //  most "LF" balls are produced by the spray distribution being skewed
-  //  toward +x via `pullCenterDeg`. Re-tuning the convention is a
-  //  follow-up — see plan.)
+  // Convention (consistent end-to-end across battedBall + park):
+  //   sprayAngleDeg    0° → straight CF (+y)
+  //   sprayAngleDeg  +45° → RF foul line (+x)
+  //   sprayAngleDeg  -45° → LF foul line (-x)
+  //   |spray| > 45° → foul ball
   const sprayRad = (sprayAngleDeg * Math.PI) / 180;
-  const x = distanceFt * Math.sin(sprayRad);  // 0° → x=0, 90° → x=dist
+  const x = distanceFt * Math.sin(sprayRad);
   const y = distanceFt * Math.cos(sprayRad);
 
   const isFoul = !isFair(sprayAngleDeg);
