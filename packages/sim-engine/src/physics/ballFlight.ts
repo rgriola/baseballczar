@@ -5,9 +5,11 @@
  * Statcast averages for an MLB barrel).
  *
  * Coordinate system (feet, origin = home plate):
- *   +x = toward right field foul line (90°)
+ *   +x = toward right field foul line
  *   +y = toward center field
- *   sprayAngleDeg 0° = LF foul line, 45° = CF, 90° = RF foul line
+ *   sprayAngleDeg  0°  = straight CF
+ *   sprayAngleDeg +90° = RF foul line
+ *   sprayAngleDeg -90° = LF foul line
  */
 import { CONFIG } from '../config';
 import { wallDistanceFt, isFair } from './park';
@@ -57,7 +59,15 @@ export function flight(input: FlightInput): FlightResult {
     peakHeight = (v0 * Math.sin(angleRad)) ** 2 / (2 * g);
   }
 
-  // Project landing point onto field plane
+  // Project landing point onto field plane.
+  // Convention used by the engine end-to-end (battedBall pullBase + park.ts):
+  //   sprayAngleDeg  0° → straight CF (+y)
+  //   sprayAngleDeg +90° → RF foul line (+x)
+  //   sprayAngleDeg -90° → LF foul line (-x)
+  // (NOTE: park.ts `isFair` historically only treats 0..90 as fair, so
+  //  most "LF" balls are produced by the spray distribution being skewed
+  //  toward +x via `pullCenterDeg`. Re-tuning the convention is a
+  //  follow-up — see plan.)
   const sprayRad = (sprayAngleDeg * Math.PI) / 180;
   const x = distanceFt * Math.sin(sprayRad);  // 0° → x=0, 90° → x=dist
   const y = distanceFt * Math.cos(sprayRad);

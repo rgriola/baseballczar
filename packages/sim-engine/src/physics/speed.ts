@@ -9,7 +9,7 @@
 import { CONFIG } from '../config';
 import type { Hand } from '../types';
 
-export const BASE_COORDS_FT = {
+export const BASE_COORDS_FT = { // expressed in  feet. 
   home: { x: 0, y: 0 },
   first: { x: 63.6, y: 63.6 },
   second: { x: 0, y: 127.3 },

@@ -8,7 +8,7 @@ import { CONFIG } from './config';
 import {
   pitcherDecideIntent, executePitch, batterDecideSwing, resolvePitch,
 } from './agents';
-import { rollBattedBall, resolveBattedBall } from './battedBall';
+import { rollBattedBall, resolveBattedBall, resolveFoulBall } from './battedBall';
 import type { Rng } from './rng';
 
 export interface AtBatContext {
@@ -63,14 +63,15 @@ export function simulateAtBat(
     const swing = batterDecideSwing(batter, exec, balls, strikes, rng);
     const pitchRes = resolvePitch(pitcher, batter, exec, swing, balls, strikes, rng);
 
-    pitches.push({
+    const pitch: PitchEvent = {
       pitchNum,
       balls, strikes,
       intentZone: intent.zone,
       actualInZone: exec.actualInZone,
       swung: swing.swung,
       outcome: pitchRes.outcome === 'in-play' ? 'in-play' : pitchRes.outcome,
-    });
+    };
+    pitches.push(pitch);
 
     switch (pitchRes.outcome) {
       case 'ball':
@@ -82,16 +83,41 @@ export function simulateAtBat(
         strikes++;
         if (strikes >= 3) { result = 'strikeout'; }
         break;
-      case 'foul':
-        // 2-strike fouls don't add a strike
+      case 'foul': {
+        // Even simple fouls have physics now — roll a forced-foul
+        // batted ball so the renderer can show the launch + landing,
+        // and check whether a fielder can run it down for a foul-out.
+        const fb = rollBattedBall(batter, pitcher, rng, { forceFoul: true });
+        pitch.battedBall = fb;
+        const caught = resolveFoulBall(fb, ctx.defense);
+        if (caught) {
+          pitch.outcome = 'foul-out';
+          pitch.foulCaughtBy = caught.position;
+          battedBall = fb;
+          fieldedBy = caught.position;
+          result = 'foul-out';
+          break;
+        }
+        // Not caught — standard foul behaviour (2-strike fouls don't add).
         if (strikes < 2 || !CONFIG.pitch.twoStrikeFoulRetains) {
           strikes = Math.min(2, strikes + 1);
         }
         break;
+      }
       case 'in-play': {
         battedBall = rollBattedBall(batter, pitcher, rng);
-        // Foul ball discovered in flight is treated like a foul (not contact out)
+        pitch.battedBall = battedBall;
+        // Foul ball discovered in flight: try to catch it for a
+        // foul-out, otherwise it just adds a strike (if <2).
         if (battedBall.isFoul) {
+          const caught = resolveFoulBall(battedBall, ctx.defense);
+          if (caught) {
+            pitch.outcome = 'foul-out';
+            pitch.foulCaughtBy = caught.position;
+            fieldedBy = caught.position;
+            result = 'foul-out';
+            break;
+          }
           if (strikes < 2) strikes++;
           break;
         }
@@ -109,6 +135,56 @@ export function simulateAtBat(
     result = balls >= strikes ? 'walk' : 'strikeout';
   }
 
+  // Derive fielding credits (PO/A/E) from result + fieldedBy. Convention:
+  // the fielder who actually records the out is the putout; everyone who
+  // touched the ball before that gets an assist. ROE = error on the
+  // fielder who muffed the play (we use fieldedBy as a proxy until the
+  // emergent-play model gives us a true error source).
+  const fielding: AtBatRecord['fielding'] = (() => {
+    switch (result) {
+      case 'strikeout':
+        // Catcher records the putout on a swinging/called K.
+        return { putoutBy: 'C' };
+      case 'foul-out':
+        // Catcher most often, but lacking detail credit fieldedBy if known.
+        return { putoutBy: fieldedBy ?? 'C' };
+      case 'fly-out':
+      case 'line-out':
+      case 'pop-out':
+      case 'sac-fly':
+        return fieldedBy ? { putoutBy: fieldedBy } : undefined;
+      case 'ground-out': {
+        if (!fieldedBy) return undefined;
+        // Fielder throws to the cover man at first; cover gets PO, fielder assist.
+        // If the ball was fielded right at first base, the B1 records it
+        // unassisted.
+        if (fieldedBy === 'B1') return { putoutBy: 'B1' };
+        return { putoutBy: 'B1', assistBy: [fieldedBy] };
+      }
+      case 'fielders-choice': {
+        if (!fieldedBy) return undefined;
+        // Throw to second; B2 (or SS) gets the PO, fielder gets an assist.
+        const cover: Position = fieldedBy === 'B2' ? 'SS' : 'B2';
+        return { putoutBy: cover, assistBy: [fieldedBy] };
+      }
+      case 'double-play': {
+        if (!fieldedBy) return undefined;
+        // 6-4-3 / 4-6-3 family: fielder → pivot → first.
+        const pivot: Position = fieldedBy === 'B2' ? 'SS' : 'B2';
+        return {
+          putoutBy: pivot,                  // forces lead runner at 2B
+          assistBy: [fieldedBy, pivot],     // fielder + pivot both throw
+          extraPutouts: ['B1'],             // B1 records the second PO
+        };
+      }
+      case 'reached-on-error':
+        // Charge the error to the player who would've made the play.
+        return fieldedBy ? { errorBy: fieldedBy } : undefined;
+      default:
+        return undefined;
+    }
+  })();
+
   return {
     inning: ctx.inning,
     half: ctx.half,
@@ -119,6 +195,7 @@ export function simulateAtBat(
     result,
     battedBall,
     fieldedBy,
+    fielding,
     rbis: 0,
     runsScored: 0,
   };

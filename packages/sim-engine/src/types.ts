@@ -70,15 +70,28 @@ export interface PitchEvent {
   actualInZone: boolean;
   swung: boolean;
   outcome: PitchOutcome;
+  /** Physics for any contact (fair OR foul). Present whenever the bat
+   *  meets the ball, so the renderer can show launch/exit-velo/landing
+   *  for foul balls just like fair balls. Absent on takes / whiffs. */
+  battedBall?: BattedBall;
+  /** When a foul fly is caught for an out, the fielder credited with
+   *  the putout. Set in tandem with `outcome === 'foul-out'`. */
+  foulCaughtBy?: Position;
 }
 
 export interface BattedBall {
   exitVeloMph: number;
   launchAngleDeg: number;
-  sprayAngleDeg: number;     // 0° = LF foul line, 45° = CF, 90° = RF foul line
+  sprayAngleDeg: number;     // 0° = CF, +90° = RF foul, -90° = LF foul
   distanceFt: number;
   hangTimeSec: number;
   landingPoint: { x: number; y: number };  // ft, origin = home plate
+  /** For grounders intercepted by an infielder before they reach their
+   *  natural landing point: where the fielder actually gloved the ball.
+   *  The renderer + fielder-converge / throw events use this when set;
+   *  the hit-classifier still uses `landingPoint` / `distanceFt` (true
+   *  ball physics) to decide single vs double vs triple. */
+  fieldedAtPoint?: { x: number; y: number };
   isFoul: boolean;
   isHomeRun: boolean;
 }
@@ -93,6 +106,21 @@ export interface AtBatRecord {
   result: AtBatResult;
   battedBall?: BattedBall;
   fieldedBy?: Position;
+  /**
+   * Fielding credits for this play. Populated by `atBat.ts` from
+   * (result, fieldedBy) using standard scorekeeping conventions:
+   *  - putoutBy: the fielder who recorded the out (catch, tag, force)
+   *  - assistBy: every fielder who handled the ball EXCLUDING the
+   *    putout fielder (e.g. SS—92—B1: SS gets the assist, B1 the PO)
+   *  - errorBy: fielder charged with the error on a ROE / misplay
+   * Multiple outs (DP) record both putouts in `extraPutouts`.
+   */
+  fielding?: {
+    putoutBy?: Position;
+    assistBy?: Position[];
+    errorBy?: Position;
+    extraPutouts?: Position[];
+  };
   rbis: number;
   runsScored: number;
 }
@@ -124,6 +152,18 @@ export interface BatterGameStats {
   rbis: number;
 }
 
+/**
+ * Per-game fielding line for a single defender. PO + A + E follow
+ * standard MLB scorekeeping. `chances = po + a + e`.
+ */
+export interface FielderGameStats {
+  playerId: number;
+  position: Position;
+  putouts: number;
+  assists: number;
+  errors: number;
+}
+
 export interface GameResult {
   homeTeam: Team;
   awayTeam: Team;
@@ -133,4 +173,5 @@ export interface GameResult {
   atBats: AtBatRecord[];
   pitcherStats: Map<number, PitcherGameStats>;
   batterStats: Map<number, BatterGameStats>;
+  fielderStats: Map<number, FielderGameStats>;
 }

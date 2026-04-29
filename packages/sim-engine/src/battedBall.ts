@@ -23,8 +23,7 @@ import type { Rng } from './rng';
 export function rollBattedBall(
   hitter: Player,
   pitcher: Player,
-  rng: Rng,
-): BattedBall {
+  rng: Rng,  opts: { forceFoul?: boolean } = {},): BattedBall {
   const cfg = CONFIG.battedBall;
   const { powerToExitVeloMph, dhrToLaunchAngleDeg, exitVeloStdDevMph,
     launchAngleStdDevDeg, pullCenterDeg, sprayStdDevDeg } = cfg;
@@ -55,7 +54,18 @@ export function rollBattedBall(
   const pullBase = hitter.hand === 'L'
     ? 90 - pullCenterDeg
     : pullCenterDeg;
-  const sprayAngleDeg = rng.gaussian(pullBase, sprayStdDevDeg);
+  let sprayAngleDeg = rng.gaussian(pullBase, sprayStdDevDeg);
+
+  // Caller forced this contact to be foul (e.g. resolvePitch said
+  // 'foul'). Push spray a few degrees past the nearest foul line so
+  // the physics actually lands in foul territory but stays close to
+  // the line — most fouls are line-drives or pop-ups near the bag.
+  if (opts.forceFoul && sprayAngleDeg >= 0 && sprayAngleDeg <= 90) {
+    const toLeft = sprayAngleDeg < 45;
+    sprayAngleDeg = toLeft
+      ? -Math.abs(rng.gaussian(8, 6))    // LF foul side
+      : 90 + Math.abs(rng.gaussian(8, 6)); // RF foul side
+  }
 
   const f = flight({ exitVeloMph, launchAngleDeg, sprayAngleDeg });
 
@@ -127,13 +137,42 @@ export function resolveBattedBall(
 ): BattedBallResolution {
   if (ball.isHomeRun) return { result: 'home-run' };
 
-  // Foul ball — count++, no out unless reachable foul-out (skipped in v1)
-  if (ball.isFoul) {
-    return { result: 'foul-out' };  // v1: foul-out is treated as foul ball outside; caller handles
-  }
+  // Foul balls are handled upstream in atBat.ts via `resolveFoulBall`
+  // (which decides whether the foul is caught for an out). By the time a
+  // ball reaches `resolveBattedBall`, it should be fair — guard anyway.
+  if (ball.isFoul) return { result: 'foul-out' };
 
   const conv = findConverger(ball, defense);
   const isGrounder = ball.launchAngleDeg < 5;
+
+  // For grounders, the ball is intercepted along its path by the closest
+  // infielder — record where the IF actually gloves it so visuals +
+  // throw geometry reflect that. We do NOT overwrite `landingPoint` /
+  // `distanceFt`: those describe the ball's natural physics and the
+  // hit-classifier (single vs double vs triple) reads them. Decoupling
+  // these two concepts is what keeps BABIP from collapsing.
+  if (isGrounder) {
+    const fielderPt = FIELDER_POSITIONS_FT[conv.position];
+    const isOF = conv.position === 'LF' || conv.position === 'CF' || conv.position === 'RF';
+    if (!isOF) {
+      // Project the fielder's position onto the ball's path (origin -> landing).
+      const pathDx = ball.landingPoint.x;
+      const pathDy = ball.landingPoint.y;
+      const pathLen2 = pathDx * pathDx + pathDy * pathDy;
+      if (pathLen2 > 1) {
+        const dot = (fielderPt.x * pathDx + fielderPt.y * pathDy) / pathLen2;
+        // Only mark an intercept when the fielder is genuinely in front
+        // of the ball's natural landing (dot < 1). Past-the-fielder balls
+        // keep their natural landingPoint so OF takes over.
+        if (dot > 0 && dot < 1) {
+          ball.fieldedAtPoint = {
+            x: pathDx * dot,
+            y: pathDy * dot,
+          };
+        }
+      }
+    }
+  }
 
   // Error roll: low-defense fielders muff the play. Errors only on routine
   // chances (caught flies & playable grounders). Skill 1 misplays often;
@@ -219,3 +258,53 @@ export function resolveBattedBall(
   }
   return { result: 'double', fieldedBy: conv.position };
 }
+
+/**
+ * Decide whether a foul ball can be caught for an out. Real-world foul-
+ * outs are rare (~0.3 per team-game, mostly catcher pop-ups + corner IF
+ * down-the-line cans-of-corn). To stay near that rate we require:
+ *   • A high pop-up (LA > 40°) — line-drive fouls into the seats are
+ *     unplayable; routine fly fouls into the corner already curve out
+ *     of bounds before a fielder can get there.
+ *   • Landing within ~35 ft of one of the corner-IF / catcher / corner-OF
+ *     fielders (`foulTerritoryDepthFt` is the league-wide ceiling; we
+ *     use a smaller working radius).
+ *   • The fielder can reach the spot before the ball comes down.
+ *
+ * Returns the catching fielder's position, or null if uncatchable.
+ */
+export function resolveFoulBall(
+  ball: BattedBall,
+  defense: Map<Position, Player>,
+): { position: Position } | null {
+  // Only true pop-ups can be run down in foul territory.
+  if (ball.launchAngleDeg < 40) return null;
+
+  // Working radius: tighter than the league cap so we don't over-produce
+  // foul-outs. The cap in CONFIG is the absolute max a fielder will drift.
+  const depthCap = Math.min(35, CONFIG.park.foulTerritoryDepthFt);
+  let best: { pos: Position; reach: number } | null = null;
+  for (const [pos, fielder] of defense) {
+    // Only the corner infielders, catcher, and corner outfielders
+    // typically chase fouls. Middle IFs / CF / pitcher stay home.
+    if (pos === 'B2' || pos === 'SS' || pos === 'CF' || pos === 'P') continue;
+    const fielderPt = FIELDER_POSITIONS_FT[pos];
+    const dist = Math.hypot(
+      fielderPt.x - ball.landingPoint.x,
+      fielderPt.y - ball.landingPoint.y,
+    );
+    if (dist > depthCap) continue;
+    const range = CONFIG.fielder.rangeFtPerSec
+      + (fielder.skills.defense - 5) * 4.0
+      + (fielder.skills.speed - 5) * 1.0;
+    const reach = CONFIG.fielder.reactionSec + dist / Math.max(12, range);
+    // Need to get there before the ball comes down (no slack — fouls
+    // drift unpredictably and most "close" fouls drop in the seats).
+    if (reach > ball.hangTimeSec) continue;
+    if (!best || reach < best.reach) {
+      best = { pos, reach };
+    }
+  }
+  return best ? { position: best.pos } : null;
+}
+

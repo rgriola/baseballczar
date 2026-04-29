@@ -4,7 +4,7 @@
  */
 import type {
   Player, Team, GameResult, AtBatRecord, AtBatResult,
-  PitcherGameStats, BatterGameStats,
+  PitcherGameStats, BatterGameStats, FielderGameStats,
 } from './types';
 import type { Position } from './config';
 import { CONFIG } from './config';
@@ -21,6 +21,7 @@ interface TeamGameState {
   pitcherState: ManagerState;
   pitcherStats: Map<number, PitcherGameStats>;
   batterStats: Map<number, BatterGameStats>;
+  fielderStats: Map<number, FielderGameStats>;
   defenseMap: Map<Position, Player>;
 }
 
@@ -31,6 +32,35 @@ function newPitcherStats(id: number): PitcherGameStats {
 function newBatterStats(id: number): BatterGameStats {
   return { batterId: id, pa: 0, ab: 0, hits: 0, doubles: 0, triples: 0,
     homeRuns: 0, walks: 0, strikeouts: 0, runs: 0, rbis: 0 };
+}
+
+function newFielderStats(id: number, position: Position): FielderGameStats {
+  return { playerId: id, position, putouts: 0, assists: 0, errors: 0 };
+}
+
+/**
+ * Apply PO/A/E credits from an at-bat to the team's fielder stat map.
+ * Looks up the live defender at each credited position via `defenseMap`.
+ */
+function recordFieldingCredits(
+  credits: NonNullable<AtBatRecord['fielding']>,
+  defenseMap: Map<Position, Player>,
+  fielderStats: Map<number, FielderGameStats>,
+): void {
+  const bump = (pos: Position, field: 'putouts' | 'assists' | 'errors') => {
+    const player = defenseMap.get(pos);
+    if (!player) return;
+    let s = fielderStats.get(player.id);
+    if (!s) {
+      s = newFielderStats(player.id, pos);
+      fielderStats.set(player.id, s);
+    }
+    s[field]++;
+  };
+  if (credits.putoutBy) bump(credits.putoutBy, 'putouts');
+  if (credits.extraPutouts) for (const p of credits.extraPutouts) bump(p, 'putouts');
+  if (credits.assistBy) for (const p of credits.assistBy) bump(p, 'assists');
+  if (credits.errorBy) bump(credits.errorBy, 'errors');
 }
 
 function buildDefenseMap(team: Team, pitcher: Player): Map<Position, Player> {
@@ -56,6 +86,7 @@ function initTeamState(team: Team): TeamGameState {
     },
     pitcherStats: new Map([[sp.id, newPitcherStats(sp.id)]]),
     batterStats: new Map(team.roster.map(p => [p.id, newBatterStats(p.id)])),
+    fielderStats: new Map(),
     defenseMap: buildDefenseMap(team, sp),
   };
 }
@@ -70,8 +101,6 @@ function advanceRunners(
   const scorers: Player[] = [];
   let nb: (Player | null)[] = [null, null, null];
   switch (result) {
-    case 'walk':
-    case 'hbp':
     case 'walk':
     case 'hbp':
     case 'reached-on-error': {
@@ -246,8 +275,11 @@ function simulateHalfInning(
       outs += ab.result === 'double-play' ? 2 : 1;
       // Apply special-case base/run effects for situational outs
       if (ab.result === 'double-play') {
-        // Lead runner (on 1B) and batter both out; runners on 2B/3B advance one
-        bases = [null, bases[0], bases[1]];
+        // Batter out at 1B, lead runner (on 1B) out at 2B. Runners on
+        // 2B/3B were not forced and hold their bases. (Previously this
+        // line moved bases[0] — the now-OUT r1 — onto 2B, creating a
+        // ghost runner that could 'score' on later hits.)
+        bases = [null, bases[1], bases[2]];
       } else if (ab.result === 'fielders-choice') {
         // Lead runner (on 1B) out; batter takes 1B; other runners advance
         bases = [batter, null, bases[1]];
@@ -285,6 +317,12 @@ function simulateHalfInning(
     const pitcherStats = fielding.pitcherStats.get(fielding.currentPitcher.id);
     if (pitcherStats) recordPitcherStat(pitcherStats, ab, runsThisPa);
 
+    // Fielding credits (PO/A/E) — pulled from ab.fielding which atBat.ts
+    // populates from (result, fieldedBy) using standard scorekeeping.
+    if (ab.fielding) {
+      recordFieldingCredits(ab.fielding, fielding.defenseMap, fielding.fielderStats);
+    }
+
     atBats.push(ab);
 
     if (outs < 3) {
@@ -314,6 +352,9 @@ export function simulateGame(home: Team, away: Team, rng: Rng): GameResult {
   const batterStats = new Map<number, BatterGameStats>();
   for (const [k, v] of homeState.batterStats) batterStats.set(k, v);
   for (const [k, v] of awayState.batterStats) batterStats.set(k, v);
+  const fielderStats = new Map<number, FielderGameStats>();
+  for (const [k, v] of homeState.fielderStats) fielderStats.set(k, v);
+  for (const [k, v] of awayState.fielderStats) fielderStats.set(k, v);
 
   return {
     homeTeam: home,
@@ -324,5 +365,6 @@ export function simulateGame(home: Team, away: Team, rng: Rng): GameResult {
     atBats,
     pitcherStats,
     batterStats,
+    fielderStats,
   };
 }
