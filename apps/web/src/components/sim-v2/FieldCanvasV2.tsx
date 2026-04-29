@@ -66,6 +66,13 @@ export default function FieldCanvasV2({
   const sceneRef = useRef<SceneAPI | null>(null);
   const worldRef = useRef<Container | null>(null);
   const transformRef = useRef<ReturnType<typeof makeTransform> | null>(null);
+  // Pixi scene init is async (await app.init). With autoplay=true, the
+  // player's rAF loop can fire the first events (game-start, inning-start,
+  // at-bat-start, even the first pitch) before sceneRef is set, which
+  // silently drops them — most visibly, the leadoff batter never appears
+  // at home plate. Buffer any events that arrive before the scene exists
+  // and drain them once it does.
+  const pendingEventsRef = useRef<SimEvent[]>([]);
 
   // Camera state (mirrored into refs so wheel/drag handlers don't restart effects).
   const [zoom, setZoom] = useState(1);
@@ -126,6 +133,12 @@ export default function FieldCanvasV2({
 
       const scene = createScene(transform);
       sceneRef.current = scene;
+
+      // Drain any events that fired before the scene was ready.
+      if (pendingEventsRef.current.length > 0) {
+        for (const ev of pendingEventsRef.current) scene.applyEvent(ev);
+        pendingEventsRef.current = [];
+      }
 
       // Wrap field + scene in a single "world" container we can scale/pan.
       const world = new Container();
@@ -264,10 +277,17 @@ export default function FieldCanvasV2({
     events,
     autoplay,
     onEvent: (e) => {
-      sceneRef.current?.applyEvent(e);
+      if (sceneRef.current) {
+        sceneRef.current.applyEvent(e);
+      } else {
+        // Scene not initialized yet — buffer for replay on init.
+        pendingEventsRef.current.push(e);
+      }
       setHud(prev => reduceHud(prev, e));
     },
     onSeek: () => {
+      // A new game (or reset) — drop any buffered events from the prior run.
+      pendingEventsRef.current = [];
       sceneRef.current?.reset();
       setHud(INITIAL_HUD);
     },

@@ -118,3 +118,22 @@ export function grounderBounceHeightFt(u: number): number {
 export function grounderBouncePx(u: number, t: FieldTransform): number {
   return grounderBounceHeightFt(u) * t.scale * 0.6;
 }
+
+/**
+ * Pitch altitude in feet at progress u (0..1). A pitched ball leaves a
+ * pitcher's hand at ~6 ft (release point) and crosses the strike zone
+ * at ~2.5 ft, with a slight downward arc from gravity. Models that as
+ * a linear release→plate ramp plus a tiny parabolic dip so the ball
+ * doesn't read as a flat laser.
+ */
+export function pitchHeightFt(u: number): number {
+  const release = 6;
+  const plate = 2.5;
+  const sag = 0.4; // small mid-flight gravity dip in feet
+  return release + (plate - release) * u - 4 * u * (1 - u) * sag;
+}
+
+/** Screen-space lift in px for a pitch. Same camera tilt as fly arcs. */
+export function pitchLiftPx(u: number, t: FieldTransform): number {
+  return pitchHeightFt(u) * t.scale * 0.6;
+}

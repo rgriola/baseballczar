@@ -609,6 +609,8 @@ export function buildEvents(g: GameResult): SimEvent[] {
         if (p.outcome === 'foul-out' && p.foulCaughtBy) {
           lastContactT = t;
           const fielderPlayer = currentDefenseMap.get(p.foulCaughtBy);
+          // Emit at dt=0 so the fielder converges in parallel with the
+          // ball's flight — catch happens as the ball arrives.
           push({
             type: 'fielder-converge',
             position: p.foulCaughtBy,
@@ -616,7 +618,7 @@ export function buildEvents(g: GameResult): SimEvent[] {
             fromPoint: FIELDER_POSITIONS_FT[p.foulCaughtBy],
             toPoint: p.battedBall.landingPoint,
             reachSec: p.battedBall.hangTimeSec || TIME.contactToFieldedDefault,
-          }, p.battedBall.hangTimeSec || TIME.contactToFieldedDefault);
+          }, 0);
         }
       }
     }
@@ -720,6 +722,9 @@ function emitBattedBallVisuals(
   const fielderPt = FIELDER_POSITIONS_FT[ab.fieldedBy];
   const fielderPlayer = defenseMap?.get(ab.fieldedBy);
   const reachSec = ball.hangTimeSec || TIME.contactToFieldedDefault;
+  // Emit converge AT contact (dt=0) so the fielder starts breaking on
+  // contact and the catch happens as the ball arrives — not after the
+  // ball has already landed and is sitting on the grass.
   push({
     type: 'fielder-converge',
     position: ab.fieldedBy,
@@ -727,7 +732,7 @@ function emitBattedBallVisuals(
     fromPoint: fielderPt,
     toPoint: playPoint,
     reachSec,
-  }, ball.hangTimeSec || TIME.contactToFieldedDefault);
+  }, 0);
 
   // Phase 5.16: dive/leap when the converge is tight against hangtime.
   // We treat reach within 0.25s of hangtime as "diving" effort. Leap is

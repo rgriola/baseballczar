@@ -15,6 +15,8 @@ import {
   arcHeightFt,
   grounderBouncePx,
   grounderBounceHeightFt,
+  pitchLiftPx,
+  pitchHeightFt,
   lerpFt,
 } from './coords';
 import { dugoutSpotFt } from './field/drawField';
@@ -42,8 +44,8 @@ interface MovingSprite {
   startT: number;
   /** Tween duration (engine seconds). */
   durSec: number;
-  /** 'line' = no arc, 'fly' = parabolic lift, 'grounder' = small bounces. */
-  arc: 'line' | 'fly' | 'grounder';
+  /** 'line' = no arc, 'fly' = parabolic lift, 'grounder' = small bounces, 'pitch' = release→plate ramp. */
+  arc: 'line' | 'fly' | 'grounder' | 'pitch';
   /** Apex altitude in feet (for fly arcs only). */
   apexFt: number;
 }
@@ -110,9 +112,11 @@ export function createScene(transform: FieldTransform): SceneAPI {
   // Ball shadow lives on the shadow layer (not parented to the ball) so
   // the lifted ball can rise off it. Updated per-frame in tick() based
   // on the ball's current ground projection + current altitude.
+  // Drawn larger than the ball so a hit ball reads as casting a real
+  // shadow on the grass; per-frame logic grows + softens it with altitude.
   const ballShadow = new Graphics()
-    .ellipse(0, 0, BALL_RADIUS_PX * 1.4, BALL_RADIUS_PX * 0.6)
-    .fill({ color: 0x000000, alpha: 0.45 });
+    .ellipse(0, 0, BALL_RADIUS_PX * 2.4, BALL_RADIUS_PX * 1.1)
+    .fill({ color: 0x000000, alpha: 0.55 });
   ballShadow.position.set(ballStartPx.x, ballStartPx.y + BALL_RADIUS_PX * 0.4);
   layerShadows.addChild(ballShadow);
 
@@ -169,7 +173,7 @@ export function createScene(transform: FieldTransform): SceneAPI {
     to: { x: number; y: number },
     durSec: number,
     clockSec: number,
-    arc: 'line' | 'fly' | 'grounder' = 'line',
+    arc: 'line' | 'fly' | 'grounder' | 'pitch' = 'line',
     apexFt = 0,
   ) => {
     sprite.from = { ...sprite.cur };
@@ -286,6 +290,7 @@ export function createScene(transform: FieldTransform): SceneAPI {
     const u = Math.min(1, Math.max(0, (clockSec - sprite.startT) / sprite.durSec));
     if (sprite.arc === 'fly') return arcHeightFt(u, sprite.apexFt);
     if (sprite.arc === 'grounder') return grounderBounceHeightFt(u);
+    if (sprite.arc === 'pitch') return pitchHeightFt(u);
     return 0;
   };
 
@@ -297,15 +302,17 @@ export function createScene(transform: FieldTransform): SceneAPI {
     let yOffset = 0;
     if (sprite.arc === 'fly') yOffset = arcLiftPx(u, sprite.apexFt, transform);
     else if (sprite.arc === 'grounder') yOffset = grounderBouncePx(u, transform);
+    else if (sprite.arc === 'pitch') yOffset = pitchLiftPx(u, transform);
     sprite.gfx.position.set(px.x, px.y - yOffset);
     if (u >= 1) sprite.durSec = 0;
   };
 
   /**
    * Update the ball's shadow + 3D-ish scaling based on its current
-   * altitude. Shadow stays on the ground (no lift), grows fainter and
-   * smaller as the ball climbs; ball itself scales up so it reads as
-   * "closer to the camera" when high in the air.
+   * altitude. Shadow stays on the ground (no lift). For a hit ball the
+   * shadow GROWS and softens as the ball climbs (top-down-ish camera),
+   * which sells the height of fly balls. Ball itself scales up so it
+   * reads as "closer to the camera" when high in the air.
    */
   const updateBallShadow = (clockSec: number) => {
     const groundPx = ftToPx(ball.cur, transform);
@@ -313,9 +320,10 @@ export function createScene(transform: FieldTransform): SceneAPI {
     // Scale: ball appears ~1.6x larger at apex of a 60-ft fly (cap at 2.2x).
     const ballScale = Math.min(2.2, 1 + h / 80);
     ballGfx.scale.set(ballScale);
-    // Shadow: shrinks + fades + offsets slightly behind the ball as height grows.
-    const shadowScale = Math.max(0.35, 1 - h / 220);
-    const shadowAlpha = Math.max(0.15, 0.55 - h / 200);
+    // Shadow: grows with altitude (cap ~2.0x at 60 ft) and softens as the
+    // ball climbs so it stays readable as a shadow rather than a blob.
+    const shadowScale = Math.min(2.0, 1 + h / 60);
+    const shadowAlpha = Math.max(0.18, 0.6 - h / 150);
     ballShadow.scale.set(shadowScale);
     ballShadow.alpha = shadowAlpha;
     // Shadow sits just under the ball on ground (camera is slightly tilted).
@@ -389,11 +397,13 @@ export function createScene(transform: FieldTransform): SceneAPI {
         break;
       }
       case 'pitch': {
-        // Animate ball P → C
+        // Animate ball P → C with a release-point arc: ball starts ~6 ft
+        // above the mound and arrives ~2.5 ft above the plate, so its
+        // shadow trails behind it on the way in.
         const from = FIELDER_POSITIONS_FT.P;
         const to = FIELDER_POSITIONS_FT.C;
         ball.cur = { ...from };
-        startTween(ball, to, e.flightSec, e.t, 'line');
+        startTween(ball, to, e.flightSec, e.t, 'pitch');
         break;
       }
       case 'contact': {
