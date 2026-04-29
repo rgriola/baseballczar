@@ -267,10 +267,22 @@ export function createScene(transform: FieldTransform): SceneAPI {
         break;
       }
       case 'contact': {
-        // Ball flight from home plate to landing point
+        // Ball flight from home plate to landing point.
         ball.cur = { x: 0, y: 0 };
-        const apex = e.launchAngleDeg > 25 ? Math.max(20, e.distanceFt * 0.18) : 0;
-        const arc = e.launchAngleDeg > 15 ? 'fly' : 'grounder';
+        // Compute apex from kinematics so the visual loft matches the
+        // launch angle + exit velocity. Vacuum apex = (v\u00b7sin\u03b8)\u00b2 / (2g),
+        // then \u00d70.75 to roughly account for drag (real fly balls peak a
+        // bit lower than vacuum predicts).
+        //   v in ft/s = mph \u00d7 5280/3600
+        //   g         = 32.174 ft/s\u00b2
+        // Anything below ~12\u00b0 LA is a grounder; above that we render a
+        // fly arc, even at modest 15\u201325\u00b0 line drives (which previously
+        // got apex=0 and looked like they hugged the ground).
+        const v = e.exitVeloMph * (5280 / 3600);
+        const sinTheta = Math.sin((e.launchAngleDeg * Math.PI) / 180);
+        const vacuumApex = (v * sinTheta) * (v * sinTheta) / (2 * 32.174);
+        const arc = e.launchAngleDeg > 12 ? 'fly' : 'grounder';
+        const apex = arc === 'fly' ? Math.max(6, vacuumApex * 0.75) : 0;
         startTween(ball, e.landingPoint, e.hangTimeSec || 1.2, e.t, arc, apex);
         break;
       }

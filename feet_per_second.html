@@ -108,6 +108,20 @@
     </div>
     <div class="result" id="result4"></div>
   </div>
+
+  <div class="container">
+    <h2>Batted Ball Trajectory</h2>
+    <div class="fields">
+      <label for="evMph">Exit velocity (mph):</label>
+      <input type="number" id="evMph" min="0.01" step="0.1" inputmode="decimal" autocomplete="off">
+
+      <label for="laDeg">Launch angle (degrees):</label>
+      <input type="number" id="laDeg" min="0" max="89" step="0.1" inputmode="decimal" autocomplete="off">
+
+      <button type="button" id="trajBtn">Calculate</button>
+    </div>
+    <div class="result" id="result5"></div>
+  </div>
   </div><!-- /.grid -->
 
   <script>
@@ -163,16 +177,52 @@
         `Time: ${time.toFixed(3)} seconds  (${mph.toFixed(2)} mph = ${fps.toFixed(2)} ft/sec)`;
     }
 
+    // Batted-ball trajectory. Two outputs:
+    //   1) Vacuum (no drag): textbook projectile, useful as upper bound.
+    //   2) With-drag estimate: apply a Statcast-ish range factor that
+    //      grows with EV (faster balls lose proportionally more to drag).
+    //   Apex is reported from the vacuum solution since drag mainly
+    //   shortens range; vertical apex is close enough for a calculator.
+    const G_FT_S2 = 32.174;
+    function calcTrajectory() {
+      const ev = parseFloat($('evMph').value);
+      const laDeg = parseFloat($('laDeg').value);
+      if (!isFinite(ev) || !isFinite(laDeg) || ev <= 0 || laDeg < 0 || laDeg >= 90) {
+        $('result5').textContent = 'Enter EV > 0 and launch angle 0\u201389\u00b0.';
+        return;
+      }
+      const v = ev * MPH_TO_FPS;          // ft/s
+      const theta = laDeg * Math.PI / 180;
+      const vx = v * Math.cos(theta);
+      const vy = v * Math.sin(theta);
+      const rangeVac = (v * v * Math.sin(2 * theta)) / G_FT_S2;     // ft
+      const apex = (vy * vy) / (2 * G_FT_S2);                        // ft
+      const hang = (2 * vy) / G_FT_S2;                               // s
+      // Drag estimate: real fly balls travel ~60\u201380% of vacuum range.
+      // Linear ramp: 100mph EV \u2248 0.62 factor; 60mph \u2248 0.85.
+      const dragFactor = Math.max(0.55, Math.min(0.95, 1.05 - ev * 0.0042));
+      const rangeReal = rangeVac * dragFactor;
+      $('result5').innerHTML =
+        `Distance (with drag): <b>${rangeReal.toFixed(0)} ft</b><br>` +
+        `Apex height: <b>${apex.toFixed(1)} ft</b><br>` +
+        `Hang time: ${hang.toFixed(2)} s<br>` +
+        `<span style="opacity:0.7;font-weight:normal">` +
+          `(vacuum range ${rangeVac.toFixed(0)} ft \u00d7 ${dragFactor.toFixed(2)} drag)` +
+        `</span>`;
+    }
+
     $('fpsBtn').addEventListener('click', calcFps);
     $('timeBtn').addEventListener('click', calcTime);
     $('mphBtn').addEventListener('click', calcMph);
     $('mphTimeBtn').addEventListener('click', calcTimeAtMph);
+    $('trajBtn').addEventListener('click', calcTrajectory);
 
     // Live update as you type, so values are never lost on click.
     ['distance', 'time'].forEach(id => $(id).addEventListener('input', calcFps));
     ['distance2', 'fps'].forEach(id => $(id).addEventListener('input', calcTime));
     ['distance3', 'time3'].forEach(id => $(id).addEventListener('input', calcMph));
     ['mph4', 'distance4'].forEach(id => $(id).addEventListener('input', calcTimeAtMph));
+    ['evMph', 'laDeg'].forEach(id => $(id).addEventListener('input', calcTrajectory));
 
     // Allow Enter key to recalc without submitting any form.
     document.addEventListener('keydown', (e) => {
@@ -182,6 +232,7 @@
       if (t.id === 'distance2' || t.id === 'fps') { e.preventDefault(); calcTime(); }
       if (t.id === 'distance3' || t.id === 'time3') { e.preventDefault(); calcMph(); }
       if (t.id === 'mph4' || t.id === 'distance4') { e.preventDefault(); calcTimeAtMph(); }
+      if (t.id === 'evMph' || t.id === 'laDeg') { e.preventDefault(); calcTrajectory(); }
     });
   </script>
 </body>
