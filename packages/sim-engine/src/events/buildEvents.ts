@@ -213,13 +213,17 @@ export function buildEvents(g: GameResult): SimEvent[] {
           flightSec: flight, source: 'catcher',
         }, pitchEventT + TIME.pitchToHomeSec + TIME.catcherHoldSec);
       } else if (p.outcome === 'foul' && p.battedBall) {
-        // Foul left the field of play — umpire ball, slow.
+        // Foul left the field of play — umpire ball, slow. Wait for the
+        // ball's flight to play out (pitch + hang time) plus a half-second
+        // buffer before the umpire hands a fresh ball back to the pitcher,
+        // so the foul arc isn't cut short by the return animation.
         const flight = ballReturnFlightSec(catcherPt, pitcherPt, true);
+        const foulHang = p.battedBall.hangTimeSec || 1.2;
         pushAt({
           type: 'ball-return',
           fromPoint: catcherPt, toPoint: pitcherPt,
           flightSec: flight, source: 'umpire',
-        }, pitchEventT + TIME.pitchToHomeSec + TIME.umpireHoldSec);
+        }, pitchEventT + TIME.pitchToHomeSec + foulHang + 0.5);
       }
     }
 
