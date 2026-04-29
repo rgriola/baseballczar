@@ -55,7 +55,13 @@ export function emitBattedBallVisuals(
   if (!ab.fieldedBy) return;
   const fielderPt = FIELDER_POSITIONS_FT[ab.fieldedBy];
   const fielderPlayer = defenseMap?.get(ab.fieldedBy);
-  const reachSec = ball.hangTimeSec || TIME.contactToFieldedDefault;
+  // For caught flies, the fielder converges to the landing point at
+  // hangtime. For balls that drop and roll, the engine resolved an
+  // intercept time (`fieldedAtSec`) past hangtime — use it so the
+  // converge animation tracks the chase along the roll path.
+  const reachSec = ball.fieldedAtSec
+    ?? ball.hangTimeSec
+    ?? TIME.contactToFieldedDefault;
   // Emit converge AT contact (dt=0) so the fielder starts breaking on
   // contact and the catch happens as the ball arrives — not after the
   // ball has already landed and is sitting on the grass.
@@ -89,6 +95,36 @@ export function emitBattedBallVisuals(
   // Infielder throw to 1B for ground-outs / FCs
   const isInfielder = !['LF', 'CF', 'RF'].includes(ab.fieldedBy);
   const isCaught = ['fly-out', 'line-out', 'pop-out', 'sac-fly'].includes(ab.result);
+
+  // ─── Ball-roll segment (post-landing) ────────────────────────
+  // For fly balls that drop fair and aren't caught, the ball bounces
+  // and rolls from `landingPoint` toward the fielder's intercept point
+  // (already resolved into `ab.battedBall.fieldedAtPoint` by the
+  // engine). Emit a `ball-roll` so the renderer tweens the ball along
+  // the grass instead of stopping it dead at the landing spot.
+  // Skipped for: grounders (continuous trajectory; no separate landing
+  // beat in the visual), HRs (left the field), foul-outs (caught in
+  // the air), and any caught-fly result.
+  const isGrounderVisual = ball.launchAngleDeg < 5;
+  if (!isCaught && !isGrounderVisual && !ball.isHomeRun && !ball.isFoul
+      && ball.fieldedAtPoint) {
+    const rollDx = ball.fieldedAtPoint.x - ball.landingPoint.x;
+    const rollDy = ball.fieldedAtPoint.y - ball.landingPoint.y;
+    const rollLen = Math.hypot(rollDx, rollDy);
+    if (rollLen > 1) {
+      // Time the ball spends rolling = distance / average roll speed
+      // (avg of landing speed and 0). Falls back to a short floor so
+      // the visual reads even on a tiny dribble past the landing.
+      const avgSpeed = Math.max(8, ball.landingSpeedFps * 0.5);
+      const rollSec = Math.max(0.15, rollLen / avgSpeed);
+      push({
+        type: 'ball-roll',
+        fromPoint: ball.landingPoint,
+        toPoint: ball.fieldedAtPoint,
+        rollSec,
+      }, ball.hangTimeSec);
+    }
+  }
 
   // ─── Coverage / cutoff / backup positioning (Phase 2) ───
   // Driven by the deterministic responsibility table. Emit

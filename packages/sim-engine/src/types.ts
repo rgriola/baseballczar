@@ -92,12 +92,30 @@ export interface BattedBall {
   distanceFt: number;
   hangTimeSec: number;
   landingPoint: { x: number; y: number };  // ft, origin = home plate
+  /** Where the ball would come to rest if no fielder intercepts the
+   *  post-landing roll. For grounders this equals `landingPoint`. For
+   *  fly balls that drop fair, the ball bounces and rolls past
+   *  `landingPoint` along its spray vector until grass friction stops
+   *  it or it hits the outfield wall. */
+  restPoint: { x: number; y: number };
+  /** How far the ball rolls AFTER landing (ft). 0 for grounders (the
+   *  rollout is already in `distanceFt`) and HRs. */
+  rollDistanceFt: number;
+  /** Horizontal speed at the moment the ball touches grass (ft/sec).
+   *  Used by the OF pursuit solver to compute time-along-roll. */
+  landingSpeedFps: number;
   /** For grounders intercepted by an infielder before they reach their
    *  natural landing point: where the fielder actually gloved the ball.
    *  The renderer + fielder-converge / throw events use this when set;
    *  the hit-classifier still uses `landingPoint` / `distanceFt` (true
    *  ball physics) to decide single vs double vs triple. */
   fieldedAtPoint?: { x: number; y: number };
+  /** Time (seconds since contact) at which the fielder gloves the ball
+   *  at `fieldedAtPoint`. For caught flies this equals `hangTimeSec`.
+   *  For non-caught flies it includes the chase along the post-landing
+   *  roll. The visualizer uses this to time the converge animation so
+   *  the fielder arrives at the intercept point as the ball gets there. */
+  fieldedAtSec?: number;
   isFoul: boolean;
   isHomeRun: boolean;
 }

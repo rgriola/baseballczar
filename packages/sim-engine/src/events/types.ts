@@ -57,6 +57,21 @@ export interface ContactEvent extends BaseEvent {
   isFoul: boolean; isHomeRun: boolean;
 }
 
+/**
+ * Post-landing roll segment for a fly ball that drops fair and isn't
+ * caught. Emitted at landing time (relative to the at-bat) so the
+ * renderer can tween the ball along the grass from the landing point
+ * toward where the fielder ultimately gloves it. `rollSec` is the
+ * time the ball spends rolling (decelerating on grass) before the
+ * fielder corrals it. For grounders and HRs no `ball-roll` is emitted.
+ */
+export interface BallRollEvent extends BaseEvent {
+  type: 'ball-roll';
+  fromPoint: { x: number; y: number };
+  toPoint: { x: number; y: number };
+  rollSec: number;
+}
+
 export interface FielderConvergeEvent extends BaseEvent {
   type: 'fielder-converge';
   position: Position; playerId: number;
@@ -170,7 +185,7 @@ export interface GameEndEvent extends BaseEvent {
 export type SimEvent =
   | GameStartEvent | InningStartEvent | AtBatStartEvent
   | PitchEvt | ContactEvent | FielderConvergeEvent | ThrowEvent | CoverBaseEvent
-  | FielderDiveEvent | BallReturnEvent
+  | FielderDiveEvent | BallReturnEvent | BallRollEvent
   | RunnerAdvanceEvent | OutEvent | RunScoredEvent
   | AtBatEndEvent | InningEndEvent | GameEndEvent;
 

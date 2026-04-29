@@ -291,6 +291,15 @@ export function createScene(transform: FieldTransform): SceneAPI {
         if (sp) startTween(sp, e.toPoint, e.reachSec, e.t, 'line');
         break;
       }
+      case 'ball-roll': {
+        // Ball rolls along the grass from landing point toward the
+        // fielder's intercept point. Linear ground tween (no apex):
+        // gameplay-truthful — the engine already resolved the
+        // intercept time, we just animate the ball getting there.
+        ball.cur = { ...e.fromPoint };
+        startTween(ball, e.toPoint, e.rollSec, e.t, 'grounder');
+        break;
+      }
       case 'cover-base': {
         // Cover fielder breaks for the bag while the throw is in the air.
         const sp = fielders.get(e.position);

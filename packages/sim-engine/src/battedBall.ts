@@ -77,6 +77,9 @@ export function rollBattedBall(
     distanceFt: f.distanceFt,
     hangTimeSec: f.hangTimeSec,
     landingPoint: f.landingPoint,
+    restPoint: f.restPoint,
+    rollDistanceFt: f.rollDistanceFt,
+    landingSpeedFps: f.landingSpeedFps,
     isFoul: f.isFoul,
     isHomeRun: f.isHomeRun,
   };
@@ -231,25 +234,106 @@ export function resolveBattedBall(
   }
 
   // Ball drops / rolls. For grounders, ball travels to fielder; for flies
-  // that aren't caught, fielder ran to landing point.
+  // that aren't caught, the ball lands at `landingPoint` and then keeps
+  // rolling along its spray vector toward `restPoint`. The fielder must
+  // intercept somewhere along that roll path — so the OF reach time
+  // becomes "how long until I'm standing where the ball is", not just
+  // "how long until I reach the landing spot".
   const fielderPt = FIELDER_POSITIONS_FT[conv.position];
   const isOutfielder = conv.position === 'LF' || conv.position === 'CF' || conv.position === 'RF';
   const isInfielder = !isOutfielder;
 
-  // Time the fielder takes to be "on the ball with glove on it":
-  //   grounder → ball travels at ~50% of exit velo to him (rolling friction)
-  //   fly      → use his computed reach time + glove pickup
-  const ballRollSpeedFps = ball.exitVeloMph * CONFIG.flight.mphToFps
-    * CONFIG.fielding.groundBallFrictionMul;
-  const distToFielder = Math.hypot(
-    fielderPt.x - ball.landingPoint.x,
-    fielderPt.y - ball.landingPoint.y,
-  );
-  const ballTravelSec = isGrounder
-    ? CONFIG.fielder.reactionSec + distToFielder
-        / Math.max(CONFIG.fielding.minRollSpeedFps, ballRollSpeedFps)
-    : conv.reachTimeSec;
-  const totalToBall = ballTravelSec + CONFIG.fielding.pickupSec;
+  // ─── Solve OF intercept along the post-landing roll ─────────────
+  // Fixed-point iteration: start by assuming the fielder reaches the
+  // landing point at his computed reachTime; if the ball has already
+  // rolled past by then, recompute his reach time to that new point;
+  // converges in 3-5 passes. Skipped for grounders (no separate roll
+  // segment) and HRs (left the field).
+  let interceptPoint: { x: number; y: number } = ball.landingPoint;
+  let totalToBall: number;
+  if (isGrounder) {
+    const ballRollSpeedFps = ball.exitVeloMph * CONFIG.flight.mphToFps
+      * CONFIG.fielding.groundBallFrictionMul;
+    const distToFielder = Math.hypot(
+      fielderPt.x - ball.landingPoint.x,
+      fielderPt.y - ball.landingPoint.y,
+    );
+    const ballTravelSec = CONFIG.fielder.reactionSec + distToFielder
+      / Math.max(CONFIG.fielding.minRollSpeedFps, ballRollSpeedFps);
+    totalToBall = ballTravelSec + CONFIG.fielding.pickupSec;
+  } else {
+    // Roll vector & physics constants.
+    const rollDx = ball.restPoint.x - ball.landingPoint.x;
+    const rollDy = ball.restPoint.y - ball.landingPoint.y;
+    const rollLen = Math.hypot(rollDx, rollDy);
+    const decel = CONFIG.flight.roll.grassDecelFtPerSec2;
+    const vLand = ball.landingSpeedFps;
+    // Fielder range (ft/sec), same model as findConverger.
+    const range = CONFIG.fielder.rangeFtPerSec
+      + (conv.fielder.skills.defense - 5) * 4.0
+      + (conv.fielder.skills.speed - 5) * 1.0;
+    const effRange = Math.max(12, range);
+    // Fielder time to reach a point on the roll path parameterized by
+    // s ∈ [0, rollLen]: T = max(reachLanding, reach to that point).
+    let s = 0;  // ft past landing
+    let T = conv.reachTimeSec;
+    for (let i = 0; i < CONFIG.flight.roll.pursuitIterations; i++) {
+      // Time the ball reaches s past landing (s = vLand·τ − ½·a·τ²).
+      // τ = (vLand − √(vLand² − 2·a·s)) / a, with τ → ∞ if s > naturalRoll.
+      const disc = vLand * vLand - 2 * decel * s;
+      const tau = disc > 0 ? (vLand - Math.sqrt(disc)) / decel
+                           : (rollLen > 0 ? rollLen / Math.max(1, vLand * 0.5) : 0);
+      const tBallAtS = ball.hangTimeSec + tau;
+      // Where the ball is at that time (along the unit roll vector).
+      const interceptX = rollLen > 0
+        ? ball.landingPoint.x + (rollDx / rollLen) * s
+        : ball.landingPoint.x;
+      const interceptY = rollLen > 0
+        ? ball.landingPoint.y + (rollDy / rollLen) * s
+        : ball.landingPoint.y;
+      const dist = Math.hypot(fielderPt.x - interceptX, fielderPt.y - interceptY);
+      const tFielder = CONFIG.fielder.reactionSec + dist / effRange;
+      // The intercept time is whichever party arrives last.
+      const tMeet = Math.max(tBallAtS, tFielder);
+      // If the fielder arrives first (tFielder < tBallAtS), the ball is
+      // still on its way — push s back so the fielder doesn't camp at
+      // a spot the ball overshoots. If the fielder is late, advance s
+      // along the roll.
+      const fielderArrivalAtLanding = CONFIG.fielder.reactionSec
+        + Math.hypot(fielderPt.x - ball.landingPoint.x,
+                     fielderPt.y - ball.landingPoint.y) / effRange;
+      // How far the ball rolled by the time the fielder reached the
+      // most-recent guess: solve s_new from when fielder gets there.
+      const tauNew = Math.max(0, tFielder - ball.hangTimeSec);
+      const sNew = Math.max(0, Math.min(rollLen,
+        vLand * tauNew - 0.5 * decel * tauNew * tauNew));
+      // Damp the update for stability.
+      s = 0.6 * sNew + 0.4 * s;
+      T = tMeet;
+      // Early-out: if the fielder arrives before the ball even lands
+      // (i.e. he's already standing at landingPoint), the intercept is
+      // landing itself — caught flag would have triggered if it were
+      // an actual catch, so this is a "ball drops in front of him".
+      if (fielderArrivalAtLanding <= ball.hangTimeSec) {
+        s = 0;
+        T = ball.hangTimeSec;
+        break;
+      }
+    }
+    // Final intercept point.
+    if (rollLen > 0) {
+      interceptPoint = {
+        x: ball.landingPoint.x + (rollDx / rollLen) * s,
+        y: ball.landingPoint.y + (rollDy / rollLen) * s,
+      };
+    }
+    totalToBall = T + CONFIG.fielding.pickupSec;
+    // Record where the fielder actually gloved it (drives visualizer +
+    // throw geometry). For grounders this is set earlier in the
+    // intercept-projection block; here we set it for non-caught flies.
+    ball.fieldedAtPoint = interceptPoint;
+    ball.fieldedAtSec = T;
+  }
 
   if (isInfielder) {
     // Throw to 1B; race vs batter (or error → reached safely)

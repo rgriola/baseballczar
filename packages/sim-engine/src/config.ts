@@ -38,6 +38,22 @@ export const CONFIG = {
     gravityFtPerSec2: 32.174,
     dragCoeff: 0.0078,           // tune knob — lower = ball carries farther
     mphToFps: 1.467,             // 1 mph ≈ 1.467 ft/sec
+    /** Post-landing roll model. After a fly ball drops fair (and isn't
+     *  caught), it bounces and rolls along its spray vector until grass
+     *  friction stops it or it reaches the wall. The fielder must
+     *  intercept somewhere along that roll. */
+    roll: {
+      /** Fraction of horizontal contact velocity retained after the
+       *  first bounce. ~0.30 reproduces "shot to the wall" rollouts of
+       *  ~40 ft for a 100mph LA-22° drive. */
+      bounceKeepFrac: 0.30,
+      /** Constant deceleration on outfield grass (ft/sec²) once the
+       *  ball is rolling. Higher = ball stops sooner. */
+      grassDecelFtPerSec2: 22,
+      /** Fielder pursuit-loop max iterations. The intercept point is
+       *  solved by fixed-point iteration; 5 is more than enough. */
+      pursuitIterations: 5,
+    },
   },
 
   // ─── Throw velocities (mph) by position ───────────────────────
