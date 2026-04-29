@@ -42,3 +42,9 @@ Yes. Please Conduct a comprehensive review of the Baseballczar 2.0 project at th
 - The Pitcher Roster needs to allow 10 pitchers, no more no less, the rest are reserve and the Rotation page should have 10 pitchers 5 starters and the 5 Relievers.
 
 ...
+Arp 28 2026
+Yes > we are migrating to a new engine all together > Path — Full migration to the new engine. C reason: This project is in dev stage so we are going full out. The new sim needs a stand alone sandbox for quickly iterating games to make sure it works correctly ie; the outcomes, physics and eventual graphics. I also want to see what you can do!
+
+...
+
+Apr 28, there was an issue where a home run the runner did not touch the bases, rather traveled around the pitchers mound .

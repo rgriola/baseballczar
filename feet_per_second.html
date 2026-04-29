@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Feet Per Second Calculator</title>
+  <style>
+    body { font-family: sans-serif; background: #181e24; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 100vh; margin: 0; padding: 2rem 1rem; gap: 1.5rem; }
+    .container { background: #232b36; padding: 2rem 2.5rem; border-radius: 12px; box-shadow: 0 2px 12px #0004; width: 320px; }
+    label { display: block; margin-top: 1rem; font-weight: bold; }
+    input[type="number"] { width: 100%; box-sizing: border-box; padding: 0.4rem; border-radius: 4px; border: 1px solid #444; background: #222; color: #fff; font-size: 1rem; }
+    .result { margin-top: 1.5rem; font-size: 1.2rem; font-weight: bold; min-height: 1.4em; }
+    button { margin-top: 1.5rem; padding: 0.5rem 1.2rem; border: none; border-radius: 4px; background: #3366ff; color: #fff; font-size: 1rem; cursor: pointer; }
+    button:hover { background: #274bb3; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Feet Per Second Calculator</h2>
+    <div>
+      <label for="distance">Distance (feet):</label>
+      <input type="number" id="distance" min="0" step="0.01" inputmode="decimal" autocomplete="off">
+
+      <label for="time">Time (seconds):</label>
+      <input type="number" id="time" min="0.01" step="0.01" inputmode="decimal" autocomplete="off">
+
+      <button type="button" id="fpsBtn">Calculate</button>
+    </div>
+    <div class="result" id="result"></div>
+  </div>
+
+  <div class="container">
+    <h2>Time to Travel Calculator</h2>
+    <div>
+      <label for="distance2">Distance (feet):</label>
+      <input type="number" id="distance2" min="0" step="0.01" inputmode="decimal" autocomplete="off">
+
+      <label for="fps">Speed (feet/second):</label>
+      <input type="number" id="fps" min="0.01" step="0.01" inputmode="decimal" autocomplete="off">
+
+      <button type="button" id="timeBtn">Calculate</button>
+    </div>
+    <div class="result" id="result2"></div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function calcFps() {
+      const d = parseFloat($('distance').value);
+      const t = parseFloat($('time').value);
+      if (!isFinite(d) || !isFinite(t) || t <= 0) {
+        $('result').textContent = 'Enter a distance and a time > 0.';
+        return;
+      }
+      $('result').textContent = `Speed: ${(d / t).toFixed(2)} feet/second`;
+    }
+
+    function calcTime() {
+      const d = parseFloat($('distance2').value);
+      const s = parseFloat($('fps').value);
+      if (!isFinite(d) || !isFinite(s) || s <= 0) {
+        $('result2').textContent = 'Enter a distance and a speed > 0.';
+        return;
+      }
+      $('result2').textContent = `Time: ${(d / s).toFixed(2)} seconds`;
+    }
+
+    $('fpsBtn').addEventListener('click', calcFps);
+    $('timeBtn').addEventListener('click', calcTime);
+
+    // Live update as you type, so values are never lost on click.
+    ['distance', 'time'].forEach(id => $(id).addEventListener('input', calcFps));
+    ['distance2', 'fps'].forEach(id => $(id).addEventListener('input', calcTime));
+
+    // Allow Enter key to recalc without submitting any form.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      const t = e.target;
+      if (t.id === 'distance' || t.id === 'time') { e.preventDefault(); calcFps(); }
+      if (t.id === 'distance2' || t.id === 'fps') { e.preventDefault(); calcTime(); }
+    });
+  </script>
+</body>
+</html>

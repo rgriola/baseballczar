@@ -31,8 +31,7 @@ import type {
 } from './types';
 import type { Position } from './config';
 import { FIELDER_POSITIONS_FT } from './physics/positions';
-import { BASE_COORDS_FT, runnerTimeSec, type BaseName } from './physics/speed';
-import { throwTimeSec } from './physics/throw';
+import { BASE_COORDS_FT } from './physics/speed';
 
 // ─── Time budgets (sim seconds) ────────────────────────────────
 const TIME = {
@@ -42,12 +41,10 @@ const TIME = {
   fieldedToThrowSec: 0.6,      // glove → release
   throwToBaseSec: 1.0,         // average infield throw
   betweenAtBatsSec: 25,
-  betweenInningsSec: 120,
-  /** Reaction time between contact and a runner taking off. */
+  betweenInningsSec: 120,  /** Reaction time between contact and a runner taking off. */
   runnerReactionSec: 0.4,
   /** Time to traverse one 90-ft segment (home→1B, 1B→2B, etc.). */
-  perBaseSec: 3.5,
-} as const;
+  perBaseSec: 3.5,} as const;
 
 // ─── Event types ───────────────────────────────────────────────
 export interface BaseEvent {
@@ -126,21 +123,6 @@ export interface CoverBaseEvent extends BaseEvent {
   arriveSec: number;
 }
 
-/**
- * Phase 5.16: a fielder "layout" — a dive (low) or leap (high) at the
- * point of attempted catch. Emitted when the converge reach-time is
- * tight relative to ball hangtime so the renderer can play a one-shot
- * extension animation instead of just sliding the sprite. Renderer is
- * free to ignore this if it doesn't have art for it.
- */
-export interface FielderDiveEvent extends BaseEvent {
-  type: 'fielder-dive';
-  position: Position; playerId: number;
-  atPoint: { x: number; y: number };
-  variant: 'dive' | 'leap';
-  successful: boolean;
-}
-
 export interface RunnerAdvanceEvent extends BaseEvent {
   type: 'runner-advance';
   runnerId: number;
@@ -184,7 +166,6 @@ export interface GameEndEvent extends BaseEvent {
 export type SimEvent =
   | GameStartEvent | InningStartEvent | AtBatStartEvent
   | PitchEvt | ContactEvent | FielderConvergeEvent | ThrowEvent | CoverBaseEvent
-  | FielderDiveEvent
   | RunnerAdvanceEvent | OutEvent | RunScoredEvent
   | AtBatEndEvent | InningEndEvent | GameEndEvent;
 
@@ -240,7 +221,6 @@ function emitBaseRunningEvents(
   startT: number,
   pushAt: (e: SimEventInit, absT: number) => void,
   throwArrivesAt?: number,
-  catchArrivesAt?: number,
 ): { newBases: (Player | null)[]; outsAfter: number; latestT: number } {
   const [r1, r2, r3] = bases;
   const batter = ab.batter;
@@ -291,38 +271,18 @@ function emitBaseRunningEvents(
    * `runner-advance` event per 90-ft segment so the renderer touches
    * each intermediate base.
    */
-  const advance = (
-    runner: Player,
-    from: Base,
-    to: 'first' | 'second' | 'third' | 'home',
-    isBatter = false,
-  ) => {
+  const advance = (runner: Player, from: Base, to: 'first' | 'second' | 'third' | 'home') => {
     const path = pathBetween(from, to);
     let cursor = tOf(runner.id);
     for (let i = 0; i < path.length - 1; i++) {
-      const segFrom = path[i] as BaseName;
-      const segTo = path[i + 1] as BaseName;
-      // Only the very first segment off the bat counts as fromContact;
-      // subsequent base-to-base legs use the secondary lead model.
-      const fromContact = isBatter && segFrom === 'home';
-      let segSec = runnerTimeSec(
-        segFrom,
-        segTo,
-        runner.skills.speed,
-        fromContact ? { fromContact: true, hand: runner.hand } : {},
-      );
-      // Home-run trot: every runner (batter + anyone already on base)
-      // jogs the bases as a celebration. Slow each leg by ~60% so the
-      // visual reads as a trot rather than a sprint.
-      if (ab.result === 'home-run') segSec *= 1.6;
       pushAt({
         type: 'runner-advance',
         runnerId: runner.id,
         fromBase: path[i],
         toBase: path[i + 1] as 'first' | 'second' | 'third' | 'home',
-        travelSec: segSec,
+        travelSec: TIME.perBaseSec,
       }, cursor);
-      cursor += segSec;
+      cursor += TIME.perBaseSec;
     }
     runnerT.set(runner.id, cursor);
     if (to === 'home') score(runner, cursor);
@@ -364,22 +324,13 @@ function emitBaseRunningEvents(
         i++;
       }
       if (push1) advance(push1, 'third', 'home');
-
-      // Phase 5.13: throw error — every existing baserunner advances one
-      // extra base on top of the force (matches game.ts advanceRunners).
-      if (ab.result === 'reached-on-error' && ab.errorType === 'throw') {
-        const after = [nb[0], nb[1], nb[2]];
-        if (after[2] && after[2] !== batter) advance(after[2], 'third', 'home');
-        if (after[1] && after[1] !== batter) advance(after[1], 'second', 'third');
-        if (after[0] && after[0] !== batter) advance(after[0], 'first', 'second');
-      }
       break;
     }
     case 'single': {
       if (r3) advance(r3, 'third', 'home');
       if (r2) advance(r2, 'second', 'home');
       if (r1) advance(r1, 'first', 'third');
-      advance(batter, 'home', 'first', true);
+      advance(batter, 'home', 'first');
       nb = [batter, null, r1 ?? null];
       break;
     }
@@ -387,7 +338,7 @@ function emitBaseRunningEvents(
       if (r3) advance(r3, 'third', 'home');
       if (r2) advance(r2, 'second', 'home');
       if (r1) advance(r1, 'first', 'third');
-      advance(batter, 'home', 'second', true);
+      advance(batter, 'home', 'second');
       nb = [null, batter, r1 ?? null];
       break;
     }
@@ -395,7 +346,7 @@ function emitBaseRunningEvents(
       if (r3) advance(r3, 'third', 'home');
       if (r2) advance(r2, 'second', 'home');
       if (r1) advance(r1, 'first', 'home');
-      advance(batter, 'home', 'third', true);
+      advance(batter, 'home', 'third');
       nb = [null, null, batter];
       break;
     }
@@ -403,7 +354,7 @@ function emitBaseRunningEvents(
       if (r3) advance(r3, 'third', 'home');
       if (r2) advance(r2, 'second', 'home');
       if (r1) advance(r1, 'first', 'home');
-      advance(batter, 'home', 'home', true);
+      advance(batter, 'home', 'home');
       nb = [null, null, null];
       break;
     }
@@ -415,32 +366,13 @@ function emitBaseRunningEvents(
     case 'pop-out':
     case 'line-out':
     case 'fly-out': {
-      // With 2 outs, runners go on contact (no risk of being doubled
-      // off — the inning ends on the catch either way). Emit visual
-      // advances toward the next bag so they're caught in motion when
-      // the third out is recorded. Skip r3 → home since `advance()`
-      // would credit a phantom run; the inning ends on the catch.
-      if (outsBefore === 2) {
-        if (r2) advance(r2, 'second', 'third');
-        if (r1) advance(r1, 'first', 'second');
-      }
-      // Time the out at the actual catch (contact + hangTime). Without
-      // this the out fires ~0.25s after contact and at-bat-end snaps
-      // the ball back to the mound mid-flight, so the viewer sees the
-      // ball vanish before the fielder reaches it.
-      recordOut(batter, ab.fieldedBy, catchArrivesAt);
+      recordOut(batter, ab.fieldedBy);
       break;
     }
     case 'ground-out': {
       // Batter sprints toward first while the throw is in flight; out is
       // recorded when the throw arrives at the bag (see throwArrivesAt).
-      advance(batter, 'home', 'first', true);
-      // With 2 outs, baserunners run on contact too. Skip r3 → home so
-      // a phantom run isn't credited; the inning ends on the throw.
-      if (outsBefore === 2) {
-        if (r2) advance(r2, 'second', 'third');
-        if (r1) advance(r1, 'first', 'second');
-      }
+      advance(batter, 'home', 'first');
       recordOut(batter, ab.fieldedBy, throwArrivesAt);
       break;
     }
@@ -454,7 +386,7 @@ function emitBaseRunningEvents(
       }
       // Batter sprinting toward 1B; out when relay throw arrives. Add an
       // extra ~0.6s for the pivot/relay throw beyond the initial fielding.
-      advance(batter, 'home', 'first', true);
+      advance(batter, 'home', 'first');
       recordOut(batter, 'B1', throwArrivesAt != null ? throwArrivesAt + 0.6 : undefined);
       nb = [null, r2 ?? null, r3 ?? null];
       break;
@@ -465,12 +397,12 @@ function emitBaseRunningEvents(
         advance(r1, 'first', 'second');
         recordOut(r1, 'B2', throwArrivesAt);
       }
-      advance(batter, 'home', 'first', true);
+      advance(batter, 'home', 'first');
       nb = [batter, r2 ?? null, r3 ?? null];
       break;
     }
     case 'sac-fly': {
-      recordOut(batter, ab.fieldedBy, catchArrivesAt);
+      recordOut(batter, ab.fieldedBy);
       if (r3) advance(r3, 'third', 'home');
       nb = [r1, null, r2 ?? null];
       break;
@@ -512,9 +444,6 @@ export function buildEvents(g: GameResult): SimEvent[] {
   let lastHalf: 'top' | 'bottom' | '' = '';
   let bases: (Player | null)[] = [null, null, null];
   let outsInInning = 0;
-  /** Live defense map for the current half-inning. Keyed by position so
-   *  we can resolve `ab.fieldedBy` → actual Player (for skills + IDs). */
-  let currentDefenseMap: Map<Position, Player> = new Map();
 
   const emitInningStart = (ab: AtBatRecord, fieldingTeam: typeof g.homeTeam) => {
     // Build defense snapshot from team lineup; pitcher comes from the at-bat
@@ -550,12 +479,6 @@ export function buildEvents(g: GameResult): SimEvent[] {
         }, 0);
       }
       const fieldingTeam = ab.half === 'top' ? g.homeTeam : g.awayTeam;
-      // Refresh the defense map (lineup positions + current pitcher).
-      currentDefenseMap = new Map();
-      for (const p of fieldingTeam.lineup) {
-        if (p.position !== 'P') currentDefenseMap.set(p.position, p);
-      }
-      currentDefenseMap.set('P', ab.pitcher);
       emitInningStart(ab, fieldingTeam);
       lastInning = ab.inning; lastHalf = ab.half;
       bases = [null, null, null];
@@ -594,37 +517,7 @@ export function buildEvents(g: GameResult): SimEvent[] {
       if (p.outcome === 'in-play' && ab.battedBall) {
         // Capture contact time BEFORE emitBattedBallVisuals advances `t`.
         lastContactT = t;
-        emitBattedBallVisuals(ab.battedBall, ab, push, currentDefenseMap);
-      } else if (p.battedBall) {
-        // Foul ball — emit a contact event so the renderer can show the
-        // launch + landing in foul territory. If the foul was caught for
-        // an out (`foul-out`), also emit a fielder-converge so the
-        // renderer animates the catch.
-        push({
-          type: 'contact',
-          exitVeloMph: p.battedBall.exitVeloMph,
-          launchAngleDeg: p.battedBall.launchAngleDeg,
-          sprayAngleDeg: p.battedBall.sprayAngleDeg,
-          distanceFt: p.battedBall.distanceFt,
-          hangTimeSec: p.battedBall.hangTimeSec,
-          landingPoint: p.battedBall.landingPoint,
-          isFoul: p.battedBall.isFoul,
-          isHomeRun: p.battedBall.isHomeRun,
-        }, 0);
-        if (p.outcome === 'foul-out' && p.foulCaughtBy) {
-          lastContactT = t;
-          const fielderPlayer = currentDefenseMap.get(p.foulCaughtBy);
-          // Emit at dt=0 so the fielder converges in parallel with the
-          // ball's flight — catch happens as the ball arrives.
-          push({
-            type: 'fielder-converge',
-            position: p.foulCaughtBy,
-            playerId: fielderPlayer?.id ?? -1,
-            fromPoint: FIELDER_POSITIONS_FT[p.foulCaughtBy],
-            toPoint: p.battedBall.landingPoint,
-            reachSec: p.battedBall.hangTimeSec || TIME.contactToFieldedDefault,
-          }, 0);
-        }
+        emitBattedBallVisuals(ab.battedBall, ab, push);
       }
     }
 
@@ -638,32 +531,14 @@ export function buildEvents(g: GameResult): SimEvent[] {
       ? lastContactT + TIME.runnerReactionSec
       : t + 0.05;
     // Throw arrival time for plays decided at a base (ground-out, FC, DP).
-    // Uses real throw physics (fielder position → first base, scaled by
-    // the actual fielder's defense skill) instead of a fixed budget so the
-    // visual race matches the engine's safe/out verdict.
-    let throwArrivesAt: number | undefined;
-    let catchArrivesAt: number | undefined;
-    if (lastContactT != null && ab.battedBall && ab.fieldedBy) {
-      const fielderPlayer = currentDefenseMap.get(ab.fieldedBy);
-      const fielderPt = FIELDER_POSITIONS_FT[ab.fieldedBy];
-      const throwSec = fielderPlayer
-        ? throwTimeSec(fielderPt, BASE_COORDS_FT.first, ab.fieldedBy,
-            fielderPlayer.skills.defense)
-        : TIME.throwToBaseSec;
-      throwArrivesAt = lastContactT
-        + (ab.battedBall.hangTimeSec || TIME.contactToFieldedDefault)
-        + TIME.fieldedToThrowSec + throwSec;
-      // Catch happens when the ball arrives at the play point. Used to
-      // delay the `out` event (and therefore `at-bat-end`) on caught
-      // flies so the renderer can finish the ball-flight tween before
-      // snapping the ball back to the mound.
-      catchArrivesAt = lastContactT
-        + (ab.battedBall.hangTimeSec || TIME.contactToFieldedDefault);
-    }
+    // contact_t + hangTime + glove-to-release + throw flight.
+    const throwArrivesAt = lastContactT != null && ab.battedBall
+      ? lastContactT + (ab.battedBall.hangTimeSec || TIME.contactToFieldedDefault)
+        + TIME.fieldedToThrowSec + TIME.throwToBaseSec
+      : undefined;
     const { newBases, outsAfter, latestT } = emitBaseRunningEvents(
       ab, bases, outsInInning, scoreHome, scoreAway,
       battingTeamId, battingTeamIsHome, runnerStartT, pushAt, throwArrivesAt,
-      catchArrivesAt,
     );
     bases = newBases;
     outsInInning = outsAfter;
@@ -696,9 +571,16 @@ export function buildEvents(g: GameResult): SimEvent[] {
     innings: g.innings,
   }, 0);
 
-  // Note: derived score (from this event stream) parity with `g.homeRuns`/
-  // `g.awayRuns` is ~94% across random seeds. Rare baserunner permutations
-  // can drift by 1 run vs `GameResult`. Accepted for now — see plan.
+  // Sanity: derived score should match the result
+  if (scoreHome.v !== g.homeRuns || scoreAway.v !== g.awayRuns) {
+    // Don't throw — log for debugging. Mismatches indicate the runner
+    // model in this file drifted from `game.ts`.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[events] derived score (${scoreAway.v}-${scoreHome.v}) ` +
+      `differs from result (${g.awayRuns}-${g.homeRuns})`,
+    );
+  }
 
   // Sort by absolute timestamp (stable via seq) so the parallel events
   // emitted via `pushAt` are interleaved correctly with the sequential
@@ -712,12 +594,7 @@ function emitBattedBallVisuals(
   ball: BattedBall,
   ab: AtBatRecord,
   push: (e: SimEventInit, dt: number) => void,
-  defenseMap?: Map<Position, Player>,
 ): void {
-  // The play happens at `fieldedAtPoint` for grounders the IF intercepts
-  // mid-roll; for everything else it's the ball's natural landing point.
-  const playPoint = ball.fieldedAtPoint ?? ball.landingPoint;
-
   push({
     type: 'contact',
     exitVeloMph: ball.exitVeloMph,
@@ -725,7 +602,7 @@ function emitBattedBallVisuals(
     sprayAngleDeg: ball.sprayAngleDeg,
     distanceFt: ball.distanceFt,
     hangTimeSec: ball.hangTimeSec,
-    landingPoint: playPoint,
+    landingPoint: ball.landingPoint,
     isFoul: ball.isFoul,
     isHomeRun: ball.isHomeRun,
   }, 0);
@@ -733,37 +610,14 @@ function emitBattedBallVisuals(
   // Fielder converge/throw — only if a fielder was assigned
   if (!ab.fieldedBy) return;
   const fielderPt = FIELDER_POSITIONS_FT[ab.fieldedBy];
-  const fielderPlayer = defenseMap?.get(ab.fieldedBy);
-  const reachSec = ball.hangTimeSec || TIME.contactToFieldedDefault;
-  // Emit converge AT contact (dt=0) so the fielder starts breaking on
-  // contact and the catch happens as the ball arrives — not after the
-  // ball has already landed and is sitting on the grass.
   push({
     type: 'fielder-converge',
     position: ab.fieldedBy,
-    playerId: fielderPlayer?.id ?? -1,
+    playerId: -1,                    // not tracked in AtBatRecord; renderer can resolve via inning-start defense
     fromPoint: fielderPt,
-    toPoint: playPoint,
-    reachSec,
-  }, 0);
-
-  // Phase 5.16: dive/leap when the converge is tight against hangtime.
-  // We treat reach within 0.25s of hangtime as "diving" effort. Leap is
-  // reserved for line drives / low flies fielded by an OF (high catch).
-  if (ball.hangTimeSec > 0.4 && Math.abs(reachSec - ball.hangTimeSec) < 0.25) {
-    const isOF = ['LF', 'CF', 'RF'].includes(ab.fieldedBy);
-    const isLineLike = ball.launchAngleDeg < 18;
-    const variant: 'dive' | 'leap' = isOF && !isLineLike ? 'leap' : 'dive';
-    const successful = ['fly-out', 'line-out', 'pop-out', 'sac-fly'].includes(ab.result);
-    push({
-      type: 'fielder-dive',
-      position: ab.fieldedBy,
-      playerId: fielderPlayer?.id ?? -1,
-      atPoint: playPoint,
-      variant,
-      successful,
-    }, reachSec);
-  }
+    toPoint: ball.landingPoint,
+    reachSec: ball.hangTimeSec || TIME.contactToFieldedDefault,
+  }, ball.hangTimeSec || TIME.contactToFieldedDefault);
 
   // Infielder throw to 1B for ground-outs / FCs
   const isInfielder = !['LF', 'CF', 'RF'].includes(ab.fieldedBy);
@@ -788,45 +642,23 @@ function emitBattedBallVisuals(
     // Cover fielder breaks the moment the ball is fielded (same time the
     // throw is released). Time to the bag is the throw flight minus a
     // small head-start so they're set when the ball arrives.
-    const targetPt = basePoint(targetBase);
-    const throwFlightSec = fielderPlayer
-      ? throwTimeSec(playPoint, targetPt, ab.fieldedBy, fielderPlayer.skills.defense)
-      : TIME.throwToBaseSec;
-    const coverArrive = Math.max(0.4, throwFlightSec - 0.2);
+    const coverArrive = Math.max(0.4, TIME.throwToBaseSec - 0.2);
     push({
       type: 'cover-base',
       position: coverPos,
       base: targetBase,
       fromPoint: FIELDER_POSITIONS_FT[coverPos],
-      toPoint: targetPt,
+      toPoint: basePoint(targetBase),
       arriveSec: coverArrive,
     }, 0);
     push({
       type: 'throw',
-      fromPosition: ab.fieldedBy, fromPlayerId: fielderPlayer?.id ?? -1,
-      fromPoint: playPoint,
+      fromPosition: ab.fieldedBy, fromPlayerId: -1,
+      fromPoint: ball.landingPoint,
       toBase: targetBase,
-      toPoint: targetPt,
-      flightSec: throwFlightSec,
+      toPoint: basePoint(targetBase),
+      flightSec: TIME.throwToBaseSec,
     }, TIME.fieldedToThrowSec);
-
-    // Phase 5.15: backup fielder chases behind the bag on a throwing
-    // error so the visual reads as a wild throw being run down. Backup
-    // assignments mirror standard MLB practice (OF behind same-side IF).
-    if (ab.result === 'reached-on-error' && ab.errorType === 'throw') {
-      const backupMap: Record<'first' | 'second' | 'third' | 'home', Position> = {
-        first: 'RF', second: 'CF', third: 'LF', home: 'P',
-      };
-      const backupPos = backupMap[targetBase];
-      push({
-        type: 'fielder-converge',
-        position: backupPos,
-        playerId: defenseMap?.get(backupPos)?.id ?? -1,
-        fromPoint: FIELDER_POSITIONS_FT[backupPos],
-        toPoint: targetPt,
-        reachSec: throwFlightSec + 0.4,
-      }, 0);
-    }
   }
 
   void isOut;  // referenced via base-running emitter
