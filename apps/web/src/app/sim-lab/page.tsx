@@ -55,9 +55,12 @@ function runSim(seed: number): SimRun {
 function compressTimeline(events: SimEvent[], maxGapSec: number): SimEvent[] {
   if (events.length === 0) return events;
   const PREGAME_MAX_SEC = 14;     // covers the 12s intro-jog cap
-  const FIRST_AB_MAX_SEC = 10;    // covers the ~8s leadoff walk-out
+  const FIRST_AB_MAX_SEC = 10;    // covers the ~8s leadoff walk-out from dugout
+  const FIRST_PITCH_MAX_SEC = 8;  // covers the ~5s leadoff batter still walking
+                                  //   to the box after at-bat-start
   let firstInningStartSeen = false;
   let firstAtBatStartSeen = false;
+  let firstPitchSeen = false;
   const out: SimEvent[] = [];
   let prevOrigT = events[0].t;
   let prevNewT = 0;
@@ -70,6 +73,9 @@ function compressTimeline(events: SimEvent[], maxGapSec: number): SimEvent[] {
     } else if (e.type === 'at-bat-start' && !firstAtBatStartSeen) {
       cap = FIRST_AB_MAX_SEC;
       firstAtBatStartSeen = true;
+    } else if (e.type === 'pitch' && !firstPitchSeen) {
+      cap = FIRST_PITCH_MAX_SEC;
+      firstPitchSeen = true;
     }
     const gap = i === 0 ? 0 : Math.min(cap, e.t - prevOrigT);
     const newT = i === 0 ? e.t : prevNewT + gap;
