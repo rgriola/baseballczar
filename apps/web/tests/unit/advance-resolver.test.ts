@@ -193,4 +193,44 @@ describe('classifySituationalOut', () => {
       expect(result).toBe('fly-out');
     }
   });
+
+  it('2 outs + bases loaded + grounder to B2 → fielders-choice (step on 2B)', () => {
+    const r = createRng(11);
+    const result = classifySituationalOut('ground-out', {
+      outs: 2,
+      bases: [mk('R1'), mk('R2'), mk('R3')],
+      fieldedBy: 'B2',
+      fielderDefense: 5,
+    }, r);
+    expect(result).toBe('fielders-choice');
+  });
+});
+
+describe('MLB Rule 5.08(a) — no run on force third out', () => {
+  it('ground-out with 2 outs + bases loaded: r3 does NOT score', () => {
+    const r1 = mk('R1'), r2 = mk('R2'), r3 = mk('R3'), b = mk('B');
+    const r = resolveBaseAdvance([r1, r2, r3], b, 'ground-out', { outsBefore: 2 });
+    expect(r.runsScored).toBe(0);
+    expect(r.scorers).toEqual([]);
+    expect(r.outsRecorded).toBe(1);
+  });
+
+  it('ground-out with 1 out + bases loaded: r3 DOES score (only 2 outs after)', () => {
+    const r1 = mk('R1'), r2 = mk('R2'), r3 = mk('R3'), b = mk('B');
+    const r = resolveBaseAdvance([r1, r2, r3], b, 'ground-out', { outsBefore: 1 });
+    expect(r.runsScored).toBe(1);
+    expect(r.scorers).toEqual([r3]);
+  });
+
+  it('fielders-choice with 2 outs + r1/r3: r3 does NOT score', () => {
+    const r1 = mk('R1'), r3 = mk('R3'), b = mk('B');
+    const r = resolveBaseAdvance([r1, null, r3], b, 'fielders-choice', { outsBefore: 2 });
+    expect(r.runsScored).toBe(0);
+  });
+
+  it('home-run with 2 outs + bases loaded: all 4 score (not a force play)', () => {
+    const r1 = mk('R1'), r2 = mk('R2'), r3 = mk('R3'), b = mk('B');
+    const r = resolveBaseAdvance([r1, r2, r3], b, 'home-run', { outsBefore: 2 });
+    expect(r.runsScored).toBe(4);
+  });
 });

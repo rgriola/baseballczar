@@ -211,6 +211,7 @@ function simulateHalfInning(
     const adv = resolveBaseAdvance(bases, batter, ab.result, {
       errorType: ab.errorType,
       r1HoldsAtSecond,
+      outsBefore: outs,
     });
     bases = adv.newBases;
     outs += adv.outsRecorded;

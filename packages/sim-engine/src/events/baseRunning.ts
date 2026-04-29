@@ -132,6 +132,7 @@ export function emitBaseRunningEvents(
   const adv = resolveBaseAdvance(bases, batter, ab.result, {
     errorType: ab.errorType,
     r1HoldsAtSecond,
+    outsBefore,
   });
 
   /** Time the out at throw / catch arrival when applicable. */

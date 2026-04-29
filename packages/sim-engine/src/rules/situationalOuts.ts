@@ -54,6 +54,15 @@ export function classifySituationalOut(
     return result;
   }
 
+  // 2 outs + r1 forced + grounder to B2 (right next to 2B): the
+  // second baseman steps on 2B unassisted for the inning-ending
+  // force. No run can score on a force third out (MLB 5.08(a)).
+  // Without this rule, the engine would default to throwing to 1B,
+  // leaving the door open to (incorrectly) score r3 on the play.
+  if (result === 'ground-out' && runnerOn1 && ctx.outs === 2 && ctx.fieldedBy === 'B2') {
+    return 'fielders-choice';
+  }
+
   if (result === 'fly-out' && runnerOn3 && ctx.outs < 2) {
     const isOFfly =
       ctx.fieldedBy === 'LF' || ctx.fieldedBy === 'CF' || ctx.fieldedBy === 'RF';

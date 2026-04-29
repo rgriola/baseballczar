@@ -49,6 +49,16 @@ export interface AdvanceOpts {
    * advancing to 3B. Computed by the caller via `decideRunnerAdvance`.
    */
   r1HoldsAtSecond?: boolean;
+  /**
+   * Outs BEFORE this play resolves. Required for MLB Rule 5.08(a):
+   * "No run shall score during a play in which the third out is made
+   * by the batter-runner before he touches first base, by any runner
+   * being forced out, or by a preceding runner who is declared out
+   * because he failed to touch one of the bases." When the third out
+   * is recorded on a force-play result (ground-out, fielders-choice,
+   * double-play), runs that would otherwise score are suppressed.
+   */
+  outsBefore?: number;
 }
 
 /**
@@ -237,6 +247,36 @@ export function resolveBaseAdvance(
       trip(batter, 'home', 'home', { isBatter: true, outRecorded: true });
       nb = [r1 ?? null, r2 ?? null, r3 ?? null];
       break;
+    }
+  }
+
+  // ─── MLB Rule 5.08(a): no run on a force third out ─────────────
+  // If THIS play makes the third out and the result is a force play
+  // (batter-runner thrown out at 1B, lead runner forced at 2B, or a
+  // double-play), revert any non-out trip that would have scored.
+  // The runner is held at the bag they came from — physically they
+  // may have crossed home, but it does not count.
+  const isForcePlay =
+    result === 'ground-out' ||
+    result === 'fielders-choice' ||
+    result === 'double-play';
+  if (
+    isForcePlay &&
+    opts.outsBefore != null &&
+    opts.outsBefore + outsRecorded >= 3
+  ) {
+    for (const t of trips) {
+      if (t.outRecorded) continue;
+      if (t.to === 'home') {
+        // Suppress the score: runner held at origin (no advance counted).
+        t.to = t.from;
+        // Also remove the runner from the post-play base map: the
+        // inning is over, the bag state is moot, but keep it consistent
+        // with where they were standing.
+        if (t.from === 'third') nb[2] = t.runner;
+        else if (t.from === 'second') nb[1] = t.runner;
+        else if (t.from === 'first') nb[0] = t.runner;
+      }
     }
   }
 
