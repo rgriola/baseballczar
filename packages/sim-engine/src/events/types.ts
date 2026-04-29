@@ -53,6 +53,10 @@ export interface ContactEvent extends BaseEvent {
   type: 'contact';
   exitVeloMph: number; launchAngleDeg: number; sprayAngleDeg: number;
   distanceFt: number; hangTimeSec: number;
+  /** Apex of the ball flight in feet (0 for grounders). Lets the PBP
+   *  show how high the ball got — "line drive" vs "can of corn" is
+   *  obvious from EV/LA, but apex is the numeric proof. */
+  peakHeightFt: number;
   landingPoint: { x: number; y: number };
   isFoul: boolean; isHomeRun: boolean;
 }

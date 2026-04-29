@@ -91,6 +91,9 @@ export interface BattedBall {
   sprayAngleDeg: number;     // 0° = CF, +90° = RF foul, -90° = LF foul
   distanceFt: number;
   hangTimeSec: number;
+  /** Apex of the ball flight in feet from the kinematic flight model.
+   *  ~2 ft for grounders; can exceed 100 ft for towering pop-ups. */
+  peakHeightFt: number;
   landingPoint: { x: number; y: number };  // ft, origin = home plate
   /** Where the ball would come to rest if no fielder intercepts the
    *  post-landing roll. For grounders this equals `landingPoint`. For

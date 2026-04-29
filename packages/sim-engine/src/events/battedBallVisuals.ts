@@ -46,6 +46,7 @@ export function emitBattedBallVisuals(
     sprayAngleDeg: ball.sprayAngleDeg,
     distanceFt: ball.distanceFt,
     hangTimeSec: ball.hangTimeSec,
+    peakHeightFt: ball.peakHeightFt,
     landingPoint: playPoint,
     isFoul: ball.isFoul,
     isHomeRun: ball.isHomeRun,

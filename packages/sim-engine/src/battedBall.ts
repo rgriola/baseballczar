@@ -76,6 +76,7 @@ export function rollBattedBall(
     sprayAngleDeg,
     distanceFt: f.distanceFt,
     hangTimeSec: f.hangTimeSec,
+    peakHeightFt: f.peakHeightFt,
     landingPoint: f.landingPoint,
     restPoint: f.restPoint,
     rollDistanceFt: f.rollDistanceFt,
@@ -137,6 +138,19 @@ function findConverger(
     const natural = NATURAL_ANGLE[pos];
     if (natural !== undefined && !isGrounder) {
       reach += Math.abs(ballAngle - natural) * CONFIG.fielding.territoryPenaltySecPerDeg;
+    }
+    // Depth penalty: an infielder reaching for a ball that lands deep
+    // in OF territory (e.g. SS at 130 ft chasing a 207 ft drive) gets
+    // hammered by an extra `infielderDepthPenaltySecPerFt` per ft of
+    // excess depth. Geometric closeness alone shouldn't let an IF
+    // poach a play that any OF can comfortably make.
+    const isIF = pos === 'B1' || pos === 'B2' || pos === 'SS' || pos === 'B3';
+    if (isIF && !isGrounder) {
+      const ballDepth = distFromHome;
+      const excess = ballDepth - CONFIG.fielding.infielderMaxNaturalDepthFt;
+      if (excess > 0) {
+        reach += excess * CONFIG.fielding.infielderDepthPenaltySecPerFt;
+      }
     }
     // Catch radius scales with defense (±6 ft across 1-10).
     const effectiveCatchRadius = CONFIG.fielder.catchRadiusFt

@@ -113,9 +113,13 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
           sa <= 45 ? 'RF-line' :
           'foul-R';
         const tag = e.isHomeRun ? ' — HR!' : e.isFoul ? ' (foul)' : '';
+        // Apex shows the kinematic peak height. Useful to disambiguate
+        // "line drive at 18°" (apex ~25 ft) from "can of corn at 35°"
+        // (apex ~80 ft) when EV/LA alone aren't intuitive.
+        const apex = e.peakHeightFt != null ? `, apex ${Math.round(e.peakHeightFt)} ft` : '';
         out.push({
           eventIdx: i, t: e.t, kind: 'play',
-          text: `  Contact: ${ev} mph, LA ${la}°, spray ${sa > 0 ? '+' : ''}${sa}° (${side}), ${dist} ft${tag}`,
+          text: `  Contact: ${ev} mph, LA ${la}°, spray ${sa > 0 ? '+' : ''}${sa}° (${side}), ${dist} ft${apex}${tag}`,
         });
         break;
       }

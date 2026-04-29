@@ -105,6 +105,16 @@ export const CONFIG = {
     /** Inside this radius (ft) from home, the C/P will compete for
      *  weak pop-ups and choppers regardless of launch angle. */
     shortBallRadiusFt: 45,
+    /** Anything landing past this depth (ft from home) is conceptually
+     *  outfield territory — infielders pay a steep per-ft penalty for
+     *  retreating into it. Without this an SS/2B would routinely poach
+     *  165–210 ft line drives where the OF is the rightful fielder. */
+    infielderMaxNaturalDepthFt: 160,
+    /** Sec/ft penalty added to an infielder's reach time for every foot
+     *  the ball lands beyond `infielderMaxNaturalDepthFt`. 0.025 = a
+     *  ball at 200 ft costs the IF an extra 1.0 sec, easily ceding the
+     *  play to the OF unless no OF can possibly arrive. */
+    infielderDepthPenaltySecPerFt: 0.025,
     /** Each fielder's natural spray angle (deg, CF=0). Reaching outside
      *  this zone costs `territoryPenaltySecPerDeg` per deg of miss. */
     naturalSprayAngleDeg: {

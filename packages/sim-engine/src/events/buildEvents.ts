@@ -184,6 +184,7 @@ export function buildEvents(g: GameResult): SimEvent[] {
           sprayAngleDeg: p.battedBall.sprayAngleDeg,
           distanceFt: p.battedBall.distanceFt,
           hangTimeSec: p.battedBall.hangTimeSec,
+          peakHeightFt: p.battedBall.peakHeightFt,
           landingPoint: p.battedBall.landingPoint,
           isFoul: p.battedBall.isFoul,
           isHomeRun: p.battedBall.isHomeRun,
