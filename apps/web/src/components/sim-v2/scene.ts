@@ -334,6 +334,18 @@ export function createScene(transform: FieldTransform): SceneAPI {
       case 'runner-advance': {
         const sp = runners.get(e.runnerId);
         if (!sp) break;
+        // Snap the runner exactly onto `fromBase` before kicking off
+        // the next leg. The engine emits per-segment events spaced by
+        // segSec, but the renderer's tween clock can fall behind a few
+        // ms (rAF jitter, event-fire vs ticker ordering), which would
+        // leave `cur` short of the bag and cause the runner to "cut
+        // the corner" \u2014 visible on home runs where 4 segments fire
+        // back-to-back. Snapping guarantees every base is touched.
+        const fromFt = e.fromBase === 'home' ? { x: 0, y: 0 } : BASE_COORDS_FT[e.fromBase];
+        sp.cur = { ...fromFt };
+        sp.from = { ...fromFt };
+        const fromPx = ftToPx(fromFt, transform);
+        sp.gfx.position.set(fromPx.x, fromPx.y);
         const toFt = e.toBase === 'home' ? { x: 0, y: 0 } : BASE_COORDS_FT[e.toBase];
         startTween(sp, toFt, e.travelSec, e.t, 'line');
         break;

@@ -19,7 +19,7 @@ import {
   ftToPx,
   ftToPxXY,
 } from '../coords';
-import { BASE_COORDS_FT, FIELDER_POSITIONS_FT } from '@baseballczar/sim-engine';
+import { BASE_COORDS_FT, FIELDER_POSITIONS_FT, wallDistanceFt } from '@baseballczar/sim-engine';
 
 // ─────────────────────────────────────────────────────────────
 // Style palette
@@ -128,6 +128,26 @@ type BasePx = { home: Px; first: Px; second: Px; third: Px };
 // Tiny geometry helpers
 // ─────────────────────────────────────────────────────────────
 
+/** Sample the outfield wall in engine feet → screen px. The wall radius
+ *  varies with spray angle (per the engine `wallDistanceFt`), so the
+ *  visual fence matches HR/double/single boundaries exactly. The
+ *  optional `radiusOffsetFt` lets callers draw the inner edge of the
+ *  wall band by passing a small negative offset. */
+function wallArcPx(t: FieldTransform, segments: number, radiusOffsetFt = 0): Px[] {
+  const out: Px[] = [];
+  // Sample from the 3B foul line (-45° spray) through CF (0) to the 1B
+  // foul line (+45° spray).
+  for (let i = 0; i <= segments; i++) {
+    const u = i / segments;
+    const sprayDeg = -45 + u * 90;
+    const r = wallDistanceFt(sprayDeg) + radiusOffsetFt;
+    const sprayRad = (sprayDeg * Math.PI) / 180;
+    // Engine: x = r·sin(spray), y = r·cos(spray).
+    out.push(ftToPxXY(r * Math.sin(sprayRad), r * Math.cos(sprayRad), t));
+  }
+  return out;
+}
+
 /** Sample a circular arc in engine feet → screen px. */
 function arcInFt(
   cx: number, cy: number, rFt: number,
@@ -170,8 +190,11 @@ function drawBackground(size: CanvasSize, style: FieldStyle): Graphics {
 function drawFairWedge(t: FieldTransform, style: FieldStyle): Graphics {
   const g = new Graphics();
   const home = ftToPxXY(0, 0, t);
-  const arc = arcInFt(0, 0, FIELD_SPEC.wallRadiusFt,
-                      FOUL_ANGLE.third, FOUL_ANGLE.first, 32, t);
+  const arc = wallArcPx(t, 64);
+  // Walk the arc from LF line (-45) to RF line (+45). The current
+  // FOUL_ANGLE convention is screen-space radians; we replace it by
+  // sampling the engine spray-aware wall instead, so the wedge always
+  // matches the actual park boundary.
   const pts = [home, ...arc, home];
   g.poly(pts.flatMap(p => [p.x, p.y])).fill(style.grassLight);
   return g;
@@ -180,10 +203,8 @@ function drawFairWedge(t: FieldTransform, style: FieldStyle): Graphics {
 /** Outfield wall ring (yellow top stripe). */
 function drawWall(t: FieldTransform, style: FieldStyle): Graphics {
   const g = new Graphics();
-  const outer = arcInFt(0, 0, FIELD_SPEC.wallRadiusFt,
-                        FOUL_ANGLE.third, FOUL_ANGLE.first, 32, t);
-  const inner = arcInFt(0, 0, FIELD_SPEC.wallRadiusFt - FIELD_SPEC.wallThicknessFt,
-                        FOUL_ANGLE.first, FOUL_ANGLE.third, 32, t);
+  const outer = wallArcPx(t, 64, 0);
+  const inner = wallArcPx(t, 64, -FIELD_SPEC.wallThicknessFt).reverse();
   g.poly([...outer, ...inner].flatMap(p => [p.x, p.y])).fill(style.wallTop);
   return g;
 }
@@ -275,9 +296,14 @@ function drawMound(t: FieldTransform, style: FieldStyle): Graphics {
 function drawFoulLines(t: FieldTransform, style: FieldStyle): Graphics {
   const g = new Graphics();
   const home = ftToPxXY(0, 0, t);
-  const r = FIELD_SPEC.wallRadiusFt;
-  const fl1 = ftToPxXY(Math.cos(FOUL_ANGLE.first) * r, Math.sin(FOUL_ANGLE.first) * r, t);
-  const fl3 = ftToPxXY(Math.cos(FOUL_ANGLE.third) * r, Math.sin(FOUL_ANGLE.third) * r, t);
+  // Use the engine's foul-line distance (LL/RL anchors) so the chalk
+  // stops at the wall on each line.
+  const rL = wallDistanceFt(-45);
+  const rR = wallDistanceFt(+45);
+  const fl1 = ftToPxXY(Math.sin( (45 * Math.PI) / 180) * rR,
+                       Math.cos( (45 * Math.PI) / 180) * rR, t);
+  const fl3 = ftToPxXY(Math.sin((-45 * Math.PI) / 180) * rL,
+                       Math.cos((-45 * Math.PI) / 180) * rL, t);
   const w = inchesToPx(FIELD_SPEC.foulWidthIn, t);
   // Inward (toward fair) screen-space normals:
   //   1B line direction (screen) = (+1,−1)/√2 → inward normal = (−1,−1)/√2

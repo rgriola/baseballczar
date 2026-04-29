@@ -94,3 +94,24 @@ Q3. Keep player driven by now. Manager is down the road.
 Q4. Cutoffs should be visuallized yes.
 
 - Note 1st baseman typcially are in the infield and line themselves with the correct base to throw to. 1stbase men are used becuase relays are typically used when runners are going to 3rd or Home and no one is needed to cover 1st base; you use the 1st baseman. The pitcher backs up either home or 3rd depending on the throw from the outfield, they may actually wait between third and home until they know where the throw is going. A long single with the hitter/runner trying to get to second base - no runners on - to right field the 2nd baseman goes out, left field and center the short stop.
+
+Q5: Infield Fly Rule: Must be less than two outs. runners at first and second, or first second and third, batter is automatically out. Ball must be fair. Runners cannot advance until the ball hits a fielder or ground - this applys to all fly balls. likely Runners would only advance on a bad error ie fielder drops the ball and the ball rolls away.
+
+This prevents a dirty play where a fielder intentionally drops the ball to get easy double or triple play.
+
+The parameters the ball needs to be a pop up, which is a judgement call. Lets start with 50 degrees LA and within +10 feet into the outfield where the infield and outfield meet.
+
+...
+
+Spray-aware r1→3rd difficulty — singles to RF make 3rd much easier than singles to LF
+Tag-up PI — currently sacFlyTagProb is a flat constant; should be PI+speed gated
+Steal attempts / pickoffs — the engine has none today; would need a new sub-module
+Box-score / sim-lab UI surface — verify that the new behaviors look correct on the field render
+
+Contact: 105 mph, LA 24°, spray -41° (LF-line), 364 ft, apex 62 ft — HR! < The ball visually did not go over the fence. could be pixel processing . I noticed this before.
+
+On another home run the batter/runner still does not touch all the bases correctly.
+
+Balls are still not rolling to a stop.
+
+Also the ball should bounce off the wall or players. Eventually we will add more dynamic stadiums and the ball will need to bounce off other objects. The wall if its 10 feet should stop a ball at 9 feet the ball should bounce.
