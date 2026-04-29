@@ -95,3 +95,26 @@ export function arcHeightFt(u: number, apexFt: number): number {
 export function arcLiftPx(u: number, apexFt: number, t: FieldTransform): number {
   return arcHeightFt(u, apexFt) * t.scale * 0.6;
 }
+
+/**
+ * Bouncing-grounder altitude in feet at progress u (0..1). Models ~3
+ * decaying bounces over the path — first hop is the highest, each next
+ * one ~50% the previous. Used for both the visual lift and the shadow
+ * fade so a grounder "reads" as bouncing toward the fielder.
+ */
+export function grounderBounceHeightFt(u: number): number {
+  const bounces = 3;
+  const phase = u * bounces;
+  const hop = Math.floor(phase);
+  const local = phase - hop;
+  const apex = 4 * Math.pow(0.5, hop);   // 4ft, 2ft, 1ft
+  return Math.max(0, 4 * local * (1 - local) * apex);
+}
+
+/**
+ * Screen-space lift in px for a bouncing grounder. Same camera-tilt
+ * factor (0.6) as `arcLiftPx` so it composites consistently with flies.
+ */
+export function grounderBouncePx(u: number, t: FieldTransform): number {
+  return grounderBounceHeightFt(u) * t.scale * 0.6;
+}

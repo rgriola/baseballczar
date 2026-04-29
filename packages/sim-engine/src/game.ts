@@ -96,6 +96,7 @@ function advanceRunners(
   bases: (Player | null)[],   // [1B, 2B, 3B] runners
   batter: Player,
   result: AtBatResult,
+  opts: { errorType?: 'fielding' | 'throw' } = {},
 ): { newBases: (Player | null)[]; runsScored: number; scorers: Player[] } {
   const [r1, r2, r3] = bases;
   const scorers: Player[] = [];
@@ -120,6 +121,17 @@ function advanceRunners(
       }
       // Anyone forced past 3B scores
       if (push) scorers.push(push);
+
+      // Throw errors (E-throw): the wild throw lets every existing
+      // runner take an extra base on top of the force.
+      if (result === 'reached-on-error' && opts.errorType === 'throw') {
+        const after = [nb[0], nb[1], nb[2]];
+        // r3-equivalent (whoever ended up on 3B) scores
+        if (after[2]) scorers.push(after[2]);
+        // r2-equivalent advances to 3B; r1-equivalent (NOT the batter)
+        // advances to 2B; batter holds 1B.
+        nb = [batter, after[0] !== batter ? after[0] : null, after[1]];
+      }
       break;
     }
     case 'single': {
@@ -295,7 +307,7 @@ function simulateHalfInning(
         ab.rbis = 1;
       }
     } else {
-      const adv = advanceRunners(bases, batter, ab.result);
+      const adv = advanceRunners(bases, batter, ab.result, { errorType: ab.errorType });
       bases = adv.newBases;
       runsThisPa = adv.runsScored;
       batting.runs += runsThisPa;

@@ -126,6 +126,21 @@ export interface CoverBaseEvent extends BaseEvent {
   arriveSec: number;
 }
 
+/**
+ * Phase 5.16: a fielder "layout" — a dive (low) or leap (high) at the
+ * point of attempted catch. Emitted when the converge reach-time is
+ * tight relative to ball hangtime so the renderer can play a one-shot
+ * extension animation instead of just sliding the sprite. Renderer is
+ * free to ignore this if it doesn't have art for it.
+ */
+export interface FielderDiveEvent extends BaseEvent {
+  type: 'fielder-dive';
+  position: Position; playerId: number;
+  atPoint: { x: number; y: number };
+  variant: 'dive' | 'leap';
+  successful: boolean;
+}
+
 export interface RunnerAdvanceEvent extends BaseEvent {
   type: 'runner-advance';
   runnerId: number;
@@ -169,6 +184,7 @@ export interface GameEndEvent extends BaseEvent {
 export type SimEvent =
   | GameStartEvent | InningStartEvent | AtBatStartEvent
   | PitchEvt | ContactEvent | FielderConvergeEvent | ThrowEvent | CoverBaseEvent
+  | FielderDiveEvent
   | RunnerAdvanceEvent | OutEvent | RunScoredEvent
   | AtBatEndEvent | InningEndEvent | GameEndEvent;
 
@@ -343,6 +359,15 @@ function emitBaseRunningEvents(
         i++;
       }
       if (push1) advance(push1, 'third', 'home');
+
+      // Phase 5.13: throw error — every existing baserunner advances one
+      // extra base on top of the force (matches game.ts advanceRunners).
+      if (ab.result === 'reached-on-error' && ab.errorType === 'throw') {
+        const after = [nb[0], nb[1], nb[2]];
+        if (after[2] && after[2] !== batter) advance(after[2], 'third', 'home');
+        if (after[1] && after[1] !== batter) advance(after[1], 'second', 'third');
+        if (after[0] && after[0] !== batter) advance(after[0], 'first', 'second');
+      }
       break;
     }
     case 'single': {
@@ -675,14 +700,33 @@ function emitBattedBallVisuals(
   if (!ab.fieldedBy) return;
   const fielderPt = FIELDER_POSITIONS_FT[ab.fieldedBy];
   const fielderPlayer = defenseMap?.get(ab.fieldedBy);
+  const reachSec = ball.hangTimeSec || TIME.contactToFieldedDefault;
   push({
     type: 'fielder-converge',
     position: ab.fieldedBy,
     playerId: fielderPlayer?.id ?? -1,
     fromPoint: fielderPt,
     toPoint: playPoint,
-    reachSec: ball.hangTimeSec || TIME.contactToFieldedDefault,
+    reachSec,
   }, ball.hangTimeSec || TIME.contactToFieldedDefault);
+
+  // Phase 5.16: dive/leap when the converge is tight against hangtime.
+  // We treat reach within 0.25s of hangtime as "diving" effort. Leap is
+  // reserved for line drives / low flies fielded by an OF (high catch).
+  if (ball.hangTimeSec > 0.4 && Math.abs(reachSec - ball.hangTimeSec) < 0.25) {
+    const isOF = ['LF', 'CF', 'RF'].includes(ab.fieldedBy);
+    const isLineLike = ball.launchAngleDeg < 18;
+    const variant: 'dive' | 'leap' = isOF && !isLineLike ? 'leap' : 'dive';
+    const successful = ['fly-out', 'line-out', 'pop-out', 'sac-fly'].includes(ab.result);
+    push({
+      type: 'fielder-dive',
+      position: ab.fieldedBy,
+      playerId: fielderPlayer?.id ?? -1,
+      atPoint: playPoint,
+      variant,
+      successful,
+    }, reachSec);
+  }
 
   // Infielder throw to 1B for ground-outs / FCs
   const isInfielder = !['LF', 'CF', 'RF'].includes(ab.fieldedBy);
@@ -728,6 +772,24 @@ function emitBattedBallVisuals(
       toPoint: targetPt,
       flightSec: throwFlightSec,
     }, TIME.fieldedToThrowSec);
+
+    // Phase 5.15: backup fielder chases behind the bag on a throwing
+    // error so the visual reads as a wild throw being run down. Backup
+    // assignments mirror standard MLB practice (OF behind same-side IF).
+    if (ab.result === 'reached-on-error' && ab.errorType === 'throw') {
+      const backupMap: Record<'first' | 'second' | 'third' | 'home', Position> = {
+        first: 'RF', second: 'CF', third: 'LF', home: 'P',
+      };
+      const backupPos = backupMap[targetBase];
+      push({
+        type: 'fielder-converge',
+        position: backupPos,
+        playerId: defenseMap?.get(backupPos)?.id ?? -1,
+        fromPoint: FIELDER_POSITIONS_FT[backupPos],
+        toPoint: targetPt,
+        reachSec: throwFlightSec + 0.4,
+      }, 0);
+    }
   }
 
   void isOut;  // referenced via base-running emitter

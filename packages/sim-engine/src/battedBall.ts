@@ -126,8 +126,10 @@ function findConverger(
 // ─── Step 3: Resolve full batted-ball outcome ──────────────────
 export interface BattedBallResolution {
   result: AtBatResult;
-  fieldedBy?: Position;
-}
+  fieldedBy?: Position;  /** When `result === 'reached-on-error'`, distinguishes whether the
+   *  fielder muffed the ball ('fielding') or made a wild throw
+   *  ('throw'). Throw errors let existing runners take an extra base. */
+  errorType?: 'fielding' | 'throw';}
 
 export function resolveBattedBall(
   ball: BattedBall,
@@ -174,25 +176,25 @@ export function resolveBattedBall(
     }
   }
 
-  // Error roll: low-defense fielders muff the play. Errors only on routine
-  // chances (caught flies & playable grounders). Skill 1 misplays often;
-  // skill 9 almost never.
+  // Fielding error roll: low-defense fielders muff the ball outright.
+  // (Throw errors are a separate roll below — only IFs that have to
+  // make the cross-diamond throw can wild-throw it.)
   const errorBase = isGrounder
     ? CONFIG.errors.grounderErrorBase
     : CONFIG.errors.flyErrorBase;
-  const errorChance = Math.max(0,
+  const fieldErrorChance = Math.max(0,
     errorBase + (5 - conv.fielder.skills.defense) * CONFIG.errors.skillLeverage);
-  const isError = rng.bool(errorChance);
+  const isFieldError = rng.bool(fieldErrorChance);
 
   // Caught in air → fly/line/pop out (unless dropped on error)
-  if (conv.caught && !isError) {
+  if (conv.caught && !isFieldError) {
     if (ball.launchAngleDeg < 10)  return { result: 'line-out',  fieldedBy: conv.position };
     if (ball.launchAngleDeg > 50)  return { result: 'pop-out',   fieldedBy: conv.position };
     return { result: 'fly-out', fieldedBy: conv.position };
   }
-  if (conv.caught && isError) {
-    // Dropped fly: batter reaches safely
-    return { result: 'reached-on-error', fieldedBy: conv.position };
+  if (conv.caught && isFieldError) {
+    // Dropped fly: batter reaches safely (charged as fielding error)
+    return { result: 'reached-on-error', fieldedBy: conv.position, errorType: 'fielding' };
   }
 
   // Ball drops / rolls. For grounders, ball travels to fielder; for flies
@@ -217,8 +219,17 @@ export function resolveBattedBall(
 
   if (isInfielder) {
     // Throw to 1B; race vs batter (or error → reached safely)
-    if (isGrounder && isError) {
-      return { result: 'reached-on-error', fieldedBy: conv.position };
+    if (isGrounder && isFieldError) {
+      return { result: 'reached-on-error', fieldedBy: conv.position, errorType: 'fielding' };
+    }
+    // Cleanly fielded — now roll for an accurate throw. Wild throws
+    // (airmail, one-hop, pulled cover off the bag) are charged as a
+    // separate error type and let existing runners take an extra base.
+    const throwErrorChance = Math.max(0,
+      CONFIG.errors.throwErrorBase
+        + (5 - conv.fielder.skills.defense) * CONFIG.errors.skillLeverage);
+    if (rng.bool(throwErrorChance)) {
+      return { result: 'reached-on-error', fieldedBy: conv.position, errorType: 'throw' };
     }
     const throwSec = throwTimeSec(fielderPt, BASE_COORDS_FT.first,
       conv.position, conv.fielder.skills.defense);

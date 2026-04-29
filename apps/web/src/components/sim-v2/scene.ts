@@ -13,6 +13,8 @@ import {
   ftToPxXY,
   arcLiftPx,
   arcHeightFt,
+  grounderBouncePx,
+  grounderBounceHeightFt,
   lerpFt,
 } from './coords';
 import { dugoutSpotFt } from './field/drawField';
@@ -280,9 +282,11 @@ export function createScene(transform: FieldTransform): SceneAPI {
    * for non-fly arcs or when the tween isn't running.
    */
   const altitudeFt = (sprite: MovingSprite, clockSec: number): number => {
-    if (sprite.arc !== 'fly' || sprite.durSec <= 0) return 0;
+    if (sprite.durSec <= 0) return 0;
     const u = Math.min(1, Math.max(0, (clockSec - sprite.startT) / sprite.durSec));
-    return arcHeightFt(u, sprite.apexFt);
+    if (sprite.arc === 'fly') return arcHeightFt(u, sprite.apexFt);
+    if (sprite.arc === 'grounder') return grounderBounceHeightFt(u);
+    return 0;
   };
 
   const advance = (sprite: MovingSprite, clockSec: number) => {
@@ -292,6 +296,7 @@ export function createScene(transform: FieldTransform): SceneAPI {
     const px = ftToPx(sprite.cur, transform);
     let yOffset = 0;
     if (sprite.arc === 'fly') yOffset = arcLiftPx(u, sprite.apexFt, transform);
+    else if (sprite.arc === 'grounder') yOffset = grounderBouncePx(u, transform);
     sprite.gfx.position.set(px.x, px.y - yOffset);
     if (u >= 1) sprite.durSec = 0;
   };

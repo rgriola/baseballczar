@@ -106,6 +106,10 @@ export interface AtBatRecord {
   result: AtBatResult;
   battedBall?: BattedBall;
   fieldedBy?: Position;
+  /** When `result === 'reached-on-error'`, distinguishes a muffed ball
+   *  ('fielding') from a wild throw ('throw'). On throw errors, every
+   *  existing baserunner takes one extra base. */
+  errorType?: 'fielding' | 'throw';
   /**
    * Fielding credits for this play. Populated by `atBat.ts` from
    * (result, fieldedBy) using standard scorekeeping conventions:

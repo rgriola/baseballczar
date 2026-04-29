@@ -97,9 +97,15 @@ export const CONFIG = {
 
   // ─── Errors & double plays ───────────────────────────────────
   errors: {
-    // Per-batted-ball error chance, scaled by defense skill.
+    // Per-batted-ball *fielding* error chance (boot the grounder, drop
+    // the fly), scaled by defense skill. Excludes throw errors.
     grounderErrorBase: 0.030,
     flyErrorBase: 0.008,
+    /** Per-throw error chance (airmail, one-hop, pulled cover off bag)
+     *  on plays where the IF must throw across the diamond. Scaled by
+     *  defense skill. Throw errors let the batter reach AND advance
+     *  any existing runner one extra base. */
+    throwErrorBase: 0.012,
     skillLeverage: 0.006,        // per skill point off 5
   },
 

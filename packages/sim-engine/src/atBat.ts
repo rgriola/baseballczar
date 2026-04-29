@@ -31,6 +31,7 @@ export function simulateAtBat(
   const pitches: PitchEvent[] = [];
   let battedBall: BattedBall | undefined;
   let fieldedBy: Position | undefined;
+  let errorType: 'fielding' | 'throw' | undefined;
   let result: AtBatResult | null = null;
 
   while (pitchNum < CONFIG.pitch.maxPitchesPerAB) {
@@ -124,6 +125,7 @@ export function simulateAtBat(
         const res = resolveBattedBall(battedBall, batter, ctx.defense, rng);
         result = res.result;
         fieldedBy = res.fieldedBy;
+        errorType = res.errorType;
         break;
       }
     }
@@ -195,6 +197,7 @@ export function simulateAtBat(
     result,
     battedBall,
     fieldedBy,
+    errorType,
     fielding,
     rbis: 0,
     runsScored: 0,
