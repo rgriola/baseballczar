@@ -99,14 +99,27 @@ export interface BattedBall {
    *  post-landing roll. For grounders this equals `landingPoint`. For
    *  fly balls that drop fair, the ball bounces and rolls past
    *  `landingPoint` along its spray vector until grass friction stops
-   *  it or it hits the outfield wall. */
+   *  it. If the natural roll exceeds the room to the wall, the ball
+   *  ricochets back toward the infield with `wallBounceKeepFrac` of
+   *  its at-wall velocity — `restPoint` reflects that final settle. */
   restPoint: { x: number; y: number };
   /** How far the ball rolls AFTER landing (ft). 0 for grounders (the
-   *  rollout is already in `distanceFt`) and HRs. */
+   *  rollout is already in `distanceFt`) and HRs. For wall-bounces
+   *  this is the TOTAL ground covered (out + back), not the net
+   *  displacement from landing. */
   rollDistanceFt: number;
   /** Horizontal speed at the moment the ball touches grass (ft/sec).
    *  Used by the OF pursuit solver to compute time-along-roll. */
   landingSpeedFps: number;
+  /** Set when the ball reached the outfield wall with energy to
+   *  spare. The point on the wall the ball struck (engine feet). The
+   *  visualizer animates a two-segment roll (landing→wall, then
+   *  wall→restPoint) when this is present. */
+  wallHitPoint?: { x: number; y: number };
+  /** Ball speed (ft/sec) the instant after the wall ricochet —
+   *  the back-traveling roll segment starts at this velocity and
+   *  decelerates with `grassDecelFtPerSec2`. */
+  wallBounceSpeedFps?: number;
   /** For grounders intercepted by an infielder before they reach their
    *  natural landing point: where the fielder actually gloved the ball.
    *  The renderer + fielder-converge / throw events use this when set;

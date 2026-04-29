@@ -28,19 +28,32 @@ export interface FlightResult {
   isHomeRun: boolean;
   isFoul: boolean;
   /** Where the ball comes to rest if no fielder intercepts the roll.
-   *  For grounders this equals `landingPoint` (the rollout is already
-   *  baked into `distanceFt`). For fly balls that drop fair, the ball
-   *  bounces past `landingPoint` along its spray vector and decelerates
-   *  on grass until it stops or reaches the wall. Always inside the
-   *  park boundary. */
+   *  For grounders this equals `landingPoint`. For fly balls that drop
+   *  fair, the ball bounces past `landingPoint` along its spray vector,
+   *  decelerates on grass, and either stops naturally or strikes the
+   *  outfield wall — in which case it ricochets back toward the
+   *  infield with a fraction of its remaining velocity. Always inside
+   *  the park boundary. */
   restPoint: { x: number; y: number };
   /** Distance the ball rolls AFTER landing, before either stopping
    *  naturally or hitting the wall. 0 for grounders (already in
-   *  `distanceFt`) and HRs (left the field of play). */
+   *  `distanceFt`) and HRs (left the field of play). For wall-bounces
+   *  this is the TOTAL ground covered (out to wall + ricochet back),
+   *  not the displacement from landing. */
   rollDistanceFt: number;
   /** Horizontal speed (ft/sec) at the moment the ball touches grass.
    *  Used by the OF pursuit solver to compute time-along-roll. */
   landingSpeedFps: number;
+  /** If the ball reached the wall with energy to spare, this is the
+   *  point on the wall it struck (in engine feet). The ball then
+   *  ricochets back along the spray vector with `wallBounceKeepFrac`
+   *  of its at-wall velocity. Undefined when the ball stopped before
+   *  reaching the wall, on grounders, foul balls, and HRs. */
+  wallHitPoint?: { x: number; y: number };
+  /** Ball speed (ft/sec) the instant after the wall ricochet —
+   *  the back-traveling segment starts at this velocity and decelerates
+   *  with `grassDecelFtPerSec2`. Undefined when no wall hit. */
+  wallBounceSpeedFps?: number;
 }
 
 /** Ground-distance + hang time using simplified drag model. */
@@ -105,11 +118,17 @@ export function flight(input: FlightInput): FlightResult {
   // Grounders already include the rollout in `distanceFt`; HRs leave
   // the field; fouls are dead. For fly balls that drop fair, the ball
   // retains a fraction of its forward velocity at landing and rolls
-  // along the spray vector until grass friction stops it (or it hits
-  // the wall).
+  // along the spray vector. If the natural roll exceeds the room to
+  // the wall, the ball strikes the fence and ricochets back toward
+  // the infield with `wallBounceKeepFrac` of its at-wall velocity.
   let rollDistanceFt = 0;
   let landingSpeedFps = 0;
-  let restDist = distanceFt;
+  let wallHitPoint: { x: number; y: number } | undefined;
+  let wallBounceSpeedFps: number | undefined;
+  // Net displacement-from-landing AT REST (signed along spray; positive
+  // = toward the wall, can go negative if the ricochet kicks the ball
+  // back past `landingPoint`).
+  let restDispFt = 0;
   if (!isGrounder && !isHomeRun && !isFoul) {
     const angleRad = (Math.min(50, launchAngleDeg) * Math.PI) / 180;
     // Horizontal velocity at contact, attenuated by drag in flight.
@@ -120,16 +139,36 @@ export function flight(input: FlightInput): FlightResult {
     landingSpeedFps = vHorizLanding * CONFIG.flight.roll.bounceKeepFrac;
     const decel = CONFIG.flight.roll.grassDecelFtPerSec2;
     const naturalRoll = (landingSpeedFps * landingSpeedFps) / (2 * decel);
-    // Cap roll at the wall — ball stops dead at the fence.
     const roomToWall = Math.max(0, wall - distanceFt);
-    rollDistanceFt = Math.min(naturalRoll, roomToWall);
-    restDist = distanceFt + rollDistanceFt;
+    if (naturalRoll <= roomToWall) {
+      // Ball stops on the grass before the wall — simple monotonic roll.
+      rollDistanceFt = naturalRoll;
+      restDispFt = naturalRoll;
+    } else {
+      // Ball reaches the wall with energy to spare. v² = vLand² − 2·a·d.
+      const vAtWallSq = landingSpeedFps * landingSpeedFps - 2 * decel * roomToWall;
+      const vAtWall = Math.sqrt(Math.max(0, vAtWallSq));
+      // Ricochet keeps a fraction of velocity (padded MLB walls absorb
+      // a lot of energy — see CONFIG comment).
+      const vBounce = vAtWall * CONFIG.flight.roll.wallBounceKeepFrac;
+      wallBounceSpeedFps = vBounce;
+      const bounceDist = (vBounce * vBounce) / (2 * decel);
+      // Wall hit point is on the spray ray at distance `wall`.
+      wallHitPoint = {
+        x: wall * Math.sin(sprayRad),
+        y: wall * Math.cos(sprayRad),
+      };
+      // Total ground covered = out to wall + back toward infield.
+      rollDistanceFt = roomToWall + bounceDist;
+      // Net displacement from landing (positive = toward wall).
+      restDispFt = roomToWall - bounceDist;
+    }
   }
   const restPoint = isGrounder
     ? { x, y }
     : {
-        x: restDist * Math.sin(sprayRad),
-        y: restDist * Math.cos(sprayRad),
+        x: (distanceFt + restDispFt) * Math.sin(sprayRad),
+        y: (distanceFt + restDispFt) * Math.cos(sprayRad),
       };
 
   return {
@@ -142,5 +181,7 @@ export function flight(input: FlightInput): FlightResult {
     restPoint,
     rollDistanceFt,
     landingSpeedFps,
+    wallHitPoint,
+    wallBounceSpeedFps,
   };
 }

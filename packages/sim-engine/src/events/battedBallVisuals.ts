@@ -97,27 +97,74 @@ export function emitBattedBallVisuals(
   const isInfielder = !['LF', 'CF', 'RF'].includes(ab.fieldedBy);
   const isCaught = ['fly-out', 'line-out', 'pop-out', 'sac-fly'].includes(ab.result);
 
-  // ─── Ball-roll segment (post-landing) ────────────────────────
+  // ─── Ball-roll segment(s) (post-landing) ─────────────────────
   // For fly balls that drop fair and aren't caught, the ball bounces
   // and rolls from `landingPoint` toward the fielder's intercept point
   // (already resolved into `ab.battedBall.fieldedAtPoint` by the
   // engine). Emit a `ball-roll` so the renderer tweens the ball along
   // the grass instead of stopping it dead at the landing spot.
+  //
+  // If the engine recorded a `wallHitPoint` AND the fielder didn't
+  // glove the ball before it reached the wall, we emit TWO segments
+  // (landing → wall, then wall → fieldedAt) so the visual ricochet is
+  // explicit. The fielder will catch up to the ball on the rebound.
+  //
   // Skipped for: grounders (continuous trajectory; no separate landing
   // beat in the visual), HRs (left the field), foul-outs (caught in
   // the air), and any caught-fly result.
   const isGrounderVisual = ball.launchAngleDeg < 5;
   if (!isCaught && !isGrounderVisual && !ball.isHomeRun && !ball.isFoul
       && ball.fieldedAtPoint) {
-    const rollDx = ball.fieldedAtPoint.x - ball.landingPoint.x;
-    const rollDy = ball.fieldedAtPoint.y - ball.landingPoint.y;
-    const rollLen = Math.hypot(rollDx, rollDy);
-    if (rollLen > 1) {
-      // Time the ball spends rolling = distance / average roll speed
-      // (avg of landing speed and 0). Falls back to a short floor so
-      // the visual reads even on a tiny dribble past the landing.
+    const wallHit = ball.wallHitPoint;
+    // Did the fielder catch the ball before the wall? Compare cumulative
+    // ground from landing to fieldedAt vs landing to wall. If wallHit
+    // exists and the fielder gloved the ball at distance > roomToWall
+    // along the spray, OR after the bounce point, animate the ricochet.
+    const fieldedDispFt = Math.hypot(
+      ball.fieldedAtPoint.x - ball.landingPoint.x,
+      ball.fieldedAtPoint.y - ball.landingPoint.y,
+    );
+    const roomToWall = wallHit ? Math.hypot(
+      wallHit.x - ball.landingPoint.x,
+      wallHit.y - ball.landingPoint.y,
+    ) : Infinity;
+    // Detect "fielded after the bounce": the intercept point lies on
+    // the back-toward-infield half of the path (closer to home than
+    // the wall) AND a wallHitPoint was recorded.
+    const fieldedDistFromHome = Math.hypot(ball.fieldedAtPoint.x, ball.fieldedAtPoint.y);
+    const wallDistFromHome = wallHit ? Math.hypot(wallHit.x, wallHit.y) : 0;
+    const bounced = !!wallHit && fieldedDistFromHome < wallDistFromHome - 1;
+
+    if (bounced && wallHit) {
+      // Two-segment animation: out to wall, then ricochet back to glove.
+      const decel = 14; // matches CONFIG.flight.roll.grassDecelFtPerSec2
+      const vLand = ball.landingSpeedFps;
+      const vAtWall = Math.sqrt(Math.max(0, vLand * vLand - 2 * decel * roomToWall));
+      const outAvg = Math.max(8, (vLand + vAtWall) / 2);
+      const outSec = Math.max(0.15, roomToWall / outAvg);
+      const backLen = Math.hypot(
+        ball.fieldedAtPoint.x - wallHit.x,
+        ball.fieldedAtPoint.y - wallHit.y,
+      );
+      const vBounce = ball.wallBounceSpeedFps ?? vAtWall * 0.55;
+      const backAvg = Math.max(6, vBounce * 0.5);
+      const backSec = Math.max(0.15, backLen / backAvg);
+      push({
+        type: 'ball-roll',
+        fromPoint: ball.landingPoint,
+        toPoint: wallHit,
+        rollSec: outSec,
+      }, ball.hangTimeSec);
+      push({
+        type: 'ball-roll',
+        fromPoint: wallHit,
+        toPoint: ball.fieldedAtPoint,
+        rollSec: backSec,
+      }, ball.hangTimeSec + outSec);
+    } else if (fieldedDispFt > 1) {
+      // Single segment: simple grass roll from landing to glove.
       const avgSpeed = Math.max(8, ball.landingSpeedFps * 0.5);
-      const rollSec = Math.max(0.15, rollLen / avgSpeed);
+      const rollSec = Math.max(0.15, fieldedDispFt / avgSpeed);
       push({
         type: 'ball-roll',
         fromPoint: ball.landingPoint,

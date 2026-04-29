@@ -81,6 +81,8 @@ export function rollBattedBall(
     restPoint: f.restPoint,
     rollDistanceFt: f.rollDistanceFt,
     landingSpeedFps: f.landingSpeedFps,
+    wallHitPoint: f.wallHitPoint,
+    wallBounceSpeedFps: f.wallBounceSpeedFps,
     isFoul: f.isFoul,
     isHomeRun: f.isHomeRun,
   };
@@ -306,71 +308,100 @@ export function resolveBattedBall(
       / Math.max(CONFIG.fielding.minRollSpeedFps, ballRollSpeedFps);
     totalToBall = ballTravelSec + CONFIG.fielding.pickupSec;
   } else {
-    // Roll vector & physics constants.
-    const rollDx = ball.restPoint.x - ball.landingPoint.x;
-    const rollDy = ball.restPoint.y - ball.landingPoint.y;
-    const rollLen = Math.hypot(rollDx, rollDy);
+    // Roll path & physics. With a wall ricochet, the ball traces out
+    // along the spray vector to the wall, then bounces back toward
+    // the infield with `wallBounceSpeedFps`. Position-along-spray is
+    // therefore non-monotonic; the OF must be intercepted by total
+    // GROUND covered `g ∈ [0, rollDistanceFt]`, not by displacement.
     const decel = CONFIG.flight.roll.grassDecelFtPerSec2;
     const vLand = ball.landingSpeedFps;
+    const totalRoll = ball.rollDistanceFt;
+    // Unit spray vector (from home through landing).
+    const lpLen = Math.hypot(ball.landingPoint.x, ball.landingPoint.y);
+    const ux = lpLen > 0 ? ball.landingPoint.x / lpLen : 0;
+    const uy = lpLen > 0 ? ball.landingPoint.y / lpLen : 1;
+    const wallHit = ball.wallHitPoint;
+    const roomToWall = wallHit
+      ? Math.hypot(wallHit.x - ball.landingPoint.x, wallHit.y - ball.landingPoint.y)
+      : Infinity;
+    const vBounce = ball.wallBounceSpeedFps ?? 0;
+    // Time the ball reaches `g` ft of total ground covered (since landing).
+    const tBallAtG = (g: number): number => {
+      if (g <= roomToWall || !wallHit) {
+        const disc = vLand * vLand - 2 * decel * g;
+        const tau = disc > 0 ? (vLand - Math.sqrt(disc)) / decel
+                             : (totalRoll > 0 ? totalRoll / Math.max(1, vLand * 0.5) : 0);
+        return ball.hangTimeSec + tau;
+      }
+      // Past the wall: ball is on its way back.
+      const tWall = (vLand - Math.sqrt(Math.max(0, vLand * vLand - 2 * decel * roomToWall))) / decel;
+      const bs = g - roomToWall;
+      const discB = vBounce * vBounce - 2 * decel * bs;
+      const tauBack = discB > 0 ? (vBounce - Math.sqrt(discB)) / decel
+                                : Infinity;
+      return ball.hangTimeSec + tWall + tauBack;
+    };
+    // Where the ball is at `g` ft covered.
+    const ballPosAtG = (g: number): { x: number; y: number } => {
+      if (g <= roomToWall || !wallHit) {
+        return {
+          x: ball.landingPoint.x + ux * g,
+          y: ball.landingPoint.y + uy * g,
+        };
+      }
+      const back = g - roomToWall;
+      return {
+        x: wallHit.x - ux * back,
+        y: wallHit.y - uy * back,
+      };
+    };
+    // How much ground has the ball covered by time `t`?
+    const gAtT = (t: number): number => {
+      const tau = Math.max(0, t - ball.hangTimeSec);
+      // Outbound segment.
+      const gOut = Math.min(roomToWall, vLand * tau - 0.5 * decel * tau * tau);
+      if (!wallHit || gOut < roomToWall) {
+        return Math.max(0, Math.min(totalRoll, gOut));
+      }
+      // Reached wall — compute time spent outbound, then bounce back.
+      const tWall = (vLand - Math.sqrt(Math.max(0, vLand * vLand - 2 * decel * roomToWall))) / decel;
+      const tauBack = Math.max(0, tau - tWall);
+      const gBack = vBounce * tauBack - 0.5 * decel * tauBack * tauBack;
+      return Math.max(0, Math.min(totalRoll, roomToWall + Math.max(0, gBack)));
+    };
     // Fielder range (ft/sec), same model as findConverger.
     const range = CONFIG.fielder.rangeFtPerSec
       + (conv.fielder.skills.defense - 5) * 4.0
       + (conv.fielder.skills.speed - 5) * 1.0;
     const effRange = Math.max(12, range);
-    // Fielder time to reach a point on the roll path parameterized by
-    // s ∈ [0, rollLen]: T = max(reachLanding, reach to that point).
-    let s = 0;  // ft past landing
+    // Fixed-point intercept search, parameterized by total ground `g`.
+    let g = 0;
     let T = conv.reachTimeSec;
     for (let i = 0; i < CONFIG.flight.roll.pursuitIterations; i++) {
-      // Time the ball reaches s past landing (s = vLand·τ − ½·a·τ²).
-      // τ = (vLand − √(vLand² − 2·a·s)) / a, with τ → ∞ if s > naturalRoll.
-      const disc = vLand * vLand - 2 * decel * s;
-      const tau = disc > 0 ? (vLand - Math.sqrt(disc)) / decel
-                           : (rollLen > 0 ? rollLen / Math.max(1, vLand * 0.5) : 0);
-      const tBallAtS = ball.hangTimeSec + tau;
-      // Where the ball is at that time (along the unit roll vector).
-      const interceptX = rollLen > 0
-        ? ball.landingPoint.x + (rollDx / rollLen) * s
-        : ball.landingPoint.x;
-      const interceptY = rollLen > 0
-        ? ball.landingPoint.y + (rollDy / rollLen) * s
-        : ball.landingPoint.y;
-      const dist = Math.hypot(fielderPt.x - interceptX, fielderPt.y - interceptY);
+      const tBall = tBallAtG(g);
+      const p = ballPosAtG(g);
+      const dist = Math.hypot(fielderPt.x - p.x, fielderPt.y - p.y);
       const tFielder = CONFIG.fielder.reactionSec + dist / effRange;
-      // The intercept time is whichever party arrives last.
-      const tMeet = Math.max(tBallAtS, tFielder);
-      // If the fielder arrives first (tFielder < tBallAtS), the ball is
-      // still on its way — push s back so the fielder doesn't camp at
-      // a spot the ball overshoots. If the fielder is late, advance s
-      // along the roll.
+      const tMeet = Math.max(tBall, tFielder);
+      // How far the ball rolled by the time the fielder reached the
+      // most-recent guess: re-derive `g` from when the fielder gets
+      // there. Damp for stability.
+      const gNew = gAtT(tFielder);
+      g = 0.6 * gNew + 0.4 * g;
+      T = tMeet;
+      // Early-out: if the fielder is camping at the landing point
+      // before the ball even gets there, the intercept is landing.
       const fielderArrivalAtLanding = CONFIG.fielder.reactionSec
         + Math.hypot(fielderPt.x - ball.landingPoint.x,
                      fielderPt.y - ball.landingPoint.y) / effRange;
-      // How far the ball rolled by the time the fielder reached the
-      // most-recent guess: solve s_new from when fielder gets there.
-      const tauNew = Math.max(0, tFielder - ball.hangTimeSec);
-      const sNew = Math.max(0, Math.min(rollLen,
-        vLand * tauNew - 0.5 * decel * tauNew * tauNew));
-      // Damp the update for stability.
-      s = 0.6 * sNew + 0.4 * s;
-      T = tMeet;
-      // Early-out: if the fielder arrives before the ball even lands
-      // (i.e. he's already standing at landingPoint), the intercept is
-      // landing itself — caught flag would have triggered if it were
-      // an actual catch, so this is a "ball drops in front of him".
       if (fielderArrivalAtLanding <= ball.hangTimeSec) {
-        s = 0;
+        g = 0;
         T = ball.hangTimeSec;
         break;
       }
     }
-    // Final intercept point.
-    if (rollLen > 0) {
-      interceptPoint = {
-        x: ball.landingPoint.x + (rollDx / rollLen) * s,
-        y: ball.landingPoint.y + (rollDy / rollLen) * s,
-      };
-    }
+    // Final intercept point along the (possibly piecewise) roll path.
+    interceptPoint = ballPosAtG(g);
     totalToBall = T + CONFIG.fielding.pickupSec;
     // Record where the fielder actually gloved it (drives visualizer +
     // throw geometry). For grounders this is set earlier in the

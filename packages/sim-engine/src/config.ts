@@ -44,15 +44,20 @@ export const CONFIG = {
      *  intercept somewhere along that roll. */
     roll: {
       /** Fraction of horizontal contact velocity retained after the
-       *  first bounce. ~0.30 reproduces "shot to the wall" rollouts of
-       *  ~40 ft for a 100mph LA-22° drive. */
-      bounceKeepFrac: 0.30,
+       *  first bounce. ~0.55 gives a ~50–70 ft natural roll on a
+       *  100 mph LA-22° drive (matches MLB "shot to the gap" rollouts). */
+      bounceKeepFrac: 0.55,
       /** Constant deceleration on outfield grass (ft/sec²) once the
-       *  ball is rolling. Higher = ball stops sooner. */
-      grassDecelFtPerSec2: 22,
+       *  ball is rolling. Lower = ball rolls farther. */
+      grassDecelFtPerSec2: 14,
+      /** Energy retained after a wall ricochet. Padded MLB outfield
+       *  walls absorb most of the impact — ball typically kicks back
+       *  ~25 ft on a hard-hit liner off the fence. */
+      wallBounceKeepFrac: 0.55,
       /** Fielder pursuit-loop max iterations. The intercept point is
-       *  solved by fixed-point iteration; 5 is more than enough. */
-      pursuitIterations: 5,
+       *  solved by fixed-point iteration; 6 is more than enough even
+       *  with the piecewise (out + ricochet) ball-position model. */
+      pursuitIterations: 6,
     },
   },
 
