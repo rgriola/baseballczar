@@ -284,9 +284,12 @@ export function buildEvents(g: GameResult): SimEvent[] {
       let source: 'fielder' | 'umpire';
       if (ab.battedBall.isHomeRun) {
         // Ball cleared the wall — umpire flips a new ball to the pitcher
-        // sometime during the home-run trot.
+        // sometime during the home-run trot. Wait for the ball's full
+        // hang time so the home-run flight isn't clipped by the
+        // catcher → pitcher return tween starting early.
         fromPoint = FIELDER_POSITIONS_FT.C;
-        absT = (lastContactT ?? t) + TIME.umpireHoldSec + 2.0;
+        const hrHang = ab.battedBall.hangTimeSec || 4.0;
+        absT = (lastContactT ?? t) + hrHang + TIME.umpireHoldSec + 1.0;
         source = 'umpire';
       } else if (isInfieldThrow && throwArrivesAt != null) {
         // Ball ended at the bag in the cover fielder's glove — he

@@ -69,6 +69,13 @@ function compressTimeline(events: SimEvent[], maxGapSec: number): SimEvent[] {
   const out: SimEvent[] = [];
   let prevOrigT = events[0].t;
   let prevNewT = 0;
+  // Track the in-flight duration of the most recent ball event so the
+  // gap to the next event can stay long enough to let the flight finish.
+  // Without this, a deep HR (5–6s hang) gets clamped to 1.5s and the
+  // ball sprite jumps back to the catcher while the ball is still in
+  // the air. Same idea for any contact event — the next event
+  // (ball-return, runner-advance, etc.) often retargets the ball.
+  let inFlightDur = 0;
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
     let cap = maxGapSec;
@@ -82,11 +89,23 @@ function compressTimeline(events: SimEvent[], maxGapSec: number): SimEvent[] {
       cap = FIRST_PITCH_MAX_SEC;
       firstPitchSeen = true;
     }
+    // If the previous event put the ball in flight, ensure this gap is
+    // at least long enough for the flight to play out (+ small buffer).
+    if (inFlightDur > 0) {
+      cap = Math.max(cap, inFlightDur + 0.5);
+      inFlightDur = 0;
+    }
     const gap = i === 0 ? 0 : Math.min(cap, e.t - prevOrigT);
     const newT = i === 0 ? e.t : prevNewT + gap;
     out.push({ ...e, t: newT });
     prevOrigT = e.t;
     prevNewT = newT;
+    // Record this event's in-flight duration for the NEXT iteration.
+    if (e.type === 'contact') {
+      inFlightDur = e.hangTimeSec || 1.5;
+    } else if (e.type === 'throw' || e.type === 'ball-return') {
+      inFlightDur = e.flightSec || 0;
+    }
   }
   return out;
 }
