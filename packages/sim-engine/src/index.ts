@@ -21,3 +21,4 @@ export { wallDistanceFt } from './physics/park';
 export { throwTimeSec, throwVelocityMph } from './physics/throw';
 export { runnerTimeSec, sprintFtPerSec, BASE_COORDS_FT } from './physics/speed';
 export { FIELDER_POSITIONS_FT } from './physics/positions';
+export { isInfieldFly, INFIELD_FLY } from './rules/infieldFly';

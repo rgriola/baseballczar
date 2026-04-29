@@ -58,7 +58,6 @@ Fielded by K. Zimmer (RF)
 
 **_ Issue _**
 
-- This is an overall runner issue to be checked for.
 - The runner on base situations are limited :
 - No Runners, Runner at First, Runner at Second, Runner at 3rd
 - Runners at First and Second, Runners at First and Third, Runners at First, Second and Third
@@ -67,9 +66,9 @@ Fielded by K. Zimmer (RF)
 - Fielders should have logic to make descisions based on each runner condition.
 - Fielders should know their responsibility when the ball is hit given each Runner Condition and Where the ball is hit.
 - Fielders logic for these conditions are also based on the number of outs; ie 2 outs get the easy out. less than 2 outs is there a double play possible?
-- Do we need to cut off the runner from scoring? This is a score based influence, if you are up by 5 runs with a hit to the outfield maybe the outfielder throws the ball to 2nd base to keep the runners from advancing rather than trying to get the runner at home, which would allow runners to advance on the long throw.
+- Do we need to cut off the runner from scoring? This is a score based influence, if you are up by 5 runs with a hit to the outfield maybe the outfielder throws the ball to 2nd base to keep the runners from advancing rather than trying to get the runner at home, which would allow runners to advance on the long throw. There is also sacrific fly balls and infield fly rule.
 - some are pure A happens do B, some should be "Can I make the throw in the moment?" which skill wise might be a roll.
-- what is the best approach to using player intellegence (PI) to help players (runners and fielders) make these descisions. Should we work out the logic together? This all came about becuiase
+- what is the best approach to using player intellegence (PI) to help players (runners and fielders) make these descisions. Should we work out the logic together?
 
 - No runners - fielder focus on getting batter out.
 - Runner at 1st base - fielder could try for double play > 2nd base throw to 1st. If there are 2 outs get the easy runner ie; first baseman fields the ball runs and tags first base - the lead runner is not priority.
@@ -86,3 +85,12 @@ Fielded by K. Zimmer (RF)
 
 - These are pretty standard decsion making trees in baseball.
 - The outfielders would be backing up bases incase the throw is off or the player misses the ball.
+
+...
+
+Q1: Players have a PI, Play Intellgence. this should be used to calculate decisions.
+Q2, PI is part of a player skill set, it is not part of the box score. PI for now should influence defense and baserunning.
+Q3. Keep player driven by now. Manager is down the road.
+Q4. Cutoffs should be visuallized yes.
+
+- Note 1st baseman typcially are in the infield and line themselves with the correct base to throw to. 1stbase men are used becuase relays are typically used when runners are going to 3rd or Home and no one is needed to cover 1st base; you use the 1st baseman. The pitcher backs up either home or 3rd depending on the throw from the outfield, they may actually wait between third and home until they know where the throw is going. A long single with the hitter/runner trying to get to second base - no runners on - to right field the 2nd baseman goes out, left field and center the short stop.

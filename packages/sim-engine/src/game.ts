@@ -10,6 +10,7 @@ import type { Position } from './config';
 import { CONFIG } from './config';
 import { simulateAtBat } from './atBat';
 import { shouldPullPitcher, pickReliever, type ManagerState } from './manager';
+import { isInfieldFly } from './rules/infieldFly';
 import type { Rng } from './rng';
 
 interface TeamGameState {
@@ -252,6 +253,18 @@ function simulateHalfInning(
 
     fielding.pitcherState.pitchCount += ab.pitches.length;
     fielding.pitcherState.battersFaced++;
+
+    // ─── Infield Fly Rule ───────────────────────────────────────
+    // Must run BEFORE situational reclassification: an IFR call
+    // makes the batter automatically out and freezes runners,
+    // regardless of how the converger / hit classifier resolved
+    // the ball. Prevents the cheap drop-DP exploit.
+    if (isInfieldFly({ outs, bases, battedBall: ab.battedBall })) {
+      ab.result = 'pop-out';
+      // Force the fielding credit to the converger (or P as a
+      // fallback) so the box score reflects who would've caught it.
+      ab.fielding = { putoutBy: ab.fieldedBy ?? 'P' };
+    }
 
     // ─── Phase 5: situational reclassification ──────────────────
     // Convert generic ground-out / fly-out into DP, FC, or sac-fly
