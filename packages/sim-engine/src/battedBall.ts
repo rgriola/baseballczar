@@ -294,6 +294,9 @@ export function resolveFoulBall(
   // Working radius: tighter than the league cap so we don't over-produce
   // foul-outs. The cap in CONFIG is the absolute max a fielder will drift.
   const depthCap = Math.min(35, CONFIG.park.foulTerritoryDepthFt);
+  // Catcher gets a wider chase radius for fouls in the dirt circle.
+  // Real-life catchers will drift 50+ ft to track a foul pop.
+  const catcherDepthCap = 60;
   let best: { pos: Position; reach: number } | null = null;
   for (const [pos, fielder] of defense) {
     // Only the corner infielders, catcher, and corner outfielders
@@ -304,7 +307,8 @@ export function resolveFoulBall(
       fielderPt.x - ball.landingPoint.x,
       fielderPt.y - ball.landingPoint.y,
     );
-    if (dist > depthCap) continue;
+    const cap = pos === 'C' ? catcherDepthCap : depthCap;
+    if (dist > cap) continue;
     const range = CONFIG.fielder.rangeFtPerSec
       + (fielder.skills.defense - 5) * 4.0
       + (fielder.skills.speed - 5) * 1.0;
@@ -312,8 +316,13 @@ export function resolveFoulBall(
     // Need to get there before the ball comes down (no slack — fouls
     // drift unpredictably and most "close" fouls drop in the seats).
     if (reach > ball.hangTimeSec) continue;
-    if (!best || reach < best.reach) {
-      best = { pos, reach };
+    // Slight bias toward the catcher for short fouls (within ~20 ft of
+    // home), since C is best-positioned to read pop-ups behind the plate.
+    const reachAdj = pos === 'C' && Math.hypot(ball.landingPoint.x, ball.landingPoint.y) < 20
+      ? reach * 0.7
+      : reach;
+    if (!best || reachAdj < best.reach) {
+      best = { pos, reach: reachAdj };
     }
   }
   return best ? { position: best.pos } : null;
