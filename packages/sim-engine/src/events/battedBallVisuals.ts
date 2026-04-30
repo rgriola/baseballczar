@@ -248,6 +248,29 @@ export function emitBattedBallVisuals(
       flightSec: throwFlightSec,
     }, TIME.fieldedToThrowSec);
 
+    // Double-play relay: pivot at 2B turns and throws to first for the
+    // back-end out. Without this second throw the visualizer just shows
+    // a force at second and the at-bat ends, even though the engine
+    // booked two outs (e.g. 5-4-3, 6-4-3, 4-6-3).
+    if (ab.result === 'double-play') {
+      const pivotPos: Position = ab.fieldedBy === 'B2' ? 'SS' : 'B2';
+      const pivotPlayer = defenseMap?.get(pivotPos);
+      const firstPt = basePoint('first');
+      const relayFlightSec = pivotPlayer
+        ? throwTimeSec(targetPt, firstPt, pivotPos, pivotPlayer.skills.defense)
+        : TIME.throwToBaseSec;
+      // Pivot receives at 2B, brief turn, then fires to first.
+      const relayDelay = TIME.fieldedToThrowSec + throwFlightSec + 0.18;
+      push({
+        type: 'throw',
+        fromPosition: pivotPos, fromPlayerId: pivotPlayer?.id ?? -1,
+        fromPoint: targetPt,
+        toBase: 'first',
+        toPoint: firstPt,
+        flightSec: relayFlightSec,
+      }, relayDelay);
+    }
+
     // Phase 5.15: backup fielder chases behind the bag on a throwing
     // error so the visual reads as a wild throw being run down.
     if (ab.result === 'reached-on-error' && ab.errorType === 'throw') {
