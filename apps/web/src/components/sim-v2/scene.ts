@@ -88,8 +88,10 @@ export function createScene(transform: FieldTransform): SceneAPI {
   // ─── Ball sprite (initially at pitcher's mound) ───
   // No stroke (cleaner look at small sizes). Sized to read as a baseball
   // alongside the player sprites; min-pixel floor keeps it visible at
-  // low world zoom.
-  const BALL_RADIUS_PX = 2.25;
+  // low world zoom. Halved from 2.25 → 1.1 so the ball isn't oversized
+  // relative to the players. Arc-based scaling in `updateBallShadow`
+  // still grows it ~1.75× at apex, which preserves "feels like a fly".
+  const BALL_RADIUS_PX = 1.1;
   const ballGfx = new Graphics()
     .circle(0, 0, BALL_RADIUS_PX).fill(BALL_COLOR);
   const ballStartPx = ftToPx(FIELDER_POSITIONS_FT.P, transform);

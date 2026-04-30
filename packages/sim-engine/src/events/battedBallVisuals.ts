@@ -38,6 +38,18 @@ export function emitBattedBallVisuals(
   // The play happens at `fieldedAtPoint` for grounders the IF intercepts
   // mid-roll; for everything else it's the ball's natural landing point.
   const playPoint = ball.fieldedAtPoint ?? ball.landingPoint;
+  // For the visual `contact` tween we want the ball to fly along its
+  // ACTUAL trajectory: a caught ball arrives at the glove (=playPoint),
+  // but an uncaught ball must land at the real landing point — the
+  // subsequent `ball-roll` event covers landing→fielded. Previously
+  // we pushed `playPoint` for both cases, which made the ball appear
+  // to teleport mid-flight when the OF gloved it well past landing
+  // (the contact tween dragged the ball to the fielded point, then
+  // ball-roll snapped it back to landing).
+  const isCaught = ['fly-out', 'line-out', 'pop-out', 'sac-fly'].includes(ab.result);
+  const contactLanding = isCaught || ball.isHomeRun || ball.isFoul
+    ? playPoint
+    : ball.landingPoint;
 
   push({
     type: 'contact',
@@ -47,7 +59,7 @@ export function emitBattedBallVisuals(
     distanceFt: ball.distanceFt,
     hangTimeSec: ball.hangTimeSec,
     peakHeightFt: ball.peakHeightFt,
-    landingPoint: playPoint,
+    landingPoint: contactLanding,
     isFoul: ball.isFoul,
     isHomeRun: ball.isHomeRun,
   }, 0);
@@ -95,7 +107,6 @@ export function emitBattedBallVisuals(
 
   // Infielder throw to 1B for ground-outs / FCs
   const isInfielder = !['LF', 'CF', 'RF'].includes(ab.fieldedBy);
-  const isCaught = ['fly-out', 'line-out', 'pop-out', 'sac-fly'].includes(ab.result);
 
   // ─── Ball-roll segment(s) (post-landing) ─────────────────────
   // For fly balls that drop fair and aren't caught, the ball bounces

@@ -307,11 +307,27 @@ export function buildEvents(g: GameResult): SimEvent[] {
         source = 'umpire';
       } else if (isInfieldThrow && throwArrivesAt != null) {
         // Ball ended at the bag in the cover fielder's glove — he
-        // tosses it back to the mound.
-        const targetBase = ab.result === 'double-play'
-          || ab.result === 'fielders-choice' ? 'second' : 'first';
-        fromPoint = BASE_COORDS_FT[targetBase];
-        absT = throwArrivesAt + TIME.fielderHoldSec;
+        // tosses it back to the mound. For double plays, the relay
+        // fires from second to first, so the ball ends at FIRST and
+        // its return originates there (delayed by the relay flight
+        // time). Without this offset, the ball-return whisks the ball
+        // straight from second back to the mound, hiding the relay
+        // throw entirely.
+        if (ab.result === 'double-play') {
+          const pivotPos = ab.fieldedBy === 'B2' ? 'SS' : 'B2';
+          const pivotPlayer = currentDefenseMap.get(pivotPos);
+          const relaySec = pivotPlayer
+            ? throwTimeSec(BASE_COORDS_FT.second, BASE_COORDS_FT.first,
+                pivotPos, pivotPlayer.skills.defense)
+            : TIME.throwToBaseSec;
+          fromPoint = BASE_COORDS_FT.first;
+          // Pivot turn delay (0.18s) matches battedBallVisuals.ts.
+          absT = throwArrivesAt + 0.18 + relaySec + TIME.fielderHoldSec;
+        } else {
+          const targetBase = ab.result === 'fielders-choice' ? 'second' : 'first';
+          fromPoint = BASE_COORDS_FT[targetBase];
+          absT = throwArrivesAt + TIME.fielderHoldSec;
+        }
         source = 'fielder';
       } else {
         // Caught fly, hit, or error — ball is in the fielder's glove
