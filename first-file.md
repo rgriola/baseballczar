@@ -108,7 +108,7 @@ Tag-up PI — currently sacFlyTagProb is a flat constant; should be PI+speed gat
 Steal attempts / pickoffs — the engine has none today; would need a new sub-module
 Box-score / sim-lab UI surface — verify that the new behaviors look correct on the field render
 
-Contact: 105 mph, LA 24°, spray -41° (LF-line), 364 ft, apex 62 ft — HR! < The ball visually did not go over the fence. could be pixel processing . I noticed this before.
+The ball visually did not go over the fence. could be pixel processing . I noticed this before. >> Contact: 105 mph, LA 24°, spray -41° (LF-line), 364 ft, apex 62 ft — HR! <
 
 On another home run the batter/runner still does not touch all the bases correctly.
 

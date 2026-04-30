@@ -19,6 +19,7 @@ baseballczar-v2/
 ## Tech Stack
 
 ### Web (`apps/web`)
+
 - **Framework:** Next.js 16 (App Router, Server Components)
 - **Database:** Supabase (PostgreSQL + Auth + Row Level Security)
 - **Styling:** Tailwind CSS
@@ -29,11 +30,13 @@ baseballczar-v2/
 - **Queue:** BullMQ + ioredis
 
 ### iOS (`apps/ios`)
+
 - **Framework:** Expo + React Native
 - **Renderer:** React Native Skia (2D field visualization)
 - **Router:** Expo Router (file-based)
 
 ### Sim Engine (`packages/sim-engine`)
+
 - **Language:** TypeScript (strict, no DOM deps)
 - **RNG:** Seedable mulberry32 — fully reproducible
 - **Physics:** Ball flight, park geometry, throw velocity (~85 mph), runner times (22–28 ft/sec)
@@ -194,6 +197,201 @@ npx tsx scripts/sim-lab.ts --games 10 --seed 42
 npx tsx scripts/skill-test.ts --games 30
 ```
 
+## Sim Engine Configuration
+
+All tunable knobs live in a single source of truth at
+[packages/sim-engine/src/config.ts](packages/sim-engine/src/config.ts).
+Edit a value, re-run `npm test` and `npm run sim`, and the change
+propagates to every consumer (engine, renderer, CLI). Timing constants
+that the event builder uses live alongside in
+[packages/sim-engine/src/events/timing.ts](packages/sim-engine/src/events/timing.ts).
+
+> **Calibration baseline (CONFIG_V1, 162 games @ seed 1):**
+> BB% .085 · K% .251 · BABIP .322 · HR/FB .148 · 4.08 R/G · 1.22 fouls/PA.
+> If you tweak a knob, re-run `npm run sim -- --games 162 --seed 1`
+> and confirm the rates in `expectedRanges` still hold.
+
+### `CONFIG.park` — field geometry (feet)
+
+| Knob                            | Default | Effect when raised                     |
+| ------------------------------- | ------- | -------------------------------------- |
+| `leftLineFt`, `rightLineFt`     | 320     | Pull-side HRs harder                   |
+| `leftCenterFt`, `rightCenterFt` | 375     | Gap doubles less likely to clear       |
+| `centerFt`                      | 405     | CF HRs harder                          |
+| `wallHeightFt`                  | 10      | Fewer HRs (anything ≤ wall is in play) |
+| `foulTerritoryDepthFt`          | 60      | More foul-pop catches by OF            |
+
+### `CONFIG.flight` — ball flight & rolls
+
+| Knob                       | Default | Effect when raised                        |
+| -------------------------- | ------- | ----------------------------------------- |
+| `gravityFtPerSec2`         | 32.174  | Shorter hang times, less carry            |
+| `dragCoeff`                | 0.0078  | Ball carries less — fewer HRs             |
+| `mphToFps`                 | 1.467   | (unit constant — don't touch)             |
+| `roll.bounceKeepFrac`      | 0.55    | Longer rollouts after first bounce        |
+| `roll.grassDecelFtPerSec2` | 14      | Ball stops faster on grass                |
+| `roll.wallBounceKeepFrac`  | 0.55    | Stronger ricochet off the wall            |
+| `roll.pursuitIterations`   | 6       | More accurate intercept solve (cost: CPU) |
+
+### `CONFIG.throwVeloBaseMph` — base throw velocity by position (mph)
+
+| Knob                      | Default           | Effect when raised                      |
+| ------------------------- | ----------------- | --------------------------------------- |
+| `P` / `C`                 | 85 / 82           | Faster pickoff / CS times               |
+| `B1` / `B2` / `SS` / `B3` | 80 / 82 / 86 / 84 | Quicker IF cross-diamond throws         |
+| `LF` / `CF` / `RF`        | 86 / 88 / 88      | Tougher to take an extra base           |
+| `outfieldCrowHopMph`      | 5                 | OF gets bonus on long throws            |
+| `releaseTimeSec`          | 1.0               | Slower IF release (more SB/extra bases) |
+| `outfieldReleaseTimeSec`  | 1.3               | Slower OF release (more extra bases)    |
+
+### `CONFIG.runner` — sprint speeds (ft/sec)
+
+| Knob                | Default | Effect when raised               |
+| ------------------- | ------- | -------------------------------- |
+| `minFtPerSec`       | 22      | Skill-1 runners faster           |
+| `maxFtPerSec`       | 28      | Skill-10 runners faster          |
+| `leftyHeadStartSec` | 0.3     | LHB legs out more infield hits   |
+| `secondaryLeadFt`   | 12      | Easier to take an extra base     |
+| `reactionToBatSec`  | 0.4     | Slower break — fewer extra bases |
+
+### `CONFIG.fielder` — reaction & range
+
+| Knob            | Default | Effect when raised        |
+| --------------- | ------- | ------------------------- |
+| `reactionSec`   | 0.3     | Slower start — more hits  |
+| `rangeFtPerSec` | 32      | Wider range — fewer hits  |
+| `catchRadiusFt` | 10      | Easier line-drive catches |
+
+### `CONFIG.fielding` — converge / pickup / territory
+
+| Knob                                          | Default  | Effect when raised                                    |
+| --------------------------------------------- | -------- | ----------------------------------------------------- |
+| `pickupSec`                                   | 0.4      | Slower glove transfer                                 |
+| `groundBallFrictionMul`                       | 0.55     | Grounder reaches IF faster                            |
+| `minRollSpeedFps`                             | 40       | Floor on weak choppers' arrival speed                 |
+| `territoryPenaltySecPerDeg`                   | 0.012    | Stricter zone discipline                              |
+| `shortBallRadiusFt`                           | 45       | Wider C/P pop-up territory                            |
+| `infielderMaxNaturalDepthFt`                  | 160      | IF allowed deeper before penalty                      |
+| `infielderDepthPenaltySecPerFt`               | 0.025    | Steeper IF-out-of-zone penalty                        |
+| `chargeMul`                                   | 1.0      | Charging fielder range multiplier                     |
+| `backpedalMul`                                | 0.6      | Backpedaling range — raise = better drop steps        |
+| `naturalSprayAngleDeg.{LF,CF,RF,B3,SS,B2,B1}` | -31..+31 | Each fielder's home zone center                       |
+| `cornerCaromAngleDeg`                         | 36       | Spray angle past which OF takes the carom penalty (°) |
+| `cornerCaromPenaltySec`                       | 0.6      | Time penalty for OF retrieving balls down the lines   |
+| `rangeDefenseLeverageFps`                     | 1.5      | Range bump per defense skill point above 5 (ft/s)     |
+| `rangeSpeedLeverageFps`                       | 2.5      | Range bump per speed skill point above 5 (ft/s)       |
+| `foulCatch.cornerDepthFt`                     | 55       | Corners chase fouls farther                           |
+| `foulCatch.catcherDepthFt`                    | 80       | Catcher chases fouls farther                          |
+| `foulCatch.catcherShortRadiusFt`              | 20       | Larger catcher-bias circle                            |
+| `foulCatch.catcherShortBiasMul`               | 0.7      | Stronger catcher claim near home                      |
+| `extraBaseSlackSec.toSecond`                  | 0.0      | Negative → more doubles (aggressive runner)           |
+| `extraBaseSlackSec.toThird`                   | 0.0      | Negative → more triples (aggressive runner)           |
+
+### `CONFIG.battedBall` — EV / LA / spray distributions
+
+| Knob                          | Default  | Effect when raised                  |
+| ----------------------------- | -------- | ----------------------------------- |
+| `powerToExitVeloMph.min/max`  | 75 / 115 | Wider EV range across skill 1–10    |
+| `dhrToLaunchAngleDeg.min/max` | -15 / 25 | Wider LA range across skill 1–10    |
+| `launchAngleStdDevDeg`        | 12       | More LA variance per swing          |
+| `exitVeloStdDevMph`           | 8        | More EV variance per swing          |
+| `pullCenterDeg`               | 14       | Stronger pull tendency              |
+| `sprayStdDevDeg`              | 18       | Wider spray (more oppo, more fouls) |
+
+### `CONFIG.pitch` — per-pitch outcome rolls
+
+| Knob                   | Default | Effect when raised                   |
+| ---------------------- | ------- | ------------------------------------ |
+| `baseInZoneRate`       | 0.50    | Pitchers throw more strikes          |
+| `baseSwingInZoneRate`  | 0.72    | Hitters more aggressive in zone      |
+| `baseChaseRate`        | 0.22    | Hitters chase more (fewer walks)     |
+| `baseContactRate`      | 0.88    | Higher contact (fewer Ks)            |
+| `foulRate`             | 0.45    | More fouls per contact (longer ABs)  |
+| `twoStrikeFoulRetains` | true    | 2-strike fouls don't end ABs         |
+| `maxPitchesPerAB`      | 20      | Safety cap on AB length              |
+| `edgeIsStrikeProb`     | 0.36    | Umpires call more borderline strikes |
+| `hbpProb`              | 0.005   | More HBPs                            |
+
+### `CONFIG.errors` — fielding & throwing errors
+
+| Knob                | Default | Effect when raised                         |
+| ------------------- | ------- | ------------------------------------------ |
+| `grounderErrorBase` | 0.030   | More booted grounders                      |
+| `flyErrorBase`      | 0.008   | More dropped flies                         |
+| `throwErrorBase`    | 0.012   | More throwing errors (extra-base advances) |
+| `skillLeverage`     | 0.006   | Defense skill matters more (per pt off 5)  |
+
+### `CONFIG.doublePlay` — turn rates
+
+| Knob            | Default | Effect when raised                    |
+| --------------- | ------- | ------------------------------------- |
+| `baseProb`      | 0.42    | More DPs turned                       |
+| `skillLeverage` | 0.04    | Glove skill matters more on the pivot |
+
+### `CONFIG.baserunning` — situational rolls
+
+| Knob            | Default | Effect when raised                           |
+| --------------- | ------- | -------------------------------------------- |
+| `sacFlyTagProb` | 0.85    | More R3-tags-on-fly conversions              |
+| `fcProb`        | 0.50    | More forced-runner outs (vs. routine 1B-out) |
+
+### `CONFIG.manager` — pitcher usage
+
+| Knob                       | Default | Effect when raised                  |
+| -------------------------- | ------- | ----------------------------------- |
+| `starterMaxPitches`        | 100     | Starters go deeper                  |
+| `starterTargetIp`          | 6       | Manager waits longer to pull        |
+| `relieverMaxPitches`       | 25      | Relievers stretch more              |
+| `bullpenWarningPitches`    | 90      | Bullpen warms later                 |
+| `pinchHitPlatoonAdvantage` | true    | Manager pinch-hits for platoon edge |
+
+### `CONFIG.game` — roster & game length
+
+| Knob           | Default | Effect when raised             |
+| -------------- | ------- | ------------------------------ |
+| `maxInnings`   | 18      | Longer extra-inning safety cap |
+| `rosterSize`   | 25      | Larger roster                  |
+| `lineupSize`   | 9       | Lineup positions               |
+| `rotationSize` | 5       | More starting pitchers         |
+| `bullpenSize`  | 7       | Larger bullpen                 |
+
+### `CONFIG.expectedRanges` — calibration guardrails
+
+Acceptance bands the CLI prints in green/red after a 162-game sim.
+Tighten or widen these to flag when a tweak takes a rate out of MLB range.
+
+| Knob             | Default range  | What it checks               |
+| ---------------- | -------------- | ---------------------------- |
+| `bbPct`          | [0.07, 0.11]   | Walk rate                    |
+| `kPct`           | [0.18, 0.26]   | Strikeout rate               |
+| `babip`          | [0.290, 0.310] | BA on balls in play          |
+| `hrPerFb`        | [0.10, 0.14]   | HR per fly ball              |
+| `pitchesPerPa`   | [3.6, 4.0]     | Pitches per plate appearance |
+| `pitchesPerGame` | [135, 160]     | Per-team pitch count         |
+| `runsPerGame`    | [3.5, 5.5]     | Per-team scoring             |
+| `foulsPerPa`     | [1.2, 1.8]     | Foul-ball density            |
+
+### `TIME` — event-builder timing constants
+
+[packages/sim-engine/src/events/timing.ts](packages/sim-engine/src/events/timing.ts).
+These don't change rate stats — they only change how long the renderer
+plays each beat. Tweak for a snappier or more leisurely PBP playback.
+
+| Knob                       | Default | What it controls                  |
+| -------------------------- | ------- | --------------------------------- |
+| `pitchToHomeSec`           | 0.45    | Pitch flight time                 |
+| `betweenPitchesSec`        | 12      | Pause between pitches             |
+| `betweenAtBatsSec`         | 25      | Pause between at-bats             |
+| `betweenInningsSec`        | 120     | Pause between innings             |
+| `preGameSec`               | 15      | Pre-first-pitch delay             |
+| `runnerReactionSec`        | 0.4     | Runner break after contact        |
+| `perBaseSec`               | 3.5     | Base-to-base running time         |
+| `catcherHoldSec`           | 0.5     | Catcher pause before lob to P     |
+| `fielderHoldSec`           | 0.7     | Fielder pause before return throw |
+| `umpireHoldSec`            | 1.5     | Umpire ball-replacement delay     |
+| `ballReturnSlowFtPerSec`   | 75      | Catcher lob speed                 |
+| `ballReturnNormalFtPerSec` | 110     | Fielder return throw speed        |
+
 ## Database Migrations
 
 Seven migrations applied in order:
@@ -246,6 +444,8 @@ All 18 items from the original P0–P3 improvement plan have been implemented:
 ## Code Review
 
 - [BBZAR_MASTER_REVIEW.md](BBZAR_MASTER_REVIEW.md) — Master hub with severity matrix
+- [issues.md](issues.md) — Open bugs and known sim/render issues
+- [task.md](task.md) — Active task list (P0–P3 backlog)
 - [review/01-correctness-logic.md](review/01-correctness-logic.md)
 - [review/02-security.md](review/02-security.md)
 - [review/03-architecture-design.md](review/03-architecture-design.md)

@@ -34,9 +34,23 @@ export interface InningStartEvent extends BaseEvent {
 export interface AtBatStartEvent extends BaseEvent {
   type: 'at-bat-start';
   inning: number; half: 'top' | 'bottom'; outs: number;
-  batter: { id: number; firstName: string; lastName: string; hand: 'L' | 'R' | 'S'; speed: number };
-  pitcher: { id: number; firstName: string; lastName: string; hand: 'L' | 'R' };
+  batter: {
+    id: number; firstName: string; lastName: string;
+    hand: 'L' | 'R' | 'S'; speed: number;
+    /** Optional skill snapshot for richer PBP. Each is 1..10. */
+    avg?: number; power?: number; eye?: number;
+    ag?: number; dhr?: number; playIntelligence?: number;
+  };
+  pitcher: {
+    id: number; firstName: string; lastName: string; hand: 'L' | 'R';
+    /** Optional skill snapshot for richer PBP. Each is 1..10. */
+    pitchIntel?: number; stamina?: number; defense?: number;
+  };
   runners: (number | null)[];   // [1B, 2B, 3B] — playerIds or null
+  /** Score going INTO this at-bat (optional for backward-compat with
+   *  older event streams). */
+  scoreHome?: number;
+  scoreAway?: number;
 }
 
 export interface PitchEvt extends BaseEvent {

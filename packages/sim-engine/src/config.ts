@@ -134,16 +134,37 @@ export const CONFIG = {
     /** Each fielder's natural spray angle (deg, CF=0). Reaching outside
      *  this zone costs `territoryPenaltySecPerDeg` per deg of miss. */
     naturalSprayAngleDeg: {
-      LF: -28, CF: 0, RF: +28,
+      // Match the OF starting positions in physics/positions.ts so the
+      // territory penalty is zero at the spot the fielder actually stands.
+      LF: -31, CF: 0, RF: +31,
       B3: -22, SS: -10, B2: +10, B1: +22,
     } as const,
+    /** A ball landing past `cornerCaromAngleDeg` (in absolute spray)
+     *  is treated as a corner shot — it skips into the corner, off
+     *  the side wall, off the warning track, and is harder to retrieve.
+     *  The OF reach time gets a flat `cornerCaromPenaltySec` bump,
+     *  which is what produces real triples (slow runner stays at 2B,
+     *  fast runner stretches it). Set penalty to 0 to disable. */
+    cornerCaromAngleDeg: 36,
+    cornerCaromPenaltySec: 0.6,
+    /** Per-fielder range model:
+     *    range_fps = base + (defense-5)*defensePerPt + (speed-5)*speedPerPt
+     *  Tuned so SPEED is the primary range factor (a burner outruns a
+     *  glove-only fielder to a gapper) while defense governs glove +
+     *  jump + first-step quality. With base 32 + speed 2.5/pt:
+     *    speed 1, def 5  → 22 ft/s   (slow guy: "falling down")
+     *    speed 5, def 5  → 32 ft/s   (league average)
+     *    speed 10, def 5 → 44.5 ft/s (burner CF)
+     *    speed 5, def 10 → 39.5 ft/s (great glove, average wheels) */
+    rangeDefenseLeverageFps: 1.5,
+    rangeSpeedLeverageFps:   2.5,
     /** Foul-pop catch radii (ft from home) — how far each fielder will
      *  drift into foul ground for a pop-up. */
     foulCatch: {
       /** Default cap for corner IF / corner OF. */
-      cornerDepthFt: 35,
+      cornerDepthFt: 55,
       /** Catcher gets a wider chase radius for fouls in the dirt circle. */
-      catcherDepthFt: 60,
+      catcherDepthFt: 80,
       /** When a foul lands within this distance of home, bias the catcher
        *  by multiplying his reach time by `catcherShortBiasMul`. */
       catcherShortRadiusFt: 20,
@@ -152,10 +173,14 @@ export const CONFIG = {
     /** Outfielder slack (sec) deciding how aggressively the runner takes
      *  an extra base. Smaller slack ⇒ more doubles/triples. */
     extraBaseSlackSec: {
-      /** Used in single-vs-double decision (throw to 2B). */
-      toSecond: 0.5,
-      /** Used in double-vs-triple decision (throw to 3B). */
-      toThird: 0.3,
+      /** Used in single-vs-double decision (throw to 2B). 0 = neutral;
+       *  doubles emerge from balls landing in the gap or rolling past the OF,
+       *  not from a hard-coded aggression bias. */
+      toSecond: 0.0,
+      /** Used in double-vs-triple decision (throw to 3B). 0 = neutral;
+       *  triples emerge organically from corner caroms / wall bounces /
+       *  long OF chases, not from a slack handout. */
+      toThird: 0.0,
     },
   },
 
@@ -163,7 +188,8 @@ export const CONFIG = {
   // Skill→tendency mapping. These are the v1 levers.
   battedBall: {
     // Exit velocity tier in mph by power skill (1..10)
-    powerToExitVeloMph: { min: 67, max: 106 },
+   // powerToExitVeloMph: { min: 67, max: 106 },
+   powerToExitVeloMph: { min: 75, max: 115 },
     // Launch angle bias by dhr skill: 1=worm-burner, 10=uppercut
     dhrToLaunchAngleDeg: { min: -15, max: 25 },
     launchAngleStdDevDeg: 12,    // gaussian noise around the bias
@@ -171,7 +197,7 @@ export const CONFIG = {
     // Spray angle convention: 0° = dead CF, -45° = LF foul line, +45° = RF.
     // RHB pulls to -pullCenterDeg, LHB to +pullCenterDeg. StdDev keeps most
     // contact inside the fair wedge while still allowing oppo-field hits.
-    pullCenterDeg: 22,
+    pullCenterDeg: 14,
     sprayStdDevDeg: 18,
   },
 
@@ -181,7 +207,7 @@ export const CONFIG = {
     baseSwingInZoneRate: 0.72,
     baseChaseRate: 0.22,
     baseContactRate: 0.88,       // when swinging
-    foulRate: 0.58,              // of all contact, share that's foul
+    foulRate: 0.45,              // of all contact, share that's foul (MLB ~0.40)
     twoStrikeFoulRetains: true,  // long ABs
     maxPitchesPerAB: 20,         // safety
     edgeIsStrikeProb: 0.36,      // umpire calls edge pitch a strike this often

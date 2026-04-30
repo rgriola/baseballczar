@@ -24,12 +24,16 @@ const halfLabel = (h: 'top' | 'bottom') => (h === 'top' ? 'Top' : 'Bot');
 export function buildPbp(events: SimEvent[]): PbpEntry[] {
   const out: PbpEntry[] = [];
   let curBatter = '';
-  let curPitcher = '';
   let inningLabel = '';
   let balls = 0, strikes = 0;
+  let outs = 0;
+  let scoreHome = 0, scoreAway = 0;
   let homeName = 'Home', awayName = 'Away';
   /** Defense map for the current half-inning, keyed by position. */
   let defense = new Map<string, { name: string; position: string }>();
+  /** Roster of every player ever introduced (used to label runners /
+   *  out runners by name when only an id is present on the event). */
+  const players = new Map<number, { name: string }>();
   /** Most recent fielder to converge on a batted ball, used to label
    *  the at-bat-end / out lines (e.g. "Single (fielded by S. Garcia, 2B)"). */
   let lastFielderPos: string | null = null;
@@ -39,6 +43,12 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
     const f = defense.get(pos);
     return f ? `${f.name}, ${f.position}` : pos;
   };
+  const runnerLabel = (id: number | null | undefined) =>
+    id != null ? (players.get(id)?.name ?? `#${id}`) : '';
+  const baseShort = (b: 'home' | 'first' | 'second' | 'third') =>
+    b === 'home' ? 'home' : b === 'first' ? '1B' : b === 'second' ? '2B' : '3B';
+  const skillBadge = (label: string, n: number | undefined) =>
+    n != null ? `${label}${n}` : '';
 
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
@@ -54,27 +64,65 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
         // Refresh defense map so subsequent plays can name the fielder.
         defense = new Map();
         for (const d of e.defense) {
-          defense.set(d.position, {
-            name: `${d.firstName[0]}. ${d.lastName}`,
-            position: d.position,
-          });
+          const name = `${d.firstName[0]}. ${d.lastName}`;
+          defense.set(d.position, { name, position: d.position });
+          players.set(d.playerId, { name });
         }
+        outs = 0;
         lastFielderPos = null;
-        out.push({ eventIdx: i, t: e.t, kind: 'inning', text: `── ${inningLabel} ──` });
+        out.push({
+          eventIdx: i, t: e.t, kind: 'inning',
+          text: `── ${inningLabel} — ${awayName} ${scoreAway}, ${homeName} ${scoreHome} ──`,
+        });
         break;
       }
       case 'at-bat-start': {
-        curBatter = `${e.batter.firstName[0]}. ${e.batter.lastName}`;
-        curPitcher = `${e.pitcher.firstName[0]}. ${e.pitcher.lastName}`;
+        const batterName = `${e.batter.firstName[0]}. ${e.batter.lastName}`;
+        const pitcherName = `${e.pitcher.firstName[0]}. ${e.pitcher.lastName}`;
+        curBatter = batterName;
         balls = 0; strikes = 0;
+        outs = e.outs;
+        if (e.scoreHome != null) scoreHome = e.scoreHome;
+        if (e.scoreAway != null) scoreAway = e.scoreAway;
         lastFielderPos = null;
-        const onBase = e.runners.map((r, j) => r != null ? ['1B', '2B', '3B'][j] : null).filter(Boolean);
-        const onBaseStr = onBase.length ? ` (${onBase.join(', ')})` : '';
+        // Register the batter so subsequent runner-advance / out lines
+        // by id can resolve to a name.
+        players.set(e.batter.id, { name: batterName });
+        for (let j = 0; j < e.runners.length; j++) {
+          const rid = e.runners[j];
+          if (rid != null && !players.has(rid)) players.set(rid, { name: `R${j + 1}` });
+        }
+        // Score + outs + base state header
+        const baseFlags = e.runners.map(r => r != null ? '●' : '○').join('');
+        const onBase = e.runners
+          .map((r, j) => r != null ? `${runnerLabel(r)} on ${['1B', '2B', '3B'][j]}` : null)
+          .filter(Boolean);
+        const onBaseStr = onBase.length ? `, ${onBase.join('; ')}` : '';
         out.push({
           eventIdx: i, t: e.t, kind: 'ab',
-          text: `${curBatter} batting vs ${curPitcher}${onBaseStr}`,
+          text: `${batterName} (${e.batter.hand}H) batting vs ${pitcherName} (${e.pitcher.hand}H) — ${awayName} ${scoreAway}, ${homeName} ${scoreHome}, ${e.outs} out${e.outs === 1 ? '' : 's'}, bases [${baseFlags}]${onBaseStr}`,
           meta: inningLabel,
         });
+        // Skill snapshot — only emit if we have at least one skill on
+        // each side (older event streams won't carry these).
+        const bs = [
+          skillBadge('AVG', e.batter.avg),
+          skillBadge('POW', e.batter.power),
+          skillBadge('EYE', e.batter.eye),
+          skillBadge('SPD', e.batter.speed),
+          skillBadge('PI',  e.batter.playIntelligence),
+        ].filter(Boolean).join(' ');
+        const ps = [
+          skillBadge('CTRL', e.pitcher.pitchIntel),
+          skillBadge('STAM', e.pitcher.stamina),
+          skillBadge('DEF',  e.pitcher.defense),
+        ].filter(Boolean).join(' ');
+        if (bs || ps) {
+          out.push({
+            eventIdx: i, t: e.t, kind: 'ab',
+            text: `    Batter: ${bs}   |   Pitcher: ${ps}`,
+          });
+        }
         break;
       }
       case 'pitch': {
@@ -93,7 +141,21 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
           e.outcome === 'foul-out' ? 'Foul out' :
           e.outcome === 'hbp' ? 'Hit by pitch' :
           'In play';
-        out.push({ eventIdx: i, t: e.t, kind: 'pitch', text: `  Pitch ${e.pitchNum}: ${label} (${count})` });
+        // Approximate "pitch location/quality" from the engine's
+        // intent-zone + actual-in-zone signals. The engine doesn't
+        // model individual pitch types yet, so this is the best
+        // location proxy we have today.
+        const zoneLabel =
+          e.intentZone === 'in'   ? 'in zone'  :
+          e.intentZone === 'edge' ? 'edge'     :
+                                    'off zone';
+        const inZone = e.actualInZone ? 'caught zone' : 'missed zone';
+        const swing = e.swung ? ', swung' : '';
+        const outsTag = `${outs} out${outs === 1 ? '' : 's'}`;
+        out.push({
+          eventIdx: i, t: e.t, kind: 'pitch',
+          text: `  Pitch ${e.pitchNum}: ${label} — pitched ${zoneLabel} (${inZone}${swing}) — (${count}, ${outsTag})`,
+        });
         break;
       }
       case 'contact': {
@@ -102,8 +164,6 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
         const sa = Math.round(e.sprayAngleDeg);
         const dist = Math.round(e.distanceFt);
         // Spray convention: 0° = dead CF, -45° = LF foul line, +45° = RF.
-        // Annotate the angle with a side label so the reader doesn't have
-        // to remember which way negative goes.
         const side =
           sa < -45 ? 'foul-L' :
           sa < -30 ? 'LF-line' :
@@ -113,13 +173,11 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
           sa <= 45 ? 'RF-line' :
           'foul-R';
         const tag = e.isHomeRun ? ' — HR!' : e.isFoul ? ' (foul)' : '';
-        // Apex shows the kinematic peak height. Useful to disambiguate
-        // "line drive at 18°" (apex ~25 ft) from "can of corn at 35°"
-        // (apex ~80 ft) when EV/LA alone aren't intuitive.
         const apex = e.peakHeightFt != null ? `, apex ${Math.round(e.peakHeightFt)} ft` : '';
+        const hang = `, hang ${e.hangTimeSec.toFixed(1)}s`;
         out.push({
           eventIdx: i, t: e.t, kind: 'play',
-          text: `  Contact: ${ev} mph, LA ${la}°, spray ${sa > 0 ? '+' : ''}${sa}° (${side}), ${dist} ft${apex}${tag}`,
+          text: `  Contact: ${ev} mph, LA ${la}°, spray ${sa > 0 ? '+' : ''}${sa}° (${side}), ${dist} ft${apex}${hang}${tag}`,
         });
         break;
       }
@@ -130,12 +188,44 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
         if (f) {
           out.push({
             eventIdx: i, t: e.t, kind: 'play',
-            text: `  Fielded by ${f.name} (${f.position})`,
+            text: `    Fielded by ${f.name} (${f.position})`,
           });
         }
         break;
       }
+      case 'fielder-dive': {
+        const f = defense.get(e.position);
+        const who = f ? `${f.name} (${f.position})` : e.position;
+        const verb = e.variant === 'leap' ? 'leaps' : 'dives';
+        const result = e.successful ? '— caught!' : '— missed';
+        out.push({
+          eventIdx: i, t: e.t, kind: 'play',
+          text: `    ${who} ${verb} ${result}`,
+        });
+        break;
+      }
+      case 'throw': {
+        const fromF = defense.get(e.fromPosition);
+        const fromName = fromF ? fromF.name : e.fromPosition;
+        out.push({
+          eventIdx: i, t: e.t, kind: 'play',
+          text: `    Throw: ${fromName} (${e.fromPosition}) → ${baseShort(e.toBase)}`,
+        });
+        break;
+      }
+      case 'runner-advance': {
+        // Skip the batter's own home→1B trip — it's implicit in the
+        // at-bat result and would clutter the log.
+        if (e.fromBase === 'home') break;
+        const who = runnerLabel(e.runnerId);
+        out.push({
+          eventIdx: i, t: e.t, kind: 'play',
+          text: `    Runner: ${who} ${baseShort(e.fromBase)} → ${baseShort(e.toBase)}`,
+        });
+        break;
+      }
       case 'out': {
+        outs = e.outNum;
         const r =
           e.reason === 'strikeout' ? 'Strikeout' :
           e.reason === 'ground-out' ? 'Groundout' :
@@ -148,13 +238,17 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
           e.reason === 'fielders-choice' ? 'Fielder’s choice' :
           String(e.reason);
         const at = e.atPosition ? ` (${fielderLabel(e.atPosition)})` : '';
-        out.push({ eventIdx: i, t: e.t, kind: 'play', text: `  ${r}${at} — ${e.outNum} out${e.outNum === 1 ? '' : 's'}` });
+        const who = e.runnerId != null ? ` — ${runnerLabel(e.runnerId)} out` : '';
+        out.push({ eventIdx: i, t: e.t, kind: 'play', text: `  ${r}${at}${who} — ${e.outNum} out${e.outNum === 1 ? '' : 's'}` });
         break;
       }
       case 'run-scored': {
+        scoreHome = e.scoreHome;
+        scoreAway = e.scoreAway;
+        const who = runnerLabel(e.runnerId);
         out.push({
           eventIdx: i, t: e.t, kind: 'score',
-          text: `  RUN SCORES — ${awayName} ${e.scoreAway}, ${homeName} ${e.scoreHome}`,
+          text: `  RUN SCORES — ${who} — ${awayName} ${e.scoreAway}, ${homeName} ${e.scoreHome}`,
         });
         break;
       }
@@ -171,7 +265,7 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
         if (r) {
           const rbi = e.rbis > 0 ? `, ${e.rbis} RBI` : '';
           // For hits, append who fielded it so the user can see the play
-          // (e.g. “Single to S. Garcia, 2B”).
+          // (e.g. “Single off S. Garcia, 2B”).
           const isHit = e.result === 'single' || e.result === 'double'
             || e.result === 'triple' || e.result === 'home-run';
           const where = isHit && lastFielderPos
@@ -182,6 +276,8 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
         break;
       }
       case 'inning-end': {
+        scoreHome = e.scoreHome;
+        scoreAway = e.scoreAway;
         out.push({
           eventIdx: i, t: e.t, kind: 'inning',
           text: `  End ${inningLabel} — ${awayName} ${e.scoreAway}, ${homeName} ${e.scoreHome}`,

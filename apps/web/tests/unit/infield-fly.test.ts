@@ -7,7 +7,11 @@ const popUp: BattedBall = {
   sprayAngleDeg: 5,
   distanceFt: 120,
   hangTimeSec: 4.2,
+  peakHeightFt: 90,
   landingPoint: { x: 10, y: 119 },
+  landingSpeedFps: 60,
+  restPoint: { x: 10, y: 119 },
+  rollDistanceFt: 0,
   isFoul: false,
   isHomeRun: false,
 };

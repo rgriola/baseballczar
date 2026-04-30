@@ -63,9 +63,12 @@ export function rollBattedBall(
   // the line — most fouls are line-drives or pop-ups near the bag.
   if (opts.forceFoul && sprayAngleDeg >= -45 && sprayAngleDeg <= 45) {
     const toLeft = sprayAngleDeg < 0;
+    // Push spray just past the foul line — most fouls are line drives /
+    // pop-ups near the bag. Mean ~+2° past the line keeps them within
+    // reach of corner IF/OF and the catcher chasing fouls.
     sprayAngleDeg = toLeft
-      ? -45 - Math.abs(rng.gaussian(8, 6))   // LF foul side (< -45°)
-      :  45 + Math.abs(rng.gaussian(8, 6));  // RF foul side (> +45°)
+      ? -45 - Math.abs(rng.gaussian(2, 3))   // LF foul side (< -45°)
+      :  45 + Math.abs(rng.gaussian(2, 3));  // RF foul side (> +45°)
   }
 
   const f = flight({ exitVeloMph, launchAngleDeg, sprayAngleDeg });
@@ -128,10 +131,11 @@ function findConverger(
     if ((pos === 'P' || pos === 'C') && !isGrounder && !isShortBall) continue;
     const fielderPt = FIELDER_POSITIONS_FT[pos];
     const dist = distanceFt(fielderPt, ball.landingPoint);
-    // Defense leverage: skill 1 ≈ 14 ft/sec, skill 10 ≈ 44 ft/sec
+    // Range model: SPEED dominates (a burner runs down what a slow
+    // glove can't), DEFENSE adds jump/first-step. See CONFIG comments.
     const range = CONFIG.fielder.rangeFtPerSec
-      + (fielder.skills.defense - 5) * 4.0
-      + (fielder.skills.speed - 5) * 1.0;
+      + (fielder.skills.defense - 5) * CONFIG.fielding.rangeDefenseLeverageFps
+      + (fielder.skills.speed   - 5) * CONFIG.fielding.rangeSpeedLeverageFps;
     let reach = CONFIG.fielder.reactionSec + dist / Math.max(12, range);
     // Direction-of-motion penalty: a fielder charging the ball (toward
     // home plate) sees it cleanly and runs at full range; a fielder
@@ -183,6 +187,17 @@ function findConverger(
       if (excess > 0) {
         reach += excess * CONFIG.fielding.infielderDepthPenaltySecPerFt;
       }
+    }
+    // Corner-carom penalty: balls down the lines (|spray| past
+    // `cornerCaromAngleDeg`) skip into the corner / off the side wall
+    // and take longer to retrieve. Charged only to the OF (the IF can
+    // already barely reach this far) and only on non-grounders that
+    // weren't caught on the fly. The fly-catch path uses `hangTimeSec`,
+    // not this `reach`, so caught balls aren't penalized.
+    const isOF = pos === 'LF' || pos === 'CF' || pos === 'RF';
+    if (isOF && !isGrounder
+        && Math.abs(ballAngle) >= CONFIG.fielding.cornerCaromAngleDeg) {
+      reach += CONFIG.fielding.cornerCaromPenaltySec;
     }
     // Catch radius scales with defense (±6 ft across 1-10).
     const effectiveCatchRadius = CONFIG.fielder.catchRadiusFt
@@ -371,8 +386,8 @@ export function resolveBattedBall(
     };
     // Fielder range (ft/sec), same model as findConverger.
     const range = CONFIG.fielder.rangeFtPerSec
-      + (conv.fielder.skills.defense - 5) * 4.0
-      + (conv.fielder.skills.speed - 5) * 1.0;
+      + (conv.fielder.skills.defense - 5) * CONFIG.fielding.rangeDefenseLeverageFps
+      + (conv.fielder.skills.speed   - 5) * CONFIG.fielding.rangeSpeedLeverageFps;
     const effRange = Math.max(12, range);
     // Fixed-point intercept search, parameterized by total ground `g`.
     let g = 0;
@@ -510,8 +525,8 @@ export function resolveFoulBall(
     const cap = pos === 'C' ? catcherDepthCap : depthCap;
     if (dist > cap) continue;
     const range = CONFIG.fielder.rangeFtPerSec
-      + (fielder.skills.defense - 5) * 4.0
-      + (fielder.skills.speed - 5) * 1.0;
+      + (fielder.skills.defense - 5) * CONFIG.fielding.rangeDefenseLeverageFps
+      + (fielder.skills.speed   - 5) * CONFIG.fielding.rangeSpeedLeverageFps;
     const reach = CONFIG.fielder.reactionSec + dist / Math.max(12, range);
     // Need to get there before the ball comes down (no slack — fouls
     // drift unpredictably and most "close" fouls drop in the seats).

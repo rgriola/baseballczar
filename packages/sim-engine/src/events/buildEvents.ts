@@ -136,14 +136,25 @@ export function buildEvents(g: GameResult): SimEvent[] {
         id: ab.batter.id, firstName: ab.batter.firstName,
         lastName: ab.batter.lastName, hand: ab.batter.hand,
         speed: ab.batter.skills.speed,
+        avg: ab.batter.skills.avg,
+        power: ab.batter.skills.power,
+        eye: ab.batter.skills.eye,
+        ag: ab.batter.skills.ag,
+        dhr: ab.batter.skills.dhr,
+        playIntelligence: ab.batter.skills.playIntelligence,
       },
       pitcher: {
         id: ab.pitcher.id, firstName: ab.pitcher.firstName,
         lastName: ab.pitcher.lastName,
         // Pitchers are never switch; coerce 'S' → 'R' just in case.
         hand: ab.pitcher.hand === 'L' ? 'L' : 'R',
+        pitchIntel: ab.pitcher.skills.pitchIntel,
+        stamina: ab.pitcher.skills.stamina,
+        defense: ab.pitcher.skills.defense,
       },
       runners: bases.map(b => b?.id ?? null),
+      scoreHome: scoreHome.v,
+      scoreAway: scoreAway.v,
     }, TIME.betweenAtBatsSec);
 
     // Pitches
