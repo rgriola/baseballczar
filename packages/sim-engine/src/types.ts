@@ -9,28 +9,58 @@ import type { Position } from './config';
 export type Hand = 'L' | 'R' | 'S';   // S = switch hitter
 
 /**
- * All player skills are integers 1..10. Same scale as production.
- * Behavioral roles (the new mapping) live in their respective modules.
+ * All player skills are fractional at game time (1..10 on DB).
+ * Same scale as production. Every skill applies to ALL players —
+ * pitchers, batters, and fielders alike.
+ *
+ * Source of truth: meaning-of-skills.md
  */
 export interface Skills {
-  // Hitting
-  ag: number;     // discipline / strike-zone judgment
-  avg: number;    // contact rate when swinging
-  power: number;  // exit velocity tier on contact
-  eye: number;    // pitch recognition (called strikes vs balls)
-  dhr: number;    // launch-angle bias (low = grounders, high = fly balls)
-  speed: number;  // sprint speed + extra-base aggression
-  // Pitching
-  stamina: number;     // pitch-count fatigue threshold
-  pitchIntel: number;  // pitch selection IQ + control
-  // Fielding
-  defense: number;     // range + glove + arm accuracy
-  /** Play Intelligence — situational read for defense (cutoff vs.
-   *  lead runner, hit cutoff vs. throw home) and baserunning (extra
-   *  base, tag up). 1..10. Hidden from the box score. Optional for
-   *  backwards compatibility with existing fixtures — defaults to 5
-   *  via `getPlayIntelligence(player)`. */
-  playIntelligence?: number;
+  // ─── Physical ───
+  /** SPD — Sprint speed. 0 = 5.3s 40yd, 10 = 4.2s 40yd.
+   *  Used in baserunning timing AND fielding range. */
+  speed: number;
+  /** AG — Agility. Direction changes, reaction time, fielding
+   *  transitions (DP pivot, cutoff relay). High AG + SPD → play SS/2B. */
+  ag: number;
+  /** ST — Stamina. Pitchers: skill decline over pitch count + recovery.
+   *  Fielders: slight in-game decline + day-to-day fatigue/rest needs. */
+  stamina: number;
+
+  // ─── Hitting ───
+  /** EYE — Pitch recognition / plate discipline. Drives swing/take
+   *  decisions for batters. For pitchers: pitch control (walk rate). */
+  eye: number;
+  /** AVG — Contact quality. Hitting to gaps, down the line, fouling
+   *  off close pitches. Pitchers: opposing force to batter AVG. */
+  avg: number;
+  /** STR/PWR — How hard the ball is hit (exit velocity).
+   *  Pitchers: offsets batter power. */
+  power: number;
+  /** DHR — Launch angle bias. Hidden attribute.
+   *  Low = groundball hitter, High = flyball/HR hitter. */
+  dhr: number;
+
+  // ─── Fielding ───
+  /** FLD — Glove, hands, clean plays. Error rate: 0 = ~10%, 10 = ~1%.
+   *  PI + SPD + AG + FLD + TH all contribute at different play stages. */
+  fielding: number;
+  /** TH — Arm strength. 0 = 80 mph, 10 = 105 mph.
+   *  Used for pitcher velocity, OF throws home, IF throws across diamond. */
+  throwing: number;
+
+  // ─── Mental ───
+  /** PI — Play Intelligence. Situational decision-making for EVERYONE:
+   *  pitch selection, batter decisions, run/hit choices, fielding reads. */
+  playIntelligence: number;
+
+  // ─── Hidden ───
+  /** BNT — Bunting skill. Hidden, deferred until bunt situations are
+   *  implemented. How well a batter bunts + pitcher defends the bunt. */
+  bunting?: number;
+  /** Karma — Clutch factor in high-pressure situations. Hidden.
+   *  Helps players overcome challenging moments. */
+  karma?: number;
 }
 
 export interface Player {

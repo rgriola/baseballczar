@@ -53,7 +53,7 @@ describe('calculateHitterSkill', () => {
 describe('calculatePitcherSkill', () => {
   const avgPitcher: PitcherAttributes = {
     ag: 5, avg: 5, power: 5, eye: 5, dhr: 5, speed: 5,
-    stamina: 5, pitchIntel: 5,
+    stamina: 5,
   };
 
   it('returns cumulative thresholds', () => {
@@ -82,9 +82,9 @@ describe('calculatePitcherSkill', () => {
     expect(low.S).toBeGreaterThan(high.S);
   });
 
-  it('high pitchIntel delays fatigue onset', () => {
-    const lowPI: PitcherAttributes = { ...avgPitcher, pitchIntel: 1 };
-    const highPI: PitcherAttributes = { ...avgPitcher, pitchIntel: 10 };
+  it('high eye delays fatigue onset', () => {
+    const lowPI: PitcherAttributes = { ...avgPitcher, eye: 1 };
+    const highPI: PitcherAttributes = { ...avgPitcher, eye: 10 };
     // At 20 batters: low PI should be fatigued, high PI should not yet be
     const low = calculatePitcherSkill(lowPI, 20);
     const high = calculatePitcherSkill(highPI, 20);

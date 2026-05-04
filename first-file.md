@@ -115,3 +115,25 @@ On another home run the batter/runner still does not touch all the bases correct
 Balls are still not rolling to a stop.
 
 Also the ball should bounce off the wall or players. Eventually we will add more dynamic stadiums and the ball will need to bounce off other objects. The wall if its 10 feet should stop a ball at 9 feet the ball should bounce.
+
+
+...
+*** Outfielder Play ***
+- Lets start with outfielder play first, it is the simpliest.
+- One given is all players know the number of outs, runs, and where the runners are on base, including the batter runner << This is called the game situation.  the game situation informs players decisions where they move to, what base they cover, where and when to throw the ball.  I may have written this out in another doc. 
+- All three outfielders should be 75 feet from the wall.
+- Outfielders always throw ahead of the runner ie; if there is no one on base they would always throw second base. hits to left field the short stop covers second. Throws to right field the 2nd baseman covers second. For Centerfield if depends on the batter, a right handed batter the second baseman covers second, a left handed batter the short stop covers second.
+- the center fielder takes priority when tracking a ball. he helps both the left and right fielder as a back up, and should converge on hits or outs to the outfield no matter the field. 
+
+*** Outfielder to Infield Login ***
+- Improve outfielder decisions. 
+- With Runners on base. When a hit is made to the outfield (not and out) their priority is to throw the ball ahead of the runner ie; runner at 2nd, that runner will try to get to 3rd. The throw should be to 3rd base, or home hitting the cutoff man between the bases. If the runner gets to 3rd or will the throw goes to the home (infield). A hit to left field the runner at 2nd may hold since the throw to third would be easier than say right field. 
+- right now we need to corridiate outfield defensive logic and positioning of cutoff men and throw priority. (runner logic will come later). 
+
+...
+
+*** Task ***
+- game_engine_redesign
+- Lets move forward with your hybrid approach. 
+- Notes: 
+a) keep the sim we have worked on call this sim-lab-2. 

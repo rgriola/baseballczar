@@ -15,18 +15,25 @@
  *   - "Backup" is the player who positions BEHIND the receiver in
  *     case of an overthrow.
  *
- * MLB textbook used here:
- *   - Throw home from OF        → 1B is the cutoff,   P backs up home
- *   - Throw to 3B from OF       → SS is the cutoff,   P backs up 3B
- *   - Throw to 2B from OF       → cover with B2 (RF) or SS (LF/CF),
- *                                 the OTHER MIF trails as cutoff,
- *                                 no P backup needed
- *   - On a hit with batter rounding 1B but no runners advancing, B1
- *     stays in the infield and lines up the trail throw (per user
- *     guidance: "1B typically used because relays go to 3B/home and
- *     no one is needed to cover 1B").
- *   - Pitcher waits between 3B and home until the throw target is
- *     known, then breaks behind the receiver.
+ * Outfielder throw rule — "throw ahead of the runner":
+ *   - No runners on base  → throw to 2B (batter rounding 1B)
+ *   - Runner on 1B only   → throw to 3B (ahead of the lead runner)
+ *   - Runner on 2B / 3B   → throw home (ahead of the lead runner)
+ *   - Sac fly             → throw home (tag play at the plate)
+ *
+ * 2B cover on OF plays (who receives at 2B):
+ *   - Hit to LF  → SS covers 2B
+ *   - Hit to RF  → 2B covers 2B
+ *   - Hit to CF  → depends on batter hand:
+ *       RHB → 2B covers 2B (SS moves toward 3B hole)
+ *       LHB → SS covers 2B (2B shades toward 1B hole)
+ *
+ * MLB textbook cutoff / backup:
+ *   - Throw home from OF  → 1B is the cutoff,  P backs up home
+ *   - Throw to 3B from OF → SS is the cutoff,  P backs up 3B
+ *   - Throw to 2B from OF → cover with 2B or SS (per above),
+ *                           the OTHER MIF trails as relay,
+ *                           CF backs up the bag from depth
  */
 import type { Position } from '../config';
 import type { AtBatResult } from '../types';
@@ -101,14 +108,18 @@ export function getCoverage(args: {
   bases: readonly (unknown | null)[];
   outs: number;
   sprayAngleDeg: number;
+  /** Batter hand — needed for CF plays to decide who covers 2B. */
+  batterHand?: 'L' | 'R' | 'S';
+  /** When set, overrides the computed throw target (used by the PI
+   *  downgrade path to regenerate coverage for a different base). */
+  forceTarget?: Base;
 }): CoverageAssignments {
   const { fielder, fieldedAt, result, bases, sprayAngleDeg } = args;
   const r1 = !!bases[0];
   const r2 = !!bases[1];
   const r3 = !!bases[2];
   const isOF = OUTFIELD.has(fielder);
-  const sprayLeft = sprayAngleDeg < 0;          // ball pulled to LF/CF gap
-  const sprayRight = sprayAngleDeg > 0;         // ball to RF/CF gap
+  const batterHand = args.batterHand ?? 'R';  // default RHB
 
   // No throw on a HR or anything that ends with the ball already at
   // a base. Caught flies / line outs / pop outs / foul outs need no
@@ -123,12 +134,12 @@ export function getCoverage(args: {
     throwTarget: null, cutoff: null, covers: [], backups: [],
   };
 
-  if (noThrowResults.has(result)) return result_default;
+  if (!args.forceTarget && noThrowResults.has(result)) return result_default;
 
   // ───── Infield plays — existing emitter handles the simple
   // ───── ground-out / DP / FC throws. Here we just supply the
   // ───── cover info so the visualizer has a single entry point.
-  if (!isOF) {
+  if (!isOF && !args.forceTarget) {
     if (result === 'ground-out' || result === 'reached-on-error') {
       const cover: Position = fielder === 'B1' ? 'P' : 'B1';
       return {
@@ -167,22 +178,26 @@ export function getCoverage(args: {
     return result_default;
   }
 
-  // ───── Outfield plays — primary throw target depends on the hit
-  // ───── type and what runners can score.
+  // ───── Outfield plays ─────────────────────────────────────────
+  // "Throw ahead of the runner" — the OF always throws to the base
+  // the lead runner is heading toward.
+  // When forceTarget is set, use it directly (PI downgrade already
+  // decided the base).
   let target: Base;
-  if (result === 'sac-fly') {
+  if (args.forceTarget) {
+    target = args.forceTarget;
+  } else if (result === 'sac-fly') {
+    // Sac fly is always a throw home (tag play at the plate).
     target = 'home';
-  } else if (result === 'single') {
-    if (r2 || r3) target = 'home';
-    else if (r1) target = 'third';
-    else target = 'second';      // batter rounding 1B
-  } else if (result === 'double') {
-    if (r1 || r2 || r3) target = 'home';
-    else target = 'third';
-  } else if (result === 'triple') {
+  } else if (r2 || r3) {
+    // Lead runner is on 2B or 3B → throw home.
     target = 'home';
+  } else if (r1) {
+    // Lead runner on 1B → throw to 3B (ahead of the runner).
+    target = 'third';
   } else {
-    return result_default;
+    // No runners → throw to 2B (batter rounding 1B).
+    target = 'second';
   }
 
   const targetPt = basePoint(target);
@@ -221,30 +236,34 @@ export function getCoverage(args: {
       forBase: 'third',
     });
   } else if (target === 'second') {
-    // No-runners single — batter rounding 1B. Per user's note:
-    //   ball to RF → B2 trails as cutoff, SS covers 2B
-    //   ball to LF/CF → SS trails as cutoff, B2 covers 2B
-    if (sprayRight) {
-      covers.push({ position: 'SS', base: 'second', toPoint: basePoint('second') });
-      cutoff = {
-        position: 'B2',
-        toPoint: pointOnLine(targetPt, fieldedAt, 0.45),
-        forBase: 'second',
-      };
+    // ── Who covers 2B? Depends on where the ball was hit + batter hand ──
+    //   Hit to LF  → SS covers 2B
+    //   Hit to RF  → 2B covers 2B
+    //   Hit to CF  → RHB: 2B covers,  LHB/SHB: SS covers
+    let coverPos: Position;
+    let trailPos: Position;  // the other MIF trails as relay
+    if (fielder === 'LF' || (fielder === 'CF' && (batterHand === 'L' || batterHand === 'S'))) {
+      coverPos = 'SS';
+      trailPos = 'B2';
     } else {
-      covers.push({ position: 'B2', base: 'second', toPoint: basePoint('second') });
-      cutoff = {
-        position: 'SS',
-        toPoint: pointOnLine(targetPt, fieldedAt, 0.45),
-        forBase: 'second',
-      };
+      // RF, or CF with RHB
+      coverPos = 'B2';
+      trailPos = 'SS';
     }
-    // No P backup on a throw to 2B; CF backs up the bag from depth.
-    backups.push({
-      position: 'CF',
-      toPoint: pointOnLine(targetPt, FIELDER_POSITIONS_FT.CF, 0.12),
+    covers.push({ position: coverPos, base: 'second', toPoint: basePoint('second') });
+    cutoff = {
+      position: trailPos,
+      toPoint: pointOnLine(targetPt, fieldedAt, 0.45),
       forBase: 'second',
-    });
+    };
+    // CF backs up the bag from depth on throws to 2B.
+    if (fielder !== 'CF') {
+      backups.push({
+        position: 'CF',
+        toPoint: pointOnLine(targetPt, FIELDER_POSITIONS_FT.CF, 0.12),
+        forBase: 'second',
+      });
+    }
   }
 
   // Strip any cover/cutoff/backup whose position IS the fielder

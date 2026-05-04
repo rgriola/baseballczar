@@ -12,7 +12,7 @@ function mkPlayer(pi: number | undefined, speed = 5): Player {
     id: 1, firstName: 'F', lastName: 'L', hand: 'R', position: 'CF',
     skills: {
       ag: 5, avg: 5, power: 5, eye: 5, dhr: 5, speed,
-      stamina: 5, pitchIntel: 5, defense: 5,
+      stamina: 5, fielding: 5, throwing: 5, playIntelligence: 5,
       ...(pi !== undefined ? { playIntelligence: pi } : {}),
     },
   };

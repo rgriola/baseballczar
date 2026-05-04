@@ -17,7 +17,7 @@ function makePlayer(position: Position, id: number): Player {
     position,
     skills: {
       ag: 5, avg: 5, power: 5, eye: 5, dhr: 5, speed: 5,
-      stamina: 5, pitchIntel: 5, defense: 5,
+      stamina: 5, fielding: 5, throwing: 5, playIntelligence: 5,
     },
   };
 }

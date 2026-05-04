@@ -29,28 +29,28 @@ function rollSkill(rng: Rng): number {
 function rollSkills(rng: Rng, isPitcher: boolean): Skills {
   if (isPitcher) {
     return {
-      ag: rollSkill(rng),
-      avg: 1,                   // pitchers can't hit in this v1
-      power: 1,
-      eye: 1,
-      dhr: 1,
       speed: rollSkill(rng),
+      ag: rollSkill(rng),
       stamina: rollSkill(rng),
-      pitchIntel: rollSkill(rng),
-      defense: rollSkill(rng),
+      eye: rollSkill(rng),         // pitcher: pitch control
+      avg: 1,                      // pitchers can't hit in v1
+      power: 1,
+      dhr: 1,
+      fielding: rollSkill(rng),
+      throwing: rollSkill(rng),    // arm strength = velocity
       playIntelligence: rollSkill(rng),
     };
   }
   return {
+    speed: rollSkill(rng),
     ag: rollSkill(rng),
+    stamina: rollSkill(rng),
+    eye: rollSkill(rng),           // plate discipline
     avg: rollSkill(rng),
     power: rollSkill(rng),
-    eye: rollSkill(rng),
     dhr: rollSkill(rng),
-    speed: rollSkill(rng),
-    stamina: 1,
-    pitchIntel: 1,
-    defense: rollSkill(rng),
+    fielding: rollSkill(rng),
+    throwing: rollSkill(rng),
     playIntelligence: rollSkill(rng),
   };
 }

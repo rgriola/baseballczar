@@ -40,7 +40,7 @@ describe('sim-engine constants', () => {
     }
   });
 
-  it('higher pitchIntel = higher batter threshold', () => {
+  it('higher eye = higher batter threshold', () => {
     expect(BATTER_THRESHOLD[10]).toBeGreaterThan(BATTER_THRESHOLD[1]);
   });
 

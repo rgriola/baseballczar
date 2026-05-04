@@ -6,10 +6,10 @@ import { CONFIG, type Position } from '../config';
 
 const OUTFIELD: Position[] = ['LF', 'CF', 'RF'];
 
-export function throwVelocityMph(position: Position, defenseSkill: number): number {
+export function throwVelocityMph(position: Position, throwingSkill: number): number {
   const base = CONFIG.throwVeloBaseMph[position];
-  // ±2 mph per skill point above/below 5 (range ±10 mph across 1-10)
-  const skillBonus = (defenseSkill - 5) * 2;
+  // TH skill: ±2 mph per point above/below 5 (range ±10 mph across 1-10)
+  const skillBonus = (throwingSkill - 5) * 2;
   const crowHop = OUTFIELD.includes(position) ? CONFIG.outfieldCrowHopMph : 0;
   return base + skillBonus + crowHop;
 }
@@ -25,11 +25,11 @@ export function throwTimeSec(
   fromPt: { x: number; y: number },
   toPt: { x: number; y: number },
   position: Position,
-  defenseSkill: number,
+  throwingSkill: number,
 ): number {
   const dx = toPt.x - fromPt.x;
   const dy = toPt.y - fromPt.y;
   const distFt = Math.hypot(dx, dy);
-  const velFps = throwVelocityMph(position, defenseSkill) * CONFIG.flight.mphToFps;
+  const velFps = throwVelocityMph(position, throwingSkill) * CONFIG.flight.mphToFps;
   return releaseTimeSec(position) + distFt / velFps;
 }

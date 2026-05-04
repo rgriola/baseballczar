@@ -46,7 +46,6 @@ export interface PlayerSkills {
 /** Pitcher-specific attributes (all 1-10 scale) */
 export interface PitcherAttributes extends PlayerSkills {
   stamina: number;     // ST — 1-10, controls fatigue rate
-  pitchIntel: number;  // PI — 1-10, controls batter threshold before fatigue
 }
 
 /** Calculated skill thresholds used for at-bat RNG */

@@ -148,9 +148,10 @@ export function buildEvents(g: GameResult): SimEvent[] {
         lastName: ab.pitcher.lastName,
         // Pitchers are never switch; coerce 'S' → 'R' just in case.
         hand: ab.pitcher.hand === 'L' ? 'L' : 'R',
-        pitchIntel: ab.pitcher.skills.pitchIntel,
+        eye: ab.pitcher.skills.eye,
+        throwing: ab.pitcher.skills.throwing,
         stamina: ab.pitcher.skills.stamina,
-        defense: ab.pitcher.skills.defense,
+        playIntelligence: ab.pitcher.skills.playIntelligence,
       },
       runners: bases.map(b => b?.id ?? null),
       scoreHome: scoreHome.v,
@@ -272,7 +273,7 @@ export function buildEvents(g: GameResult): SimEvent[] {
       const fielderPt = FIELDER_POSITIONS_FT[ab.fieldedBy];
       const throwSec = fielderPlayer
         ? throwTimeSec(fielderPt, BASE_COORDS_FT.first, ab.fieldedBy,
-            fielderPlayer.skills.defense)
+            fielderPlayer.skills.throwing)
         : TIME.throwToBaseSec;
       throwArrivesAt = lastContactT
         + (ab.battedBall.hangTimeSec || TIME.contactToFieldedDefault)
@@ -304,18 +305,22 @@ export function buildEvents(g: GameResult): SimEvent[] {
       const playPoint = ab.battedBall.fieldedAtPoint ?? ab.battedBall.landingPoint;
       const isInfieldThrow = ['ground-out', 'double-play',
         'fielders-choice'].includes(ab.result);
-      let fromPoint: { x: number; y: number };
-      let absT: number;
-      let source: 'fielder' | 'umpire';
       if (ab.battedBall.isHomeRun) {
         // Ball cleared the wall — umpire flips a new ball to the pitcher
         // sometime during the home-run trot. Wait for the ball's full
         // hang time so the home-run flight isn't clipped by the
         // catcher → pitcher return tween starting early.
-        fromPoint = FIELDER_POSITIONS_FT.C;
+        const hrFrom = FIELDER_POSITIONS_FT.C;
         const hrHang = ab.battedBall.hangTimeSec || 4.0;
-        absT = (lastContactT ?? t) + hrHang + TIME.umpireHoldSec + 1.0;
-        source = 'umpire';
+        const hrAbsT = (lastContactT ?? t) + hrHang + TIME.umpireHoldSec + 1.0;
+        const hrFlight = ballReturnFlightSec(hrFrom, pitcherPt, true);
+        pushAt({
+          type: 'ball-return',
+          fromPoint: hrFrom, toPoint: pitcherPt,
+          flightSec: hrFlight, source: 'umpire',
+        }, hrAbsT);
+        const hrLandT = hrAbsT + hrFlight;
+        if (hrLandT > t) t = hrLandT;
       } else if (isInfieldThrow && throwArrivesAt != null) {
         // Ball ended at the bag in the cover fielder's glove — he
         // tosses it back to the mound. For double plays, the relay
@@ -329,36 +334,84 @@ export function buildEvents(g: GameResult): SimEvent[] {
           const pivotPlayer = currentDefenseMap.get(pivotPos);
           const relaySec = pivotPlayer
             ? throwTimeSec(BASE_COORDS_FT.second, BASE_COORDS_FT.first,
-                pivotPos, pivotPlayer.skills.defense)
+                pivotPos, pivotPlayer.skills.throwing)
             : TIME.throwToBaseSec;
-          fromPoint = BASE_COORDS_FT.first;
+          const dpFrom = BASE_COORDS_FT.first;
           // Pivot turn delay (0.18s) matches battedBallVisuals.ts.
-          absT = throwArrivesAt + 0.18 + relaySec + TIME.fielderHoldSec;
+          const dpAbsT = throwArrivesAt + 0.18 + relaySec + TIME.fielderHoldSec;
+          const dpFlight = ballReturnFlightSec(dpFrom, pitcherPt, false);
+          pushAt({
+            type: 'ball-return',
+            fromPoint: dpFrom, toPoint: pitcherPt,
+            flightSec: dpFlight, source: 'fielder',
+          }, dpAbsT);
+          const dpLandT = dpAbsT + dpFlight;
+          if (dpLandT > t) t = dpLandT;
         } else {
           const targetBase = ab.result === 'fielders-choice' ? 'second' : 'first';
-          fromPoint = BASE_COORDS_FT[targetBase];
-          absT = throwArrivesAt + TIME.fielderHoldSec;
+          const ifFrom = BASE_COORDS_FT[targetBase];
+          const ifAbsT = throwArrivesAt + TIME.fielderHoldSec;
+          const ifFlight = ballReturnFlightSec(ifFrom, pitcherPt, false);
+          pushAt({
+            type: 'ball-return',
+            fromPoint: ifFrom, toPoint: pitcherPt,
+            flightSec: ifFlight, source: 'fielder',
+          }, ifAbsT);
+          const ifLandT = ifAbsT + ifFlight;
+          if (ifLandT > t) t = ifLandT;
         }
-        source = 'fielder';
       } else {
         // Caught fly, hit, or error — ball is in the fielder's glove
         // at the play point.
-        fromPoint = playPoint;
-        absT = (catchArrivesAt ?? (lastContactT ?? t)
+        const isOutfielder = ab.fieldedBy === 'LF' || ab.fieldedBy === 'CF' || ab.fieldedBy === 'RF';
+        const catchAbsT = (catchArrivesAt ?? (lastContactT ?? t)
           + (ab.battedBall.hangTimeSec || TIME.contactToFieldedDefault))
           + TIME.fielderHoldSec;
-        source = 'fielder';
+
+        if (isOutfielder) {
+          // ── OF ball return: two-hop relay (OF → MIF → P) ────────
+          // Outfielders never throw directly to the pitcher. They toss
+          // to the nearest middle infielder (SS or 2B based on field
+          // side), who then relays it to the mound.
+          //   LF / CF-left-spray → SS
+          //   RF / CF-right-spray → 2B
+          const spraySide = ab.battedBall.sprayAngleDeg ?? 0;
+          const relayPos: Position = (ab.fieldedBy === 'LF' || (ab.fieldedBy === 'CF' && spraySide < 0))
+            ? 'SS' : 'B2';
+          const relayPlayer = currentDefenseMap.get(relayPos);
+          const relayPt = FIELDER_POSITIONS_FT[relayPos];
+
+          // Leg 1: OF → MIF
+          const flight1 = ballReturnFlightSec(playPoint, relayPt, false);
+          pushAt({
+            type: 'ball-return',
+            fromPoint: playPoint, toPoint: relayPt,
+            flightSec: flight1, source: 'fielder',
+          }, catchAbsT);
+
+          // Leg 2: MIF → Pitcher (after catching + brief hold)
+          const leg2Start = catchAbsT + flight1 + TIME.fielderHoldSec * 0.5;
+          const flight2 = ballReturnFlightSec(relayPt, pitcherPt, true);
+          pushAt({
+            type: 'ball-return',
+            fromPoint: relayPt, toPoint: pitcherPt,
+            flightSec: flight2, source: 'fielder',
+          }, leg2Start);
+
+          const returnLandT = leg2Start + flight2;
+          if (returnLandT > t) t = returnLandT;
+        } else {
+          // Infield catch or error — direct toss to pitcher.
+          const flight = ballReturnFlightSec(playPoint, pitcherPt, false);
+          pushAt({
+            type: 'ball-return',
+            fromPoint: playPoint, toPoint: pitcherPt,
+            flightSec: flight, source: 'fielder',
+          }, catchAbsT);
+          const returnLandT = catchAbsT + flight;
+          if (returnLandT > t) t = returnLandT;
+        }
       }
-      const flight = ballReturnFlightSec(fromPoint, pitcherPt, false);
-      pushAt({
-        type: 'ball-return',
-        fromPoint, toPoint: pitcherPt,
-        flightSec: flight, source,
-      }, absT);
-      // Make at-bat-end wait for the return so the renderer doesn't
-      // snap the ball away mid-flight.
-      const returnLandT = absT + flight;
-      if (returnLandT > t) t = returnLandT;
     }
 
     push({

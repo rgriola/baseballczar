@@ -287,7 +287,7 @@ export function createScene(transform: FieldTransform): SceneAPI {
         const v = e.exitVeloMph * (5280 / 3600);
         const sinTheta = Math.sin((e.launchAngleDeg * Math.PI) / 180);
         const vacuumApex = (v * sinTheta) * (v * sinTheta) / (2 * 32.174);
-        const arc = e.launchAngleDeg > 12 ? 'fly' : 'grounder';
+        const arc = e.launchAngleDeg > 0 ? 'fly' : 'grounder';
         const apex = arc === 'fly' ? Math.max(6, vacuumApex * 0.75) : 0;
         startTween(ball, e.landingPoint, e.hangTimeSec || 1.2, e.t, arc, apex);
         break;
@@ -392,11 +392,15 @@ export function createScene(transform: FieldTransform): SceneAPI {
         // Reset every fielder to their home position. (Previously we only
         // reset fielders that had wandered > 6 ft, which left fielders who
         // had moved a small amount stuck off-position for the next at-bat.)
+        // Use distance-based timing: ~20 ft/s casual jog, not the flat
+        // 1.2s that made OFs teleport 200 ft back to position.
+        const JOG_SPEED_FPS = 20;
         for (const [pos, sp] of fielders) {
           const home = FIELDER_POSITIONS_FT[pos];
           const dist = Math.hypot(sp.cur.x - home.x, sp.cur.y - home.y);
           if (dist > 0.5) {
-            startTween(sp, home, 1.2, e.t, 'line');
+            const jogSec = Math.max(1.0, dist / JOG_SPEED_FPS);
+            startTween(sp, home, jogSec, e.t, 'line');
           }
         }
         break;

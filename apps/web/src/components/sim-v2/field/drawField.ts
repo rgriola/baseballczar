@@ -395,11 +395,16 @@ function drawBases(bases: BasePx, t: FieldTransform, style: FieldStyle): Graphic
 function drawPositionLabels(t: FieldTransform, style: FieldStyle): Container {
   const layer = new Container();
   layer.alpha = 0.35;
+  // Map internal position codes to standard baseball notation for display
+  const displayLabel: Record<string, string> = {
+    B1: '1B', B2: '2B', B3: '3B',
+    SS: 'SS', LF: 'LF', CF: 'CF', RF: 'RF',
+  };
   for (const [pos, ft] of Object.entries(FIELDER_POSITIONS_FT)) {
     if (pos === 'P' || pos === 'C') continue;
     const px = ftToPx(ft, t);
     const txt = new Text({
-      text: pos,
+      text: displayLabel[pos] ?? pos,
       style: { fill: style.text, fontSize: 9, fontFamily: 'system-ui' },
     });
     txt.anchor.set(0.5);
@@ -451,7 +456,7 @@ export function buildField(
   root.addChild(drawBatterBoxes(t, style));
   root.addChild(drawBases(bases, t, style));
   root.addChild(drawDugouts(t, style));
-  root.addChild(drawPositionLabels(t, style));
+  // Position labels removed — player sprites carry their own label on the circle.
 
   return { root };
 }

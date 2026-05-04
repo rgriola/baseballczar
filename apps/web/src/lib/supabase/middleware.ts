@@ -30,16 +30,31 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Redirect unauthenticated users away from protected routes
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/signup') &&
-    !request.nextUrl.pathname.startsWith('/reset-password') &&
-    !request.nextUrl.pathname.startsWith('/auth') &&
-    !request.nextUrl.pathname.startsWith('/api/') &&
-    request.nextUrl.pathname !== '/'
-  ) {
+  const path = request.nextUrl.pathname;
+
+  // Public routes that don't require authentication
+  const isPublic =
+    path === '/' ||
+    path.startsWith('/login') ||
+    path.startsWith('/signup') ||
+    path.startsWith('/reset-password') ||
+    path.startsWith('/auth') ||
+    path.startsWith('/api/');
+
+  // Authenticated users shouldn't see auth forms — send them to dashboard
+  const isAuthPage =
+    path.startsWith('/login') ||
+    path.startsWith('/signup') ||
+    path.startsWith('/reset-password');
+
+  if (user && isAuthPage) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/dashboard';
+    return NextResponse.redirect(url);
+  }
+
+  // Unauthenticated users on protected routes → login
+  if (!user && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     return NextResponse.redirect(url);

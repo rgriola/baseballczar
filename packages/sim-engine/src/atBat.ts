@@ -42,10 +42,10 @@ export function simulateAtBat(
     const intent = pitcherDecideIntent(pitcher, balls, strikes, fatigueRatio, rng);
     const exec = executePitch(pitcher, intent, fatigueRatio, rng);
 
-    // HBP check: pitcher missed badly inside (low pitchIntel + fatigue raises chance).
+    // HBP check: pitcher missed badly inside (low eye/control + fatigue raises chance).
     // Only when intent was 'in' or 'edge' and the pitch is now out of zone (i.e. drifted).
     const hbpChance = CONFIG.pitch.hbpProb
-      * (1 + (5 - pitcher.skills.pitchIntel) * 0.10)
+      * (1 + (5 - pitcher.skills.eye) * 0.10)
       * (1 + fatigueRatio * 0.5);
     if ((intent.zone === 'in' || intent.zone === 'edge')
         && !exec.actualInZone

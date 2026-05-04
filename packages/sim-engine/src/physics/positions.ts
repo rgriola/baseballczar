@@ -2,17 +2,19 @@
  * Standard fielder positions in feet, origin = home plate.
  * Used to compute who converges on a batted ball.
  *
- * Outfielders play roughly 50–75 ft off the wall at their angle, with
- * the corners pulled toward the lines so the LCF and RCF gaps are open.
- * That's where MLB doubles drop in. Balls down the lines that get past
- * the corner OF skip into the corner and become triples after a long
- * chase + relay throw home.
+ * Outfielders play 75 ft from the wall at their angle. Corners are
+ * pulled toward the lines so the LCF and RCF gaps are open — that's
+ * where MLB doubles drop in.
  *
  * Park dims (CONFIG.park): LF/RF line 320 ft, LCF/RCF 375 ft, CF 405 ft.
- *   LF at (−140, 235): ~273 ft from home @ angle −31°; wall here
- *                       ≈ 350 ft → ≈77 ft off wall.
- *   CF at (   0, 335): 335 ft straightaway; wall 405 ft → 70 ft off wall.
- *   RF at ( 140, 235): mirror of LF.
+ *   Wall at LF angle (-31°): ≈347 ft → OF at 272 ft from home.
+ *   Wall at CF angle (  0°): 405 ft  → OF at 330 ft from home.
+ *   Wall at RF angle (+31°): ≈347 ft → OF at 272 ft from home.
+ *
+ * x = dist × sin(angle),  y = dist × cos(angle)
+ *   LF: 272 × sin(-31°) = -140,  272 × cos(-31°) = 233
+ *   CF: 330 × sin(0°) = 0,       330 × cos(0°) = 330
+ *   RF: 272 × sin(+31°) = +140,  272 × cos(+31°) = 233
  */
 import type { Position } from '../config';
 
@@ -23,11 +25,11 @@ export const FIELDER_POSITIONS_FT: Record<Position, { x: number; y: number }> = 
   B2: { x: 35,   y: 130 },
   SS: { x: -35,  y: 130 },
   B3: { x: -50,  y: 85 },
-  // Corners pulled in toward the lines (~31°) and shallower so they have
-  // to chase balls in the gaps and down the lines. CF straightaway, deep
-  // enough to cover both gaps but not so deep he eats every fly ball.
-  LF: { x: -140, y: 235 },
-  CF: { x:    0, y: 335 },
-  RF: { x:  140, y: 235 },
+  // ~85 ft from the wall at each fielder's natural spray angle.
+  // LF/RF at ~265 ft from home; CF at ~295 ft. Realistic MLB depth
+  // gives room to go back on drives while covering the shallow zone.
+  LF: { x: -136, y: 227 },
+  CF: { x:    0, y: 295 },
+  RF: { x:  136, y: 227 },
 };
 

@@ -16,7 +16,7 @@ import { CONFIG } from './config';
 import { flight } from './physics/ballFlight';
 import { FIELDER_POSITIONS_FT } from './physics/positions';
 import { throwTimeSec } from './physics/throw';
-import { runnerTimeSec, BASE_COORDS_FT, type BaseName } from './physics/speed';
+import { runnerTimeSec, BASE_COORDS_FT, type BaseName, fielderReachTimeSec, sprintFtPerSec, accelAwareTimeSec } from './physics/speed';
 import type { Rng } from './rng';
 
 // ─── Step 1: Generate batted ball from skills ──────────────────
@@ -36,8 +36,8 @@ export function rollBattedBall(
   evMean -= (pitcher.skills.power - 5) * 0.8;  // pitcher power suppresses
   // Contact quality: high-avg hitters square the ball up more often (±3 mph)
   evMean += (hitter.skills.avg - 5) * 0.6;
-  // Pitcher pitchIntel disrupts contact quality (−2 mph at skill 9)
-  evMean -= (pitcher.skills.pitchIntel - 5) * 0.5;
+  // Pitcher eye (control) disrupts contact quality (−2 mph at skill 9)
+  evMean -= (pitcher.skills.eye - 5) * 0.5;
   const exitVeloMph = Math.max(50, Math.min(120,
     rng.gaussian(evMean, exitVeloStdDevMph)));
 
@@ -46,7 +46,7 @@ export function rollBattedBall(
   const laMax = dhrToLaunchAngleDeg.max;
   const tDhr = (hitter.skills.dhr - 1) / 9;
   const laMean = laMin + tDhr * (laMax - laMin);
-  const launchAngleDeg = Math.max(-15, Math.min(60,
+  const launchAngleDeg = Math.max(-25, Math.min(70,
     rng.gaussian(laMean, launchAngleStdDevDeg)));
 
   // Spray: pull-side bias by handedness.
@@ -107,7 +107,10 @@ function findConverger(
   ball: BattedBall,
   defense: Map<Position, Player>,
 ): Convergence {
-  const isGrounder = ball.launchAngleDeg < 5;
+  // Physics-based grounder: matches the 2.5D flight model in ballFlight.ts.
+  // A grounder is any ball with short hang time AND short distance —
+  // determined by the projectile math with h₀ = 3ft, not a hard angle cutoff.
+  const isGrounder = ball.hangTimeSec < 0.6 && ball.distanceFt < 90;
   // C and P field grounders, but they should also handle squibbers /
   // choppers / weak pop-ups that land in front of the plate even when
   // the launch angle technically reads above 5\u00b0. Otherwise an 8\u00b0
@@ -129,29 +132,36 @@ function findConverger(
     // P and C only field grounders (comebackers, squibbers, bunts) or
     // anything that lands close to home plate (choppers, weak pop-ups).
     if ((pos === 'P' || pos === 'C') && !isGrounder && !isShortBall) continue;
+    // Pitcher restriction: P only fields balls within shortBallRadius of
+    // the MOUND (comebackers / squibbers), not balls hit to the corners.
+    // Without this, P would chase grounders toward 3B while 3B stands idle.
+    if (pos === 'P') {
+      const mound = FIELDER_POSITIONS_FT.P;
+      const distFromMound = Math.hypot(ball.landingPoint.x - mound.x, ball.landingPoint.y - mound.y);
+      if (distFromMound > CONFIG.fielding.shortBallRadiusFt) continue;
+    }
     const fielderPt = FIELDER_POSITIONS_FT[pos];
     const dist = distanceFt(fielderPt, ball.landingPoint);
-    // Range model: SPEED dominates (a burner runs down what a slow
-    // glove can't), DEFENSE adds jump/first-step. See CONFIG comments.
-    const range = CONFIG.fielder.rangeFtPerSec
-      + (fielder.skills.defense - 5) * CONFIG.fielding.rangeDefenseLeverageFps
-      + (fielder.skills.speed   - 5) * CONFIG.fielding.rangeSpeedLeverageFps;
-    let reach = CONFIG.fielder.reactionSec + dist / Math.max(12, range);
+    // ── Unified speed model ──────────────────────────────────────
+    // Foot speed = sprintFtPerSec(speed) — same body, same speed as
+    // baserunning. Defense affects reaction time + route efficiency.
+    let reach = fielderReachTimeSec(
+      fielderPt, ball.landingPoint,
+      fielder.skills.speed, fielder.skills.fielding,
+    );
     // Direction-of-motion penalty: a fielder charging the ball (toward
-    // home plate) sees it cleanly and runs at full range; a fielder
+    // home plate) sees it cleanly and runs at full speed; a fielder
     // backpedaling toward the wall must turn his head, track the ball
     // over his shoulder, and physically can't run as fast. Modeled as
-    // an effective-range multiplier based on the dot product between
-    // his motion vector and the toward-home unit vector. Lateral motion
-    // sits in between. Skipped for the catcher (always faces the ball)
-    // and for grounders (no flight to track over the shoulder).
+    // a time multiplier based on the dot product between his motion
+    // vector and the toward-home unit vector. Skipped for catcher
+    // (always faces the ball) and grounders (no flight to track).
     if (!isGrounder && pos !== 'C' && pos !== 'P') {
       const fieldPtMag = Math.hypot(fielderPt.x, fielderPt.y);
       const motionDx = ball.landingPoint.x - fielderPt.x;
       const motionDy = ball.landingPoint.y - fielderPt.y;
       const motionMag = Math.hypot(motionDx, motionDy);
       if (fieldPtMag > 1 && motionMag > 1) {
-        // Toward home unit vector from fielder is -fielderPt / |fielderPt|.
         const towardHomeX = -fielderPt.x / fieldPtMag;
         const towardHomeY = -fielderPt.y / fieldPtMag;
         const motionUx = motionDx / motionMag;
@@ -161,10 +171,13 @@ function findConverger(
         const norm = (forwardness + 1) / 2;  // [0, 1]
         const dirMul = CONFIG.fielding.backpedalMul
           + (CONFIG.fielding.chargeMul - CONFIG.fielding.backpedalMul) * norm;
-        // Recompute reach with the direction-adjusted range. Reaction
-        // time is unchanged — the penalty is on the run, not the read.
-        reach = CONFIG.fielder.reactionSec
-          + dist / Math.max(12, range * dirMul);
+        // Apply the direction penalty to the running portion only
+        // (not the reaction time). Extract reaction from reach, scale
+        // the movement portion, then add reaction back.
+        const reactionBonus = (fielder.skills.fielding - 5) * CONFIG.fielder.defenseReactionBonusSec;
+        const reaction = Math.max(0.1, CONFIG.fielder.reactionSec - reactionBonus);
+        const runTime = reach - reaction;
+        reach = reaction + runTime / Math.max(0.3, dirMul);
       }
     }
     // Territory penalty: 0.012s per degree away from this fielder's
@@ -190,10 +203,7 @@ function findConverger(
     }
     // Corner-carom penalty: balls down the lines (|spray| past
     // `cornerCaromAngleDeg`) skip into the corner / off the side wall
-    // and take longer to retrieve. Charged only to the OF (the IF can
-    // already barely reach this far) and only on non-grounders that
-    // weren't caught on the fly. The fly-catch path uses `hangTimeSec`,
-    // not this `reach`, so caught balls aren't penalized.
+    // and take longer to retrieve.
     const isOF = pos === 'LF' || pos === 'CF' || pos === 'RF';
     if (isOF && !isGrounder
         && Math.abs(ballAngle) >= CONFIG.fielding.cornerCaromAngleDeg) {
@@ -201,21 +211,19 @@ function findConverger(
     }
     // Catch radius scales with defense (±6 ft across 1-10).
     const effectiveCatchRadius = CONFIG.fielder.catchRadiusFt
-      + (fielder.skills.defense - 5) * 1.5;
-    // Hangtime tolerance: fielder must basically arrive coincident with
-    // the ball. Slack 0 = league-average catch rate; positive slack
-    // would let blooper-singles get caught.
+      + (fielder.skills.fielding - 5) * 1.5;
+    // Catch tolerance: fielder can arrive slightly after the ball lands
+    // and still make a running/diving catch. Better defense = more slack.
+    // Skill 5 = 0.8s slack, Skill 10 = 1.05s, Skill 1 = 0.55s.
+    const catchSlack = 0.8 + (fielder.skills.fielding - 5) * 0.05;
     const caught = !isGrounder
-      && (reach <= ball.hangTimeSec || dist <= effectiveCatchRadius + 4);
+      && (reach <= ball.hangTimeSec + catchSlack);
     if (!best || reach < best.reachTimeSec) {
       best = { position: pos, fielder, reachTimeSec: reach, caught };
     }
   }
   // For very weak grounders, prefer infielder closest to ball
   // (the loop above already considers all of them, so `best` is correct).
-  // `defense` is invariantly the 9 starters — the loop always assigns
-  // best at least once. Throw on the impossible empty case so callers
-  // never receive an undefined Convergence.
   if (!best) throw new Error('findConverger: no fielders in defense map');
   return best;
 }
@@ -242,7 +250,7 @@ export function resolveBattedBall(
   if (ball.isFoul) return { result: 'foul-out' };
 
   const conv = findConverger(ball, defense);
-  const isGrounder = ball.launchAngleDeg < 5;
+  const isGrounder = ball.hangTimeSec < 0.6 && ball.distanceFt < 90;
 
   // For grounders, the ball is intercepted along its path by the closest
   // infielder — record where the IF actually gloves it so visuals +
@@ -280,7 +288,7 @@ export function resolveBattedBall(
     ? CONFIG.errors.grounderErrorBase
     : CONFIG.errors.flyErrorBase;
   const fieldErrorChance = Math.max(0,
-    errorBase + (5 - conv.fielder.skills.defense) * CONFIG.errors.skillLeverage);
+    errorBase + (5 - conv.fielder.skills.fielding) * CONFIG.errors.skillLeverage);
   const isFieldError = rng.bool(fieldErrorChance);
 
   // Caught in air → fly/line/pop out (unless dropped on error)
@@ -319,7 +327,11 @@ export function resolveBattedBall(
       fielderPt.x - ball.landingPoint.x,
       fielderPt.y - ball.landingPoint.y,
     );
-    const ballTravelSec = CONFIG.fielder.reactionSec + distToFielder
+    // Grounder timing: the ball comes to the fielder, not vice versa.
+    // Use defense-adjusted reaction for the read + first step.
+    const defReactionBonus = (conv.fielder.skills.fielding - 5) * CONFIG.fielder.defenseReactionBonusSec;
+    const defReaction = Math.max(0.1, CONFIG.fielder.reactionSec - defReactionBonus);
+    const ballTravelSec = defReaction + distToFielder
       / Math.max(CONFIG.fielding.minRollSpeedFps, ballRollSpeedFps);
     totalToBall = ballTravelSec + CONFIG.fielding.pickupSec;
   } else {
@@ -384,11 +396,11 @@ export function resolveBattedBall(
       const gBack = vBounce * tauBack - 0.5 * decel * tauBack * tauBack;
       return Math.max(0, Math.min(totalRoll, roomToWall + Math.max(0, gBack)));
     };
-    // Fielder range (ft/sec), same model as findConverger.
-    const range = CONFIG.fielder.rangeFtPerSec
-      + (conv.fielder.skills.defense - 5) * CONFIG.fielding.rangeDefenseLeverageFps
-      + (conv.fielder.skills.speed   - 5) * CONFIG.fielding.rangeSpeedLeverageFps;
-    const effRange = Math.max(12, range);
+    // Fielder foot speed — same body, same speed as baserunning.
+    const effRange = Math.max(12, sprintFtPerSec(conv.fielder.skills.speed));
+    // Defense-adjusted reaction for the pursuit loop.
+    const defRxnBonus = (conv.fielder.skills.fielding - 5) * CONFIG.fielder.defenseReactionBonusSec;
+    const defRxn = Math.max(0.1, CONFIG.fielder.reactionSec - defRxnBonus);
     // Fixed-point intercept search, parameterized by total ground `g`.
     let g = 0;
     let T = conv.reachTimeSec;
@@ -396,7 +408,7 @@ export function resolveBattedBall(
       const tBall = tBallAtG(g);
       const p = ballPosAtG(g);
       const dist = Math.hypot(fielderPt.x - p.x, fielderPt.y - p.y);
-      const tFielder = CONFIG.fielder.reactionSec + dist / effRange;
+      const tFielder = defRxn + accelAwareTimeSec(dist, effRange);
       const tMeet = Math.max(tBall, tFielder);
       // How far the ball rolled by the time the fielder reached the
       // most-recent guess: re-derive `g` from when the fielder gets
@@ -406,9 +418,9 @@ export function resolveBattedBall(
       T = tMeet;
       // Early-out: if the fielder is camping at the landing point
       // before the ball even gets there, the intercept is landing.
-      const fielderArrivalAtLanding = CONFIG.fielder.reactionSec
-        + Math.hypot(fielderPt.x - ball.landingPoint.x,
-                     fielderPt.y - ball.landingPoint.y) / effRange;
+      const fielderArrivalAtLanding = defRxn
+        + accelAwareTimeSec(Math.hypot(fielderPt.x - ball.landingPoint.x,
+                     fielderPt.y - ball.landingPoint.y), effRange);
       if (fielderArrivalAtLanding <= ball.hangTimeSec) {
         g = 0;
         T = ball.hangTimeSec;
@@ -435,12 +447,12 @@ export function resolveBattedBall(
     // separate error type and let existing runners take an extra base.
     const throwErrorChance = Math.max(0,
       CONFIG.errors.throwErrorBase
-        + (5 - conv.fielder.skills.defense) * CONFIG.errors.skillLeverage);
+        + (5 - conv.fielder.skills.fielding) * CONFIG.errors.skillLeverage);
     if (rng.bool(throwErrorChance)) {
       return { result: 'reached-on-error', fieldedBy: conv.position, errorType: 'throw' };
     }
     const throwSec = throwTimeSec(fielderPt, BASE_COORDS_FT.first,
-      conv.position, conv.fielder.skills.defense);
+      conv.position, conv.fielder.skills.throwing);
     const fielderArrival = totalToBall + throwSec;
     const runnerArrival = runnerTimeSec('home', 'first', hitter.skills.speed,
       { fromContact: true, hand: hitter.hand });
@@ -458,7 +470,7 @@ export function resolveBattedBall(
   // hit a single because fielders are aligned with the fair wedge under
   // the symmetric spray convention.
   const throwTo2 = throwTimeSec(fielderPt, BASE_COORDS_FT.second,
-    conv.position, conv.fielder.skills.defense);
+    conv.position, conv.fielder.skills.throwing);
   const runnerToSecond = runnerTimeSec('home', 'first', hitter.skills.speed,
     { fromContact: true, hand: hitter.hand })
     + runnerTimeSec('first', 'second', hitter.skills.speed);
@@ -471,7 +483,7 @@ export function resolveBattedBall(
 
   // Runner could try for 2B. Try 3B too?
   const throwTo3 = throwTimeSec(fielderPt, BASE_COORDS_FT.third,
-    conv.position, conv.fielder.skills.defense);
+    conv.position, conv.fielder.skills.throwing);
   const runnerToThird = runnerToSecond
     + runnerTimeSec('second', 'third', hitter.skills.speed);
   const fielderToThird = totalToBall + throwTo3;
@@ -524,10 +536,10 @@ export function resolveFoulBall(
     );
     const cap = pos === 'C' ? catcherDepthCap : depthCap;
     if (dist > cap) continue;
-    const range = CONFIG.fielder.rangeFtPerSec
-      + (fielder.skills.defense - 5) * CONFIG.fielding.rangeDefenseLeverageFps
-      + (fielder.skills.speed   - 5) * CONFIG.fielding.rangeSpeedLeverageFps;
-    const reach = CONFIG.fielder.reactionSec + dist / Math.max(12, range);
+    const reach = fielderReachTimeSec(
+      fielderPt, ball.landingPoint,
+      fielder.skills.speed, fielder.skills.fielding,
+    );
     // Need to get there before the ball comes down (no slack — fouls
     // drift unpredictably and most "close" fouls drop in the seats).
     if (reach > ball.hangTimeSec) continue;

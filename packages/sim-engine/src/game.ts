@@ -76,8 +76,9 @@ function buildDefenseMap(team: Team, pitcher: Player): Map<Position, Player> {
   return map;
 }
 
-function initTeamState(team: Team): TeamGameState {
-  const sp = team.rotation[0];
+function initTeamState(team: Team, starterIndex = 0): TeamGameState {
+  const idx = starterIndex % team.rotation.length;
+  const sp = team.rotation[idx];
   return {
     team,
     battingOrderIdx: 0,
@@ -86,6 +87,7 @@ function initTeamState(team: Team): TeamGameState {
     currentPitcher: sp,
     pitcherState: {
       pitcherId: sp.id, pitchCount: 0, battersFaced: 0,
+      runsAllowed: 0, hitsAllowed: 0,
       isStarter: true, bullpenUsed: new Set(),
     },
     pitcherStats: new Map([[sp.id, newPitcherStats(sp.id)]]),
@@ -141,12 +143,13 @@ function maybeChangePitcher(
   state: TeamGameState, inning: number, scoreDiff: number,
 ): void {
   if (!shouldPullPitcher(state.pitcherState, state.team, inning, scoreDiff)) return;
-  const next = pickReliever(state.team, state.pitcherState.bullpenUsed);
+  const next = pickReliever(state.team, state.pitcherState.bullpenUsed, inning, scoreDiff);
   if (!next) return;
   state.pitcherState.bullpenUsed.add(next.id);
   state.currentPitcher = next;
   state.pitcherState = {
     pitcherId: next.id, pitchCount: 0, battersFaced: 0,
+    runsAllowed: 0, hitsAllowed: 0,
     isStarter: false, bullpenUsed: state.pitcherState.bullpenUsed,
   };
   state.pitcherStats.set(next.id, newPitcherStats(next.id));
@@ -191,7 +194,7 @@ function simulateHalfInning(
 
     // ─── Phase 5: situational reclassification (DP / FC / sac-fly) ─
     const fielderDef = ab.fieldedBy
-      ? fielding.defenseMap.get(ab.fieldedBy)?.skills.defense ?? 5
+      ? fielding.defenseMap.get(ab.fieldedBy)?.skills.fielding ?? 5
       : 5;
     ab.result = classifySituationalOut(ab.result, {
       outs, bases,
@@ -232,6 +235,10 @@ function simulateHalfInning(
     const pitcherStats = fielding.pitcherStats.get(fielding.currentPitcher.id);
     if (pitcherStats) recordPitcherStat(pitcherStats, ab, runsThisPa);
 
+    // Track performance in manager state for shelling detection
+    fielding.pitcherState.runsAllowed += runsThisPa;
+    if (isHit(ab.result)) fielding.pitcherState.hitsAllowed++;
+
     // Fielding credits (PO/A/E) — pulled from ab.fielding which atBat.ts
     // populates from (result, fieldedBy) using standard scorekeeping.
     if (ab.fielding) {
@@ -246,9 +253,15 @@ function simulateHalfInning(
   }
 }
 
-export function simulateGame(home: Team, away: Team, rng: Rng): GameResult {
-  const homeState = initTeamState(home);
-  const awayState = initTeamState(away);
+export interface GameOptions {
+  /** Index into each team's rotation array. Default 0. */
+  homeStarterIndex?: number;
+  awayStarterIndex?: number;
+}
+
+export function simulateGame(home: Team, away: Team, rng: Rng, opts?: GameOptions): GameResult {
+  const homeState = initTeamState(home, opts?.homeStarterIndex ?? 0);
+  const awayState = initTeamState(away, opts?.awayStarterIndex ?? 0);
   const atBats: AtBatRecord[] = [];
 
   let inning = 1;

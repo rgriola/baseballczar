@@ -33,11 +33,15 @@ export const CONFIG = {
   },
 
   // ─── Ball flight ──────────────────────────────────────────────
-  // Simple physics with a drag coefficient tuned so 105mph @ 28° ≈ 420ft.
+  // Statcast-calibrated drag-factor model.
+  //   distance = vacRange × dragFactor
+  //   vacRange = v² × sin(2θ) / g
+  //   dragFactor = clamp(0.55, 0.95, 1.05 - mph × 0.0042)
+  // Drag factor constants live in ballFlight.ts (not here) since
+  // they're tightly coupled to the formula.
   flight: {
     gravityFtPerSec2: 32.174,
-    dragCoeff: 0.0078,           // tune knob — lower = ball carries farther
-    mphToFps: 1.467,             // 1 mph ≈ 1.467 ft/sec
+    mphToFps: 1.467,               // 1 mph ≈ 1.467 ft/sec
     /** Post-landing roll model. After a fly ball drops fair (and isn't
      *  caught), it bounces and rolls along its spray vector until grass
      *  friction stops it or it reaches the wall. The fielder must
@@ -72,21 +76,41 @@ export const CONFIG = {
   releaseTimeSec: 1.0,           // time from glove to throw release
   outfieldReleaseTimeSec: 1.3,   // crow-hop adds delay
 
-  // ─── Runner speeds (sprint, ft/sec) ───────────────────────────
-  // Skill 10 ≈ Trea Turner; Skill 1 ≈ Yadi-late-career.
+  // ─── Runner / sprint speeds (ft/sec) ───────────────────────────
+  // One body, one speed — same curve for baserunning AND fielding.
+  // Skill 10 ≈ elite burner; Skill 1 ≈ slow catcher.
   runner: {
-    minFtPerSec: 22,             // skill 1
-    maxFtPerSec: 28,             // skill 10
+    minFtPerSec: 22.64,          // skill 1  (≈15.4 mph)
+    maxFtPerSec: 28.57,          // skill 10 (≈19.5 mph)
     leftyHeadStartSec: 0.3,      // L-handed batter to 1B advantage
     secondaryLeadFt: 12,         // baserunner lead off bag
     reactionToBatSec: 0.4,       // delay between contact and runner moving
+    /** Standardized acceleration curve. A player needs `accelTimeSec`
+     *  seconds of running before they reach full sprint speed. Before
+     *  that, effective speed ramps linearly from 0 to `sprintFtPerSec`.
+     *  Applies to BOTH baserunning and fielding. */
+    accelTimeSec: 0.6,           // ~0.6s to hit top speed from a stand
   },
 
   // ─── Fielder reaction & range ─────────────────────────────────
+  // Fielder foot speed comes from `sprintFtPerSec(speed)` — the SAME
+  // function used for baserunning. Defense skill improves the fielder's
+  // jump (reaction time) and route efficiency, NOT raw foot speed.
   fielder: {
-    reactionSec: 0.3,
-    rangeFtPerSec: 32,           // average range; modulated by speed/defense
-    catchRadiusFt: 10,           // ball within this of fielder = caught (line-drive)
+    reactionSec: 0.25,           // base reaction (read + first step)
+    /** Defense skill reduces reaction time: each point above 5 shaves
+     *  `defenseReactionBonusSec` off. Skill 10 reacts 0.25s faster;
+     *  Skill 1 reacts 0.25s slower. Models jump quality + read ability. */
+    defenseReactionBonusSec: 0.05,
+    /** Defense also improves route efficiency: a perfect route (1.0)
+     *  means the fielder runs the shortest path. Low defense takes a
+     *  longer, less efficient path. Effective distance multiplier:
+     *    routeMul = routeBase + (defense - 5) * routeLeverage
+     *  Skill 5 = 1.0 (no penalty). Skill 10 = 0.95 (5% shorter route).
+     *  Skill 1 = 1.08 (8% longer route). */
+    routeBase: 1.0,
+    routeLeverage: -0.02,
+    catchRadiusFt: 12,           // ball within this of fielder = caught (line-drive)
   },
 
   // ─── Fielding physics & territory ────────────────────────────
@@ -130,7 +154,7 @@ export const CONFIG = {
      *  Default 0.6/1.0 means a full backpedal cuts range to 60%; pure
      *  lateral motion is 80%; charging is 100%. */
     chargeMul: 1.0,
-    backpedalMul: 0.6,
+    backpedalMul: 0.75,
     /** Each fielder's natural spray angle (deg, CF=0). Reaching outside
      *  this zone costs `territoryPenaltySecPerDeg` per deg of miss. */
     naturalSprayAngleDeg: {
@@ -147,17 +171,14 @@ export const CONFIG = {
      *  fast runner stretches it). Set penalty to 0 to disable. */
     cornerCaromAngleDeg: 36,
     cornerCaromPenaltySec: 0.6,
-    /** Per-fielder range model:
-     *    range_fps = base + (defense-5)*defensePerPt + (speed-5)*speedPerPt
-     *  Tuned so SPEED is the primary range factor (a burner outruns a
-     *  glove-only fielder to a gapper) while defense governs glove +
-     *  jump + first-step quality. With base 32 + speed 2.5/pt:
-     *    speed 1, def 5  → 22 ft/s   (slow guy: "falling down")
-     *    speed 5, def 5  → 32 ft/s   (league average)
-     *    speed 10, def 5 → 44.5 ft/s (burner CF)
-     *    speed 5, def 10 → 39.5 ft/s (great glove, average wheels) */
-    rangeDefenseLeverageFps: 1.5,
-    rangeSpeedLeverageFps:   2.5,
+    /* Per-fielder range model (post-unification):
+     *  Foot speed = sprintFtPerSec(speed) — same as baserunning.
+     *  Defense affects reaction (jump) and route efficiency only.
+     *  rangeDefenseLeverageFps and rangeSpeedLeverageFps are REMOVED;
+     *  kept here as 0 for any code that still references them during
+     *  transition, but the real model lives in fielder.* above. */
+    rangeDefenseLeverageFps: 0,
+    rangeSpeedLeverageFps:   0,
     /** Foul-pop catch radii (ft from home) — how far each fielder will
      *  drift into foul ground for a pop-up. */
     foulCatch: {
@@ -188,12 +209,19 @@ export const CONFIG = {
   // Skill→tendency mapping. These are the v1 levers.
   battedBall: {
     // Exit velocity tier in mph by power skill (1..10)
-   // powerToExitVeloMph: { min: 67, max: 106 },
-   powerToExitVeloMph: { min: 75, max: 115 },
-    // Launch angle bias by dhr skill: 1=worm-burner, 10=uppercut
-    dhrToLaunchAngleDeg: { min: -15, max: 25 },
-    launchAngleStdDevDeg: 12,    // gaussian noise around the bias
+    powerToExitVeloMph: { min: 67, max: 106 },
+    // Launch angle bias by dhr skill: 1=worm-burner, 10=uppercut.
+    // Round bat + round ball can produce -25° to +70° in real baseball.
+    // DHR 1 = chopper/worm-burner, DHR 10 = uppercut fly-ball hitter.
+    dhrToLaunchAngleDeg: { min: -10, max: 30 },
+    launchAngleStdDevDeg: 16,    // wider spread → more fly balls + pop-ups
     exitVeloStdDevMph: 8,
+    /** Height of the bat at contact (feet). All balls launch from this
+     *  height, not from the ground. A 0° LA ball from 3 ft travels ~55 ft
+     *  before touching grass — a screaming one-hopper, not a worm-burner.
+     *  Negative LA balls chop into the dirt quickly. This eliminates the
+     *  hard 5° grounder cutoff in favor of physics-based ground contact. */
+    contactHeightFt: 3,
     // Spray angle convention: 0° = dead CF, -45° = LF foul line, +45° = RF.
     // RHB pulls to -pullCenterDeg, LHB to +pullCenterDeg. StdDev keeps most
     // contact inside the fair wedge while still allowing oppo-field hits.
@@ -206,8 +234,8 @@ export const CONFIG = {
     baseInZoneRate: 0.50,        // pitcher's intent translation
     baseSwingInZoneRate: 0.72,
     baseChaseRate: 0.22,
-    baseContactRate: 0.88,       // when swinging
-    foulRate: 0.45,              // of all contact, share that's foul (MLB ~0.40)
+    baseContactRate: 0.82,       // when swinging (modern MLB avg ~80-83%)
+    foulRate: 0.52,               // ~52% of contact becomes foul
     twoStrikeFoulRetains: true,  // long ABs
     maxPitchesPerAB: 20,         // safety
     edgeIsStrikeProb: 0.36,      // umpire calls edge pitch a strike this often

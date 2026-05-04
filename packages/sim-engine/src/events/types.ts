@@ -44,7 +44,7 @@ export interface AtBatStartEvent extends BaseEvent {
   pitcher: {
     id: number; firstName: string; lastName: string; hand: 'L' | 'R';
     /** Optional skill snapshot for richer PBP. Each is 1..10. */
-    pitchIntel?: number; stamina?: number; defense?: number;
+    eye?: number; throwing?: number; stamina?: number; playIntelligence?: number;
   };
   runners: (number | null)[];   // [1B, 2B, 3B] — playerIds or null
   /** Score going INTO this at-bat (optional for backward-compat with
@@ -96,6 +96,13 @@ export interface FielderConvergeEvent extends BaseEvent {
   fromPoint: { x: number; y: number };
   toPoint: { x: number; y: number };
   reachSec: number;
+  /** Why this fielder is converging:
+   *  - 'primary': the fielder who actually fields/catches the ball
+   *  - 'chase': initial sprint toward the ball's landing zone (two-phase;
+   *             the ball will get past and the fielder will redirect)
+   *  - 'cutoff': relay man positioning on the throw line
+   *  - 'backup': backup fielder converging behind the play */
+  role?: 'primary' | 'chase' | 'cutoff' | 'backup';
 }
 
 export interface ThrowEvent extends BaseEvent {
@@ -105,6 +112,12 @@ export interface ThrowEvent extends BaseEvent {
   toBase: 'first' | 'second' | 'third' | 'home';
   toPoint: { x: number; y: number };
   flightSec: number;
+  /** When true, this throw goes to a cutoff/relay man, not directly
+   *  to the base. The PBP should read "throws to cutoff (SS)" rather
+   *  than "throws to 2B" for relay throws. */
+  isCutoffRelay?: boolean;
+  /** Position of the cutoff man receiving this relay throw. */
+  cutoffPosition?: Position;
 }
 
 /**

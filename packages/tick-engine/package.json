@@ -1,0 +1,19 @@
+{
+  "name": "@baseballczar/tick-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Frame-by-frame baseball simulation engine. Pure TypeScript, no runtime deps. Provides GameSession for batch, on-demand, and multiplayer modes.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@baseballczar/sim-engine": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

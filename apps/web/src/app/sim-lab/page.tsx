@@ -89,28 +89,42 @@ function compressTimeline(events: SimEvent[], maxGapSec: number): SimEvent[] {
       cap = FIRST_PITCH_MAX_SEC;
       firstPitchSeen = true;
     }
-    // If the previous event put the ball in flight, ensure this gap is
-    // at least long enough for the flight to play out (+ small buffer).
-    if (inFlightDur > 0) {
+    // If a prior event put something in flight, ensure the gap is long
+    // enough for that flight to play out (+ 0.5s buffer). Only consume
+    // inFlightDur when the original gap is non-zero — same-timestamp
+    // events (gap=0) should NOT reset it, because all those events fire
+    // at the same instant and only the LONGEST duration matters for the
+    // gap to the NEXT differently-timed event.
+    const origGap = i === 0 ? 0 : e.t - prevOrigT;
+    if (inFlightDur > 0 && origGap > 0) {
       cap = Math.max(cap, inFlightDur + 0.5);
       inFlightDur = 0;
     }
-    const gap = i === 0 ? 0 : Math.min(cap, e.t - prevOrigT);
+    const gap = i === 0 ? 0 : Math.min(cap, origGap);
     const newT = i === 0 ? e.t : prevNewT + gap;
     out.push({ ...e, t: newT });
     prevOrigT = e.t;
     prevNewT = newT;
     // Record this event's in-flight duration for the NEXT iteration.
+    // Use Math.max so same-timestamp events accumulate the LONGEST
+    // duration, not clobber each other.
     if (e.type === 'contact') {
-      inFlightDur = e.hangTimeSec || 1.5;
+      inFlightDur = Math.max(inFlightDur, e.hangTimeSec || 1.5);
     } else if (e.type === 'throw' || e.type === 'ball-return') {
-      inFlightDur = e.flightSec || 0;
+      inFlightDur = Math.max(inFlightDur, e.flightSec || 0);
     } else if (e.type === 'runner-advance') {
-      // Each base-to-base trot/sprint takes its own travelSec; without
-      // this the next runner-advance fires after 1.5s and the runner
-      // is yanked diagonally to the next bag mid-stride (looks like a
-      // tight loop near the mound on a home-run trot).
-      inFlightDur = e.travelSec || 0;
+      inFlightDur = Math.max(inFlightDur, e.travelSec || 0);
+    } else if (e.type === 'fielder-converge') {
+      inFlightDur = Math.max(inFlightDur, e.reachSec || 0);
+    } else if (e.type === 'cover-base') {
+      inFlightDur = Math.max(inFlightDur, e.arriveSec || 0);
+    } else if (e.type === 'at-bat-end') {
+      // Fielders jog back to home positions at ~20 ft/s. An OF who
+      // chased a ball 200 ft needs ~10s, but we don't know exact
+      // distances here. Use a 3s minimum so the next AB doesn't
+      // start while fielders are still mid-jog. The engine's natural
+      // 25s between-at-bat gap will be clamped to max(3.5, maxGap).
+      inFlightDur = Math.max(inFlightDur, 3.0);
     }
   }
   return out;
@@ -251,9 +265,12 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function PbpPanel({ entries, cursor }: { entries: PbpEntry[]; cursor: number }) {
-  // Show entries up through the current cursor; highlight the most recent one.
+  // Show entries up through the PREVIOUS cursor position. The usePlayer
+  // cursor points to the NEXT event to fire — so cursor=5 means events
+  // 0-4 have been applied. We filter by < cursor (not <=) so the PBP
+  // text appears AFTER the visual play starts, not before.
   const listRef = useRef<HTMLDivElement | null>(null);
-  const visible = entries.filter(e => e.eventIdx <= cursor);
+  const visible = entries.filter(e => e.eventIdx < cursor);
   const lastIdx = visible.length - 1;
 
   // Auto-scroll the active line into view as it advances.

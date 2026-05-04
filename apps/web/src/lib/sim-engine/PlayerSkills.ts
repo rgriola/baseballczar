@@ -96,7 +96,7 @@ function applyStaminaDecay(
   battersFaced: number,
 ): PitcherAttributes {
   const staminaFactor = STAMINA_FACTOR[Math.min(10, Math.max(1, skills.stamina))] ?? STAMINA_FACTOR_DEFAULT;
-  const batterThreshold = BATTER_THRESHOLD[Math.min(10, Math.max(0, skills.pitchIntel))] ?? BATTER_THRESHOLD_DEFAULT;
+  const batterThreshold = BATTER_THRESHOLD[Math.min(10, Math.max(0, skills.eye))] ?? BATTER_THRESHOLD_DEFAULT;
 
   if (battersFaced <= batterThreshold) {
     return { ...skills };

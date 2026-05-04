@@ -1,8 +1,13 @@
 /**
  * Ball flight physics — converts (exitVelo, launchAngle, sprayAngle)
- * into a landing point and hang time. Simplified projectile motion
- * with a drag term tuned so 100mph @ 28° travels ~400 ft (matches
- * Statcast averages for an MLB barrel).
+ * into a landing point and hang time.
+ *
+ * 2.5D model: the ball launches from `contactHeightFt` (≈3 ft, bat
+ * height in the strike zone) and follows projectile motion with drag
+ * until it reaches ground level (y=0). This single change eliminates
+ * the old hard 5° grounder cutoff — the physics naturally determines
+ * whether the ball is a grounder (negative LA, hits dirt fast) or a
+ * liner/fly (positive LA, stays airborne).
  *
  * Coordinate system (feet, origin = home plate):
  *   +x = toward right field foul line
@@ -56,47 +61,76 @@ export interface FlightResult {
   wallBounceSpeedFps?: number;
 }
 
-/** Ground-distance + hang time using simplified drag model. */
+/** Ground-distance + hang time using 2.5D projectile model with h₀. */
 export function flight(input: FlightInput): FlightResult {
   const { exitVeloMph, launchAngleDeg, sprayAngleDeg } = input;
   const v0 = exitVeloMph * CONFIG.flight.mphToFps;
   const g = CONFIG.flight.gravityFtPerSec2;
+  const h0 = CONFIG.battedBall.contactHeightFt;
 
-  // Grounders (LA < 5°): no real flight; ball rolls along spray angle.
-  // Rollout distance scales with EV; capped at the wall on that line.
-  // Stronger contact reaches the OF (BABIP becomes a function of fielder position).
-  const isGrounder = launchAngleDeg < 5;
-  let distanceFt: number;
-  let hangTime: number;
-  let peakHeight: number;
+  // Clamp angle for trig (projectile math gets weird above ~70°)
+  const effectiveLA = Math.min(70, launchAngleDeg);
+  const angleRad = (effectiveLA * Math.PI) / 180;
+  const vVert = v0 * Math.sin(angleRad);   // vertical component (ft/s)
+  const vHoriz = v0 * Math.cos(angleRad);  // horizontal component (ft/s)
 
+  // ─── Distance with drag ────────────────────────────────────────
+  // Uses a Statcast-calibrated drag factor that scales linearly with
+  // exit velocity. Faster balls lose proportionally more to drag:
+  //   119 mph → ×0.55 (line drives hammered by air resistance)
+  //    90 mph → ×0.67 (softer contact retains more)
+  //    60 mph → ×0.80 (weak pop-ups, barely any drag)
+  //
+  // Distance formula: vacRange × dragFactor
+  //   vacRange = v² × sin(2θ) / g   (standard ground-level projectile)
+  //   dragFactor = clamp(0.55, 0.95, 1.05 - mph × 0.0042)
+  const vacRange = (v0 * v0 * Math.sin(2 * angleRad)) / g;
+  const dragFactor = Math.max(0.55, Math.min(0.95, 1.05 - exitVeloMph * 0.0042));
+  let distanceFt = Math.max(0, vacRange * dragFactor);
+
+  // ─── Hang time from contact height ────────────────────────────
+  // Quadratic with h₀: ball launches from bat height (~3 ft), not
+  // ground level. This is critical for grounder classification — a
+  // negative LA ball lands in ~0.15-0.3s (short parabola from h₀),
+  // while the symmetric formula 2vy/g gives 0 for LA=0.
+  //   h(t) = h₀ + vy·t - ½g·t² = 0
+  //   t = (vy + √(vy² + 2gh₀)) / g
+  const disc = vVert * vVert + 2 * g * h0;
+  let hangTime = disc > 0
+    ? (vVert + Math.sqrt(disc)) / g
+    : Math.sqrt(2 * h0 / g);  // fallback: pure drop from h₀
+  hangTime = Math.max(0.15, hangTime);
+
+  // Peak height: apex above ground from vacuum kinematics.
+  // For negative LA (grounders), peak is at bat height.
+  const peakHeight = vVert > 0
+    ? h0 + (vVert * vVert) / (2 * g)
+    : h0;
+
+  // ─── Grounder classification ──────────────────────────────────
+  // No more hard cutoff! A "grounder" is any ball that lands close
+  // enough to home plate that it was effectively rolling on the grass.
+  // Physics-based: negative LA → lands in ~0.15-0.25s at 10-30 ft;
+  // 0° LA → lands at ~0.4s at ~55 ft; 3° LA → ~0.5s at ~65 ft.
+  // We classify as grounder if hang time < 0.6s AND distance < 90 ft
+  // (roughly the infield). This covers all the traditional "grounders"
+  // while letting low liners (5-10° LA) be proper fly balls.
+  const isGrounder = hangTime < 0.6 && distanceFt < 90;
+
+  // For grounders, adjust: the ball decelerates on grass from contact
+  // velocity (it bounces off the dirt and rolls). Scale distance by
+  // friction so weak contact doesn't roll to the OF unrealistically.
   if (isGrounder) {
-    // 60mph weak roller ≈ 30ft to mound; 105mph rocket ≈ 220ft to OF
     const evNorm = Math.max(0, (exitVeloMph - 50) / 60);  // 0..1 over [50,110]
-    distanceFt = 30 + evNorm * 220;
-    // Hang time = time for the ball to travel `distanceFt` along the
-    // ground, decelerating from v0 at ~10 ft/s² (grass + bounces).
-    // Solving d = v0·t − ½·a·t² for t gives:
-    //     t = (v0 − √(v0² − 2·a·d)) / a
-    // This couples time to physics so a 112mph hot shot to the OF
-    // takes ~1.6s rather than the previous fixed 0.4s.
+    distanceFt = 20 + evNorm * 230;
+    // Grounder hang time = travel time along the ground with friction.
     const decel = 10;  // ft/sec² avg deceleration on grass
-    const disc = v0 * v0 - 2 * decel * distanceFt;
-    hangTime = disc > 0
-      ? (v0 - Math.sqrt(disc)) / decel
-      // Ball would decelerate to a stop before reaching `distanceFt`
-      // (very weak roller). Fall back to average-speed approximation.
-      : distanceFt / Math.max(20, v0 * 0.45);
+    const groundV0 = vHoriz * Math.cos(Math.abs(angleRad) * 0.3); // bounce kills some speed
+    const disc2 = groundV0 * groundV0 - 2 * decel * distanceFt;
+    hangTime = disc2 > 0
+      ? (groundV0 - Math.sqrt(disc2)) / decel
+      : distanceFt / Math.max(20, groundV0 * 0.45);
     hangTime = Math.max(0.3, hangTime);
-    peakHeight = 2;
-  } else {
-    const angleRad = (Math.min(50, launchAngleDeg) * Math.PI) / 180;
-    // Vacuum-style range as base
-    const vacRange = (v0 * v0 * Math.sin(2 * angleRad)) / g;
-    hangTime = (2 * v0 * Math.sin(angleRad)) / g;
-    const dragLoss = CONFIG.flight.dragCoeff * v0 * v0;
-    distanceFt = Math.max(0, vacRange - dragLoss);
-    peakHeight = (v0 * Math.sin(angleRad)) ** 2 / (2 * g);
   }
 
   // Project landing point onto field plane.
@@ -130,12 +164,10 @@ export function flight(input: FlightInput): FlightResult {
   // back past `landingPoint`).
   let restDispFt = 0;
   if (!isGrounder && !isHomeRun && !isFoul) {
-    const angleRad = (Math.min(50, launchAngleDeg) * Math.PI) / 180;
     // Horizontal velocity at contact, attenuated by drag in flight.
     // We approximate: ball loses ~half its horizontal velocity to drag
     // on the way down (matches Statcast: a 100mph drive lands at ~70mph).
-    const vHorizContact = v0 * Math.cos(angleRad);
-    const vHorizLanding = vHorizContact * 0.55;
+    const vHorizLanding = vHoriz * 0.55;
     landingSpeedFps = vHorizLanding * CONFIG.flight.roll.bounceKeepFrac;
     const decel = CONFIG.flight.roll.grassDecelFtPerSec2;
     const naturalRoll = (landingSpeedFps * landingSpeedFps) / (2 * decel);

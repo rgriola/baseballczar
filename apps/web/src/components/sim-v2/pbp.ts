@@ -113,9 +113,9 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
           skillBadge('PI',  e.batter.playIntelligence),
         ].filter(Boolean).join(' ');
         const ps = [
-          skillBadge('CTRL', e.pitcher.pitchIntel),
+          skillBadge('CTRL', e.pitcher.eye),
           skillBadge('STAM', e.pitcher.stamina),
-          skillBadge('DEF',  e.pitcher.defense),
+          skillBadge('ARM',  e.pitcher.throwing),
         ].filter(Boolean).join(' ');
         if (bs || ps) {
           out.push({
@@ -182,7 +182,11 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
         break;
       }
       case 'fielder-converge': {
-        // Remember who got to the ball so the at-bat-end line can name them.
+        // Only show "Fielded by" for the primary fielder — the one who
+        // actually catches/fields the ball. Cutoff and backup converges
+        // are visible in the animation but don't need a PBP line (they
+        // made it look like multiple fielders caught the same ball).
+        if (e.role && e.role !== 'primary') break;
         lastFielderPos = e.position;
         const f = defense.get(e.position);
         if (f) {
@@ -207,9 +211,19 @@ export function buildPbp(events: SimEvent[]): PbpEntry[] {
       case 'throw': {
         const fromF = defense.get(e.fromPosition);
         const fromName = fromF ? fromF.name : e.fromPosition;
+        let target: string;
+        if (e.isCutoffRelay && e.cutoffPosition) {
+          // Relay throw to cutoff man — show who's receiving, not the
+          // base, so it doesn't look like two throws to the same place.
+          const cutF = defense.get(e.cutoffPosition);
+          const cutName = cutF ? cutF.name : e.cutoffPosition;
+          target = `cutoff ${cutName} (${e.cutoffPosition})`;
+        } else {
+          target = baseShort(e.toBase);
+        }
         out.push({
           eventIdx: i, t: e.t, kind: 'play',
-          text: `    Throw: ${fromName} (${e.fromPosition}) → ${baseShort(e.toBase)}`,
+          text: `    Throw: ${fromName} (${e.fromPosition}) → ${target}`,
         });
         break;
       }

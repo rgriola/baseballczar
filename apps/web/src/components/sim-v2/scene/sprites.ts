@@ -75,8 +75,12 @@ export function makeFielderSprite(
   c.addChild(hat);
   // Only show the position label if the sprite is large enough to read it.
   if (radiusPx >= 6) {
+    // Map internal codes to standard baseball notation
+    const displayLabel: Record<string, string> = {
+      B1: '1B', B2: '2B', B3: '3B',
+    };
     const lbl = new Text({
-      text: pos,
+      text: displayLabel[pos] ?? pos,
       style: {
         fill: 0x222222, fontSize: Math.max(6, radiusPx * 1.1),
         fontFamily: 'system-ui', fontWeight: '700',

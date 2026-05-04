@@ -2,7 +2,7 @@
  * Pitcher and Batter agents. Each pitch:
  *   1. Pitcher decides intent (zone + goal) given count + situation.
  *   2. Pitch's actual location may drift from intent (control degrades
- *      with fatigue / low pitchIntel).
+ *      with fatigue / low eye+PI).
  *   3. Batter perceives location (eye skill = perception accuracy).
  *   4. Batter decides swing (count + perceived location + skill).
  *   5. resolvePitch combines: ball / called-strike / whiff / foul / contact.
@@ -51,8 +51,8 @@ export function pitcherDecideIntent(
 }
 
 /**
- * Translate intent to actual location. Better pitchIntel + lower fatigue
- * means actual matches intent more often.
+ * Translate intent to actual location. Better EYE (pitch control) +
+ * PI (decisions) + lower fatigue means actual matches intent more often.
  */
 export function executePitch(
   pitcher: Player,
@@ -60,9 +60,10 @@ export function executePitch(
   fatigueRatio: number,
   rng: Rng,
 ): PitchExecution {
-  const piSkill = (pitcher.skills.pitchIntel + pitcher.skills.ag) / 2;
+  // EYE = pitch control, PI = selection quality, AG = delivery agility
+  const controlSkill = (pitcher.skills.eye * 2 + pitcher.skills.playIntelligence + pitcher.skills.ag) / 4;
   // Control: 0.30 (skill 1, exhausted) up to 0.85 (skill 10, fresh)
-  const control = 0.30 + (piSkill / 10) * 0.55 - fatigueRatio * 0.15;
+  const control = 0.30 + (controlSkill / 10) * 0.55 - fatigueRatio * 0.15;
   const hits = rng.bool(Math.max(0.20, Math.min(0.92, control)));
 
   if (hits) {
@@ -157,10 +158,10 @@ export function resolvePitch(
     return { outcome: exec.actualInZone ? 'called-strike' : 'ball' };
   }
   // Swing — contact or whiff?
-  // Contact rate: hitter avg up, pitcher pitchIntel (stuff) down, lower out-of-zone
+  // Contact rate: hitter avg up, pitcher eye (control/stuff) down, lower out-of-zone
   const contactBase = CONFIG.pitch.baseContactRate;
   const hitterMod = (batter.skills.avg - 5) * 0.040;
-  const pitcherMod = (pitcher.skills.pitchIntel - 5) * 0.035;
+  const pitcherMod = (pitcher.skills.eye - 5) * 0.035;
   const zoneMod = exec.actualInZone ? 0.05 : -0.10;
   const contact = Math.max(0.30, Math.min(0.95,
     contactBase + hitterMod - pitcherMod + zoneMod));

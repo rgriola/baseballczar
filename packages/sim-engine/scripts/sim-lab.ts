@@ -100,6 +100,51 @@ console.log(formatReport(report));
   }
 }
 
+// ─── Launch-angle diagnostic ────────────────────────────────────
+// Histogram of every batted-ball launch angle so we can see the
+// grounder / line-drive / fly-ball / pop-up mix.
+{
+  const laBuckets: Record<string, number> = {};
+  const laLabels = [
+    'grounder   (< 5°)',
+    'low-liner  (5..15°)',
+    'line-drive (15..25°)',
+    'fly-ball   (25..35°)',
+    'high-fly   (35..50°)',
+    'pop-up     (> 50°)',
+  ];
+  for (const l of laLabels) laBuckets[l] = 0;
+  let laTotal = 0;
+  let laSum = 0, laAbsSum = 0;
+  let grounders = 0, flyBalls = 0;
+  for (const g of results) {
+    for (const ab of g.atBats) {
+      for (const p of ab.pitches) {
+        const bb = p.battedBall ?? (p === ab.pitches[ab.pitches.length - 1] ? ab.battedBall : null);
+        if (!bb) continue;
+        laTotal++;
+        const la = bb.launchAngleDeg;
+        laSum += la; laAbsSum += Math.abs(la);
+        if (la < 5) { laBuckets['grounder   (< 5°)']++; grounders++; }
+        else if (la < 15) { laBuckets['low-liner  (5..15°)']++; }
+        else if (la < 25) { laBuckets['line-drive (15..25°)']++; }
+        else if (la < 35) { laBuckets['fly-ball   (25..35°)']++; flyBalls++; }
+        else if (la <= 50) { laBuckets['high-fly   (35..50°)']++; flyBalls++; }
+        else { laBuckets['pop-up     (> 50°)']++; flyBalls++; }
+      }
+    }
+  }
+  console.log('\nLaunch-angle distribution (every batted ball):');
+  console.log(`  total=${laTotal}  grounders=${grounders} (${(100*grounders/laTotal).toFixed(1)}%)  fly/pop=${flyBalls} (${(100*flyBalls/laTotal).toFixed(1)}%)`);
+  console.log(`  mean LA=${(laSum/laTotal).toFixed(1)}°   mean |LA|=${(laAbsSum/laTotal).toFixed(1)}°`);
+  console.log('  bucket                   count    pct');
+  for (const l of laLabels) {
+    const c = laBuckets[l];
+    const pct = laTotal > 0 ? (100 * c / laTotal).toFixed(1) : '0.0';
+    console.log(`  ${l.padEnd(22)} ${String(c).padStart(6)}  (${pct.padStart(5)}%)`);
+  }
+}
+
 if (verbose && results.length > 0) {
   console.log('\n─── GAME 1 BOXSCORE ───');
   printBoxscore(results[0]);

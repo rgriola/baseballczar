@@ -7,7 +7,7 @@ function makeSkills(overrides?: Partial<PlayerSkills>): PlayerSkills {
 }
 
 function makePitcherSkills(overrides?: Partial<PitcherAttributes>): PitcherAttributes {
-  return { ag: 5, avg: 5, power: 5, eye: 5, dhr: 5, speed: 5, stamina: 7, pitchIntel: 7, ...overrides };
+  return { ag: 5, avg: 5, power: 5, eye: 7, dhr: 5, speed: 5, stamina: 7, ...overrides };
 }
 
 function makeLineup(teamOffset: number): LineupPlayer[] {

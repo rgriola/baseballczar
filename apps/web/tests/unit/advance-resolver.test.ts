@@ -8,7 +8,7 @@ function mk(name: string): Player {
     id: nextId++, firstName: name, lastName: 'X', hand: 'R', position: 'CF',
     skills: {
       ag: 5, avg: 5, power: 5, eye: 5, dhr: 5, speed: 5,
-      stamina: 5, pitchIntel: 5, defense: 5,
+      stamina: 5, fielding: 5, throwing: 5, playIntelligence: 5,
     },
   };
 }

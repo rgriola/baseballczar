@@ -44,7 +44,7 @@ export const STAMINA_FACTOR: Record<number, number> = {
   5: 0.06, 4: 0.065, 3: 0.075, 2: 0.09, 1: 0.1,
 };
 
-/** Batter-count threshold before fatigue kicks in, by pitchIntel (0-10) */
+/** Batter-count threshold before fatigue kicks in, by eye (0-10) */
 export const BATTER_THRESHOLD: Record<number, number> = {
   10: 33, 9: 30, 8: 27, 7: 23, 6: 19,
   5: 17, 4: 15, 3: 13, 2: 10, 1: 7, 0: 5,

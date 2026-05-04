@@ -196,7 +196,6 @@ async function buildTeamInput(
         dhr: p.dhr,
         speed: p.speed,
         stamina: p.stamina,
-        pitchIntel: p.play_intel,
       } as PitcherAttributes,
       isStarter,
       isCloser,
