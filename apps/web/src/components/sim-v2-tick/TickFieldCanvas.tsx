@@ -73,7 +73,12 @@ export default function TickFieldCanvas({
       scene.play(speed);
       setIsPlaying(true);
     }
-  }, [snapshots, ready, autoplay, speed, onEvent]);
+    // Intentionally omit speed/onEvent from deps:
+    // - speed changes are handled by the separate setSpeed effect
+    // - onEvent is captured in the closure; re-running loadSnapshots
+    //   would reset playbackTime and destroy/recreate sprites
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshots, ready, autoplay]);
 
   // Poll playback time from the scene for scrubber position
   useEffect(() => {

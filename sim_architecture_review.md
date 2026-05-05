@@ -1,5 +1,8 @@
 # Sim Architecture Review & Refactor Plan
 
+- May 4th 2026 Review 
+
+
 ## Current Architecture
 
 ```mermaid

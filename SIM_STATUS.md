@@ -1,6 +1,6 @@
 # Sim Lab 2 — Status & TODO
 
-> Last updated: 2026-05-04
+> Last updated: 2026-05-04 (evening)
 
 ---
 
@@ -67,6 +67,29 @@
 - Fielder sprite radius: reduced from `scale × 3.5` to `scale × 3` to match runner size
 - Ball shadow: flipped behavior — small/faint on ground, grows large when airborne (landing zone indicator)
 
+### Rich Play-by-Play
+- **Every pitch accounted for**: 289/289 pitches verified in PBP — including contact pitches (previously skipped)
+- **Pitch MPH**: Real velocity computed from pitcher `throwing` skill via `throwVelocityMph()` (e.g. 91 mph Four-seam, 78 mph Changeup)
+- **Pitch type labels**: Four-seam (in zone), Slider (edge), Changeup (off)
+- **Zone narrative**: "right down the middle", "paints the corner", "just misses", "well outside"
+- **Swing/take**: "Takes for a ball", "Chases — swinging strike", "Called strike"
+- **Foul ball physics**: Exit velo, launch angle, distance, spray direction shown on fouls
+- **Contact descriptors**: "Lines it hard", "Drives it deep", "Pops one up", "Rifles a line drive" — based on LA + exit velo
+- **Batted ball stats**: EV mph | LA° | Spray° | distance ft | apex height | hang time
+- **Fielding narrative**: Position-specific verbs ("tracks it down", "charges in and scoops it", "snags it off the mound")
+- **Pitcher skills in header**: Now shows CTRL, ARM (throwing), STM
+- **Color-coded outcomes**: Balls sky-blue, strikes red, fouls amber, contact amber, HRs yellow
+
+### Renderer Stability
+- **Self-healing fielder sprites**: `updateFielders()` auto-creates sprites on demand if missing — fielders can never be invisible regardless of initialization order
+- **Team color live update**: Fielder body tint updates each frame, so inning swaps show correct team colors immediately
+- **Effect dependency fix**: Removed `speed` and `onEvent` from `loadSnapshots` effect deps — prevents spurious sprite destruction on speed change or re-render
+- **Contact pitch injection**: `buildPitchTickEvents()` for the contact pitch is injected into the tick engine's first snapshot, so "Pitch 3: Four-seam 91 mph" appears before the "Contact:" line
+
+### Package Sync
+- **Root cause of stale PBP**: Page imports from `@baseballczar/tick-engine` package, not `apps/web/src/components/`. All updates to `formatPbp.ts`, `entities.ts`, `gameOrchestrator.ts` now synced to both locations
+- **GameSession.ts** updated with `throwing` field on pitcher at-bat-start event
+
 ### UX
 - Sim no longer auto-runs on page load — user must click Run or Random
 - `pinned` starts at `0`, effect skips until user triggers
@@ -85,8 +108,8 @@
 ### 🟡 Medium Priority
 
 - [ ] **Batter/Pitcher sprites** — Show batter in the box and pitcher on the mound during pitch animation (currently only ball moves)
-- [ ] **Pitch type variety** — Currently only `fastball` vs `offspeed` label. Use pitcher's `eye` + `throwing` to determine specific pitch types and speeds
-- [ ] **Foul ball animation** — `PitchEvent` has `battedBall` data on fouls. Could show the ball launch then cut back to next pitch
+- [x] **Pitch type variety** — ~~Currently only `fastball` vs `offspeed` label.~~ Now shows Four-seam/Slider/Changeup with real MPH from `throwVelocityMph()`
+- [ ] **Foul ball animation** — PBP now shows foul ball exit velo/LA/distance/spray. Still needs visual ball launch animation on the field
 - [ ] **Scrub/seek PBP fix** — `lastEventSnapIdx` resets on seek, re-firing all events when scrubbing backward
 - [ ] **Team color persistence** — After inning change, resting fielders use correct team color but tick-engine subsequent snapshots use `teamColor: 0x0` (placeholder)
 - [ ] **HUD out counter timing** — Outs in `gameState` reflect count at start of AB, not after the result. One-behind feel during playback
@@ -123,7 +146,8 @@
 
 ## Known Issues
 
-1. **Pitch speed display** — All pitches show as "fastball" or "offspeed" regardless of pitcher skill
-2. **Team color on tick snapshots** — Subsequent tick-engine snapshots use `teamColor: 0` (only first snapshot carries real color)
+1. ~~**Pitch speed display** — All pitches show as "fastball" or "offspeed"~~ ✅ Fixed — now shows Four-seam/Slider/Changeup + real MPH
+2. **Team color on tick snapshots** — Subsequent tick-engine snapshots may use `teamColor: 0` (partially mitigated by live tint update)
 3. **Seek re-fires events** — Scrubbing backward replays all PBP events from the beginning
 4. **Single pitcher per game** — `awayTeam.rotation[0]` is always used for pitcher name, even after pitching changes
+5. **Dual-source code** — `packages/tick-engine/src/` and `apps/web/src/components/sim-v2-tick/` must be kept in sync manually until a proper barrel export is set up

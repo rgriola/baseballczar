@@ -99,7 +99,7 @@ export type TickEvent =
   | {
       type: 'at-bat-start';
       batter: { name: string; hand: string; avg: number; power: number; eye: number; speed: number };
-      pitcher: { name: string; hand: string; ctrl: number; stam: number };
+      pitcher: { name: string; hand: string; ctrl: number; stam: number; throwing: number };
       inning: number; half: 'top' | 'bottom'; outs: number;
       homeScore: number; awayScore: number;
       homeName: string; awayName: string;
@@ -132,9 +132,29 @@ export type TickEvent =
   | { type: 'runner-safe'; runnerId: number; base: string }
   | { type: 'runner-out'; runnerId: number; at: string }
   | { type: 'runner-scored'; runnerId: number }
-  // Pitch events (Phase 3)
-  | { type: 'pitch'; pitchNum: number; zone: 'in' | 'edge' | 'off'; speed: string }
-  | { type: 'pitch-result'; outcome: string; balls: number; strikes: number }
+  // Pitch events
+  | {
+      type: 'pitch';
+      pitchNum: number;
+      zone: 'in' | 'edge' | 'off';
+      actualInZone: boolean;
+      speed: string;         // pitch type label: 'Four-seam', 'Changeup', etc.
+      mph: number;           // actual pitch velocity
+      swung: boolean;
+    }
+  | {
+      type: 'pitch-result';
+      outcome: string;
+      balls: number;
+      strikes: number;
+      /** Foul ball contact data — shows exit velo, LA, distance even on fouls */
+      foulBall?: {
+        exitVeloMph: number;
+        launchAngleDeg: number;
+        distanceFt: number;
+        sprayDirection: string;
+      };
+    }
   // Manager decision events (Phase 3)
   | { type: 'manager-signal'; decision: string; detail: string }
   | { type: 'defensive-shift'; positions: Record<string, Point2D> }

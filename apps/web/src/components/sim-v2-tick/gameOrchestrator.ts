@@ -16,6 +16,7 @@
  *   5. If 3 outs: inning transition, swap sides
  */
 import type { AtBatRecord, Player, Team, GameResult, Position } from '@baseballczar/sim-engine';
+import { throwVelocityMph } from '@baseballczar/sim-engine';
 import type { WorldSnapshot, TickEvent, Point2D, FielderEntity } from './entities';
 import { simulateAtBatTick, type TickSimOptions } from './tickEngine';
 import {
@@ -244,6 +245,7 @@ export function simulateFullGame(
         hand: pitcherPlayer.hand ?? 'R',
         ctrl: pitcherPlayer.skills.eye ?? 5,
         stam: pitcherPlayer.skills.stamina ?? 5,
+        throwing: pitcherPlayer.skills.throwing ?? 5,
       },
       inning: ab.inning,
       half: ab.half,
@@ -279,15 +281,12 @@ export function simulateFullGame(
         const pitchEvents: import('./entities').TickEvent[] = [];
         if (isFirst) pitchEvents.push(abStartEvent);
 
-        const speedLabel = p.intentZone === 'off' ? 'offspeed' : 'fastball';
-        pitchEvents.push({ type: 'pitch', pitchNum: p.pitchNum, zone: p.intentZone, speed: speedLabel });
-        pitchEvents.push({ type: 'pitch-result', outcome: p.outcome, balls: p.balls, strikes: p.strikes });
+        pitchEvents.push(...buildPitchTickEvents(p, pitcherPlayer));
 
         if (isLast) {
           pitchEvents.push({ type: 'at-bat-end', result: ab.result, batterName, rbis: ab.rbis });
         }
 
-        // Animate ball: mound → plate → idle (3 snapshots per pitch)
         timeOffset = emitPitchSnapshots(
           allSnapshots, timeOffset, currentFielders, pitchEvents,
           isFirst ? gsBase : undefined,
@@ -332,9 +331,7 @@ export function simulateFullGame(
       const pitchEvents: import('./entities').TickEvent[] = [];
       if (isFirst) pitchEvents.push(abStartEvent);
 
-      const speedLabel = p.intentZone === 'off' ? 'offspeed' : 'fastball';
-      pitchEvents.push({ type: 'pitch', pitchNum: p.pitchNum, zone: p.intentZone, speed: speedLabel });
-      pitchEvents.push({ type: 'pitch-result', outcome: p.outcome, balls: p.balls, strikes: p.strikes });
+      pitchEvents.push(...buildPitchTickEvents(p, pitcherPlayer));
 
       timeOffset = emitPitchSnapshots(
         allSnapshots, timeOffset, currentFielders, pitchEvents,
@@ -349,10 +346,24 @@ export function simulateFullGame(
       situation,
     });
 
-    // Inject at-bat-start into the first snapshot's events
-    // (only if we didn't already emit it in pre-contact pitches)
-    if (abSnapshots.length > 0 && preContactPitches.length === 0) {
-      abSnapshots[0].events = [abStartEvent, ...abSnapshots[0].events];
+    // Inject the CONTACT PITCH's PBP events into the tick engine's first snapshot
+    // so every pitch shows in the play-by-play, including the one that was hit.
+    if (abSnapshots.length > 0) {
+      const contactPitch = ab.pitches[ab.pitches.length - 1];
+      const contactPitchEvents = buildPitchTickEvents(contactPitch, pitcherPlayer);
+
+      // Prepend: at-bat-start (if no pre-contact pitches) → pitch → pitch-result → existing events
+      const injected: import('./entities').TickEvent[] = [];
+      if (preContactPitches.length === 0) {
+        injected.push(abStartEvent);
+      }
+      injected.push(...contactPitchEvents);
+      abSnapshots[0].events = [...injected, ...abSnapshots[0].events];
+
+      // Set gameState on first snapshot if not already set via pre-contact pitches
+      if (preContactPitches.length === 0) {
+        abSnapshots[0].gameState = gameState;
+      }
     }
 
     // Build fielded-by label for at-bat-end
@@ -422,6 +433,70 @@ export function simulateFullGame(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
+
+/** Map spray angle to human-readable direction label. */
+function sprayDirectionLabel(angleDeg: number): string {
+  const a = Math.abs(angleDeg);
+  const side = angleDeg < 0 ? 'LF' : angleDeg > 0 ? 'RF' : 'CF';
+  if (a < 10) return 'CF';
+  if (a < 20) return angleDeg < 0 ? 'LCF' : 'RCF';
+  if (a < 35) return side;
+  if (a < 50) return `${side}-line`;
+  return `foul ${side}`;
+}
+
+/** Compute pitch type label from intent zone and variation. */
+function pitchTypeLabel(zone: 'in' | 'edge' | 'off'): string {
+  switch (zone) {
+    case 'in': return 'Four-seam';
+    case 'edge': return 'Slider';
+    case 'off': return 'Changeup';
+  }
+}
+
+/** Build rich pitch + pitch-result tick events from a sim-engine PitchEvent. */
+function buildPitchTickEvents(
+  p: import('@baseballczar/sim-engine').PitchEvent,
+  pitcher: Player,
+): import('./entities').TickEvent[] {
+  const events: import('./entities').TickEvent[] = [];
+
+  // Compute real pitch velocity from pitcher's throwing skill
+  const baseMph = throwVelocityMph('P', pitcher.skills.throwing ?? 5);
+  // Offspeed pitches are ~12-15% slower than the heater
+  const mph = p.intentZone === 'off' ? Math.round(baseMph * 0.86) : Math.round(baseMph);
+
+  events.push({
+    type: 'pitch',
+    pitchNum: p.pitchNum,
+    zone: p.intentZone,
+    actualInZone: p.actualInZone,
+    speed: pitchTypeLabel(p.intentZone),
+    mph,
+    swung: p.swung,
+  });
+
+  // Build foul ball data if the batter made foul contact
+  let foulBall: { exitVeloMph: number; launchAngleDeg: number; distanceFt: number; sprayDirection: string } | undefined;
+  if (p.battedBall && p.battedBall.isFoul) {
+    foulBall = {
+      exitVeloMph: p.battedBall.exitVeloMph,
+      launchAngleDeg: p.battedBall.launchAngleDeg,
+      distanceFt: p.battedBall.distanceFt,
+      sprayDirection: sprayDirectionLabel(p.battedBall.sprayAngleDeg),
+    };
+  }
+
+  events.push({
+    type: 'pitch-result',
+    outcome: p.outcome,
+    balls: p.balls,
+    strikes: p.strikes,
+    foulBall,
+  });
+
+  return events;
+}
 
 /**
  * Emit 3 snapshots for a single pitch to animate the ball mound → plate:

@@ -265,6 +265,7 @@ export class GameSession {
         hand: pitcherPlayer.hand ?? 'R',
         ctrl: pitcherPlayer.skills.eye ?? 5,
         stam: pitcherPlayer.skills.stamina ?? 5,
+        throwing: pitcherPlayer.skills.throwing ?? 5,
       },
       inning: ab.inning,
       half: ab.half,

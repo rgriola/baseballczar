@@ -460,10 +460,26 @@ export class TickScene {
     nextFielders: FielderEntity[] | undefined,
     u: number,
   ): void {
+    const radiusPx = Math.max(4, this.transform.scale * 3);
+
     for (let i = 0; i < fielders.length; i++) {
       const f = fielders[i];
-      const sp = this.fielderSprites.get(f.position);
-      if (!sp) continue;
+      let sp = this.fielderSprites.get(f.position);
+
+      // Auto-create sprite if it doesn't exist yet
+      // (handles inning changes, late initialization, or data order issues)
+      if (!sp) {
+        const { c, body, hat, hatOffsetPx } = makeFielderSprite(f.position as Position, radiusPx);
+        body.tint = f.teamColor;
+        this.entityLayer.addChild(c);
+        sp = { container: c, body, hat, hatOffsetPx };
+        this.fielderSprites.set(f.position, sp);
+      }
+
+      // Update team color if it changed (inning swap)
+      if (f.teamColor && f.teamColor !== 0) {
+        sp.body.tint = f.teamColor;
+      }
 
       let x = f.pos.x;
       let y = f.pos.y;
@@ -477,19 +493,15 @@ export class TickScene {
 
       const px = ftToPx({ x, y }, this.transform);
       sp.container.position.set(px.x, px.y);
-      // Depth sort: entities with higher y (closer to viewer in top-down) render on top
       sp.container.zIndex = Math.round(px.y);
 
-      // Update hat (facing direction) — point toward movement direction
+      // Update hat (facing direction)
       if (nextFielders && nextFielders[i]) {
         const nf = nextFielders[i];
         const dx = nf.pos.x - f.pos.x;
         const dy = nf.pos.y - f.pos.y;
         if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
-          // Engine: +x = right, +y = toward CF
-          // Pixi: +x = right, +y = down
-          // Rotation: angle from +x axis, clockwise
-          const angle = Math.atan2(-dy, dx);  // negate dy for pixi coords
+          const angle = Math.atan2(-dy, dx);
           sp.hat.rotation = angle;
         }
       }

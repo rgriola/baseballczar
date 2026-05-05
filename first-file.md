@@ -136,4 +136,9 @@ Also the ball should bounce off the wall or players. Eventually we will add more
 - game_engine_redesign
 - Lets move forward with your hybrid approach. 
 - Notes: 
-a) keep the sim we have worked on call this sim-lab-2. 
+a) keep the sim we have worked do not change it,  call this new one 
+/sim-lab-2. 
+b) I like the current layout and view and UI. 
+c) Reuse the baseball field and layout, remember we will add stadium graphics and they need to be interchangeable. and we will add sprites for the players. 
+c) Keep the player spites as they currently work where we can see the direction they are facing. Later we will add animation spites. 
+
