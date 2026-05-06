@@ -1,3 +1,5 @@
+> Last touched by agent: 2026-05-06T12:36:52Z
+
 # Tasks
 
 > Active task backlog. New work goes under the matching priority bucket.
@@ -11,38 +13,49 @@
 
 ## P0 — Calibration & correctness
 
-- [ ] **Recalibrate `expectedRanges`** to the post-foul-fix model. Run a 162-game @ seed 1 sim, capture rates, widen/tighten bands so a clean run is all-green. Keep the old bands as a comment for reference.
-- [ ] **Decide on HR/FB fix**: revert `powerToExitVeloMph` to `{67, 106}` or accept the higher EV and adjust `dragCoeff` upward to keep distance in line.
-- [ ] **Add `foulPerContact` guardrail** to `expectedRanges` + `report.ts` so a future spray tweak can't silently push the foul ratio out of MLB range.
-- [ ] **Commit current foul/triples work** as one atomic commit ("sim: speed-dominant range, corner caroms, foul rate 0.45, OF positions").
+- [x] **Recalibrate `expectedRanges`** to the post-foul-fix model. Run a 162-game @ seed 1 sim, capture rates, widen/tighten bands so a clean run is all-green. Keep the old bands as a comment for reference.
+- [x] **Decide on HR/FB fix**: keep current `powerToExitVeloMph` + drag mapping; baseline `hrPerFb` is already in-band.
+- [x] **Add `foulPerContact` guardrail** to `expectedRanges` + `report.ts` so a future spray tweak can't silently push the foul ratio out of MLB range.
+- [x] **Commit current foul/triples work** as one atomic commit ("sim: speed-dominant range, corner caroms, foul rate 0.45, OF positions").
 
 ## P1 — Sim engine gameplay logic
 
-- [ ] **Fielder target-base decision tree** (issue S-10). Branch on `(outs, runners, hitLocation, hitType, scoreMargin)`. Start with the standard tree from `first-file.md`:
+## player logic moved to player_play_integlligence.md
+
+- [x] **Fielder target-base decision tree** (issue S-10). Branch on `(outs, runners, hitLocation, hitType, scoreMargin)`. Start with the standard tree from `player_play_integlligence.md`:
   - 0 out, R1, grounder to MIF → DP attempt (2B → 1B)
   - 2 outs, any → easy out at 1B
   - R3 with < 2 outs → look runner back, throw 1B
   - Score-aware: lead ≥ 5 runs → throw to 2B not home
-- [ ] **Spray-aware r1→3rd** (issue S-15). RF singles raise the advance probability; LF singles lower it. PI + speed gated.
+  - 0 out lead ≥ 5 runs, priority is getting outs.
+- [ ] **Spray-aware r1→3rd** (issy ue S-15). RF singles raise the advance probability; LF singles lower it. PI + speed gated.
 - [ ] **PI-gated tag-up** (issue S-14). Replace flat `sacFlyTagProb` with `f(PI, speed, depth, defense.arm)`.
-- [ ] **Pitcher / 1B backup logic** (issue S-12). 1B covers 1B on 4-6-3 (already done), 2B at 2B for SS field, etc. Pitcher backs up home/3B on extra-base hits.
+- [ ] **Pitcher / 1B backup logic** (issue S-12). 1B man covers 1B on 4-6-3 (already done),5-4-3, 6-4-3 double play. 2B at 2B for SS field, etc. Pitcher backs up home/3B on extra-base hits; long fly ball sac fly (runner on 3B) Pitcher would back up home immediately.
 - [ ] **Doubles distribution work** (issue S-01). Options on the table:
   - widen `sprayStdDevDeg` 18 → 22 (more line traffic, side effect: more fouls/HRs)
-  - reduce OF range by 5% on balls landing in the LCF/RCF gaps
-  - or stop chasing the 1.5/g number and accept ~0.5/g for now
+  - keep normal OF speed and agility, only penalty for running backwards.
+  - or stop chasing the 1.5/g number and accept ~0.5/g for now. << what does this mean? >>
 
 ## P1 — Renderer / sim-v2
 
-- [ ] **Wall ricochet visualization** (issue R-04). Renderer must consume `wallHitPoint` + `wallBounceSpeedFps` and play the ricochet segment.
+- [ ] **Wall ricochet visualization** (issue R-04). Renderer must consume `wallHitPoint` + `wallBounceSpeedFps` and play the ricochet segment. << The Ricohet has an issue >>
 - [ ] **Ball roll-to-stop** (issue R-03). Tween must complete the full `restPoint` segment, not cut off at landing.
 - [ ] **HR clearance pixel rounding** (issue R-01). Wall sprite vs. ball-z math; verify ball is drawn above wall when `apex > wallHeightFt`.
-- [ ] **HR trot path regression** (issue R-02). Make sure the HR trot waypoint list is `home → 1B → 2B → 3B → home`, not collapsed to mound.
+- [ ] **HR trot path regression** (issue R-02). Make sure the HR trot waypoint list is `home → 1B → 2B → 3B → home`, not collapsed to mound. << can we add rounding base paths to runners removing 90º turns. >>
+- [x] **Persist team errors for replay R/H/E.** Add `home_errors` + `visitor_errors` to game persistence and feed replay E column from DB values.
+
+## P1 — Web Dev Compile Performance
+
+- [ ] **Profile webpack cold compile for `/sim-lab-2`.** Capture trace/stats and identify top modules by compile time and graph fan-out.
+- [ ] **Evaluate worker graph externalization.** Prototype route/worker separation to avoid paying worker compile cost on first route hit.
+- [ ] **Create repeatable benchmark workflow.** Standardize one cold and two warm benchmark passes and store outputs in a small tracking doc.
+- [ ] **Define pass acceptance criteria.** Ship only changes that improve cold compile or reduce variance without warm-path regressions.
 
 ## P2 — Roster / lineup
 
-- [ ] **Starter rotation** (issue L-01). Track `team.nextStarterIdx`; cycle SP1→SP5 across schedule.
+- [ ] **Starter rotation** (issue L-01). Track `team.nextStarterIdx`; cycle SP1→SP5 across schedule;
 - [ ] **Closer (`CL`) position** (issue L-02). Add `CL` to the position enum, surface on rotation page, route late-inning + close-game appearances to CL.
-- [ ] **10-pitcher roster enforcement** (issue L-03). 5 SP + 5 RP; rotation page shows all 10.
+- [ ] **12 - pitcher roster enforcement** (issue L-03). 5 SP + 5 RP; rotation page shows all 10. Make this Dynamic, Minimum of 10, Max of 12 but this subtracts from Max 25 player roster. Lineup - always 9 batters - substitutes go in place of the player they replaced (defensive or hitting). We need error checking should a team fall below these margins the Sim auto signs players or adjusts the lineup, but first line of error check is User Web UI.
 
 ## P2 — Renderer polish
 
@@ -66,14 +79,21 @@ _(none — pick from P0 or P1 above when starting a session)_
 
 ## Done
 
-| Date       | Task                                                                   | Commit          |
-| ---------- | ---------------------------------------------------------------------- | --------------- |
-| 2026-04-29 | OF positions moved to 70 ft off wall, corner-carom penalty added       | _(uncommitted)_ |
-| 2026-04-29 | Speed skill made dominant in fielder range model                       | _(uncommitted)_ |
-| 2026-04-29 | Foul rate 0.58 → 0.45, foul push tightened to ±2° past foul line       | _(uncommitted)_ |
-| 2026-04-29 | Richer PBP output (count+outs, runners, throws, dives, skill snapshot) | _(uncommitted)_ |
-| 2026-04-29 | README CONFIG documentation section                                    | _(uncommitted)_ |
-| (prior)    | Wall ricochet engine math                                              | `4f30ed5`       |
-| (prior)    | DP visualization                                                       | `1af3786`       |
-| (prior)    | Flyball mid-flight teleport fix; ball sprite halved                    | `3c69d95`       |
-| (prior)    | Grounder pop-back regression                                           | `15513b1`       |
+| Date       | Task                                                                                         | Commit          |
+| ---------- | -------------------------------------------------------------------------------------------- | --------------- |
+| 2026-05-06 | P1 S-10 pass: target-base decision tree (outs/runners/score-aware paths)                     | _(uncommitted)_ |
+| 2026-05-06 | P0 calibration pass: expectedRanges rebased + foulPerContact guardrail + HR/FB keep decision | `8f86cdb`       |
+| 2026-05-06 | Persisted replay R/H/E: store game-level error totals and render E from DB                   | _(uncommitted)_ |
+| 2026-05-06 | Replay stability pass: SSR-safe tick scene load + `simAll` direct service execution          | _(uncommitted)_ |
+| 2026-05-06 | Scheduled lineup 1-9/DH normalization + persisted replay innings/RHE + boxscore contrast fix | _(uncommitted)_ |
+| 2026-05-05 | Proxy/auth dev perf pass (matcher scoping, route classification, request user cache)         | _(uncommitted)_ |
+| 2026-05-05 | Sim Lab compile graph pass (engine subpath imports/exports, benchmark + test harness)        | _(uncommitted)_ |
+| 2026-04-29 | OF positions moved to 70 ft off wall, corner-carom penalty added                             | _(uncommitted)_ |
+| 2026-04-29 | Speed skill made dominant in fielder range model                                             | _(uncommitted)_ |
+| 2026-04-29 | Foul rate 0.58 → 0.45, foul push tightened to ±2° past foul line                             | _(uncommitted)_ |
+| 2026-04-29 | Richer PBP output (count+outs, runners, throws, dives, skill snapshot)                       | _(uncommitted)_ |
+| 2026-04-29 | README CONFIG documentation section                                                          | _(uncommitted)_ |
+| (prior)    | Wall ricochet engine math                                                                    | `4f30ed5`       |
+| (prior)    | DP visualization                                                                             | `1af3786`       |
+| (prior)    | Flyball mid-flight teleport fix; ball sprite halved                                          | `3c69d95`       |
+| (prior)    | Grounder pop-back regression                                                                 | `15513b1`       |

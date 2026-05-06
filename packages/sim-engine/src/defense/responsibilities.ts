@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T12:36:52Z
 /**
  * Defensive responsibilities — who covers, who cuts off, who backs up.
  *
@@ -107,6 +108,8 @@ export function getCoverage(args: {
   /** [r1, r2, r3] — truthy if occupied. */
   bases: readonly (unknown | null)[];
   outs: number;
+  /** Positive means defense leads by this many runs. */
+  defenseLeadDeficit?: number;
   sprayAngleDeg: number;
   /** Batter hand — needed for CF plays to decide who covers 2B. */
   batterHand?: 'L' | 'R' | 'S';
@@ -120,6 +123,7 @@ export function getCoverage(args: {
   const r3 = !!bases[2];
   const isOF = OUTFIELD.has(fielder);
   const batterHand = args.batterHand ?? 'R';  // default RHB
+  const defenseLeadDeficit = args.defenseLeadDeficit ?? 0;
 
   // No throw on a HR or anything that ends with the ball already at
   // a base. Caught flies / line outs / pop outs / foul outs need no
@@ -189,6 +193,13 @@ export function getCoverage(args: {
   } else if (result === 'sac-fly') {
     // Sac fly is always a throw home (tag play at the plate).
     target = 'home';
+  } else if (args.outs < 2 && r3) {
+    // With <2 outs and a runner at 3B, hold the runner and take the
+    // sure out at 1B instead of forcing a risky throw home.
+    target = 'first';
+  } else if (defenseLeadDeficit >= 5 && (r2 || r3)) {
+    // Up big, prioritize getting an out over a high-risk throw home.
+    target = 'second';
   } else if (r2 || r3) {
     // Lead runner is on 2B or 3B → throw home.
     target = 'home';
@@ -219,6 +230,20 @@ export function getCoverage(args: {
       position: 'P',
       toPoint: pointOnLine(targetPt, fieldedAt, 0.18),
       forBase: 'home',
+    });
+  } else if (target === 'first') {
+    // Hold-runner / sure-out path on OF plays: 1B takes the throw,
+    // 2B relays as cutoff, pitcher trails behind the bag.
+    covers.push({ position: 'B1', base: 'first', toPoint: basePoint('first') });
+    cutoff = {
+      position: 'B2',
+      toPoint: pointOnLine(targetPt, fieldedAt, 0.45),
+      forBase: 'first',
+    };
+    backups.push({
+      position: 'P',
+      toPoint: pointOnLine(targetPt, fieldedAt, 0.18),
+      forBase: 'first',
     });
   } else if (target === 'third') {
     // 3B covers (unless 3B fielded). SS is cutoff. P backs up 3B.

@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T12:36:52Z
 /**
  * Phase A refactor — canonical base-advance resolver.
  *
@@ -204,11 +205,14 @@ export function resolveBaseAdvance(
     }
 
     case 'fielders-choice': {
-      // Lead runner out at 2B; batter safe at 1B; r2 forced to 3B.
+      // Lead runner out at 2B; batter safe at 1B.
+      // If r2 is occupied, r2 is forced to 3B and r3 is forced home.
+      // If r2 is empty, r3 is not forced and holds at 3B.
       if (r1) trip(r1, 'first', 'second', { outRecorded: true });
       trip(batter, 'home', 'first', { isBatter: true });
       if (r2) trip(r2, 'second', 'third');
-      nb = [batter, null, r2 ?? null];
+      if (r2 && r3) trip(r3, 'third', 'home');
+      nb = [batter, null, r2 ?? r3 ?? null];
       break;
     }
 

@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T12:36:52Z
 /**
  * Phase A refactor — pure situational reclassification of an at-bat.
  *
@@ -27,6 +28,8 @@ export interface SituationalContext {
   fieldedBy?: Position;
   /** Defense skill of the fielder (for DP probability). Defaults to 5. */
   fielderDefense?: number;
+  /** Defense lead/deficit before this play. Positive means defense leads. */
+  defenseLeadDeficit?: number;
 }
 
 /**
@@ -41,6 +44,17 @@ export function classifySituationalOut(
   const runnerOn1 = ctx.bases[0] != null;
   const runnerOn3 = ctx.bases[2] != null;
   const def = ctx.fielderDefense ?? 5;
+  const defenseLeadDeficit = ctx.defenseLeadDeficit ?? 0;
+
+  // P1 target-base decision tree for infield grounders:
+  // - 2 outs: take the easy out at 1B.
+  // - R3 with < 2 outs: look runner back, still take 1B.
+  // - Up big (>=5) with 0 outs: prioritize the sure out at 1B.
+  if (result === 'ground-out') {
+    if (ctx.outs === 2) return result;
+    if (runnerOn3 && ctx.outs < 2) return result;
+    if (defenseLeadDeficit >= 5 && ctx.outs === 0) return result;
+  }
 
   if (result === 'ground-out' && runnerOn1 && ctx.outs < 2) {
     // DPs realistically only on grounders to MIF or 3B (6-4-3, 4-6-3, 5-4-3).
@@ -52,15 +66,6 @@ export function classifySituationalOut(
     if (rng.bool(Math.max(0, Math.min(0.85, dpProb)))) return 'double-play';
     if (rng.bool(CONFIG.baserunning.fcProb)) return 'fielders-choice';
     return result;
-  }
-
-  // 2 outs + r1 forced + grounder to B2 (right next to 2B): the
-  // second baseman steps on 2B unassisted for the inning-ending
-  // force. No run can score on a force third out (MLB 5.08(a)).
-  // Without this rule, the engine would default to throwing to 1B,
-  // leaving the door open to (incorrectly) score r3 on the play.
-  if (result === 'ground-out' && runnerOn1 && ctx.outs === 2 && ctx.fieldedBy === 'B2') {
-    return 'fielders-choice';
   }
 
   if (result === 'fly-out' && runnerOn3 && ctx.outs < 2) {

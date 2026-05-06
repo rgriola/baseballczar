@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T12:36:52Z
 /**
  * Per-pitch batted-ball event emitter.
  *
@@ -256,6 +257,7 @@ export function emitBattedBallVisuals(
     result: ab.result,
     bases: bases ?? [null, null, null],
     outs: outsBefore,
+    defenseLeadDeficit: gameContext?.defenseLeadDeficit,
     sprayAngleDeg: ball.sprayAngleDeg,
     batterHand: ab.batter.hand,
   });
@@ -280,6 +282,7 @@ export function emitBattedBallVisuals(
         result: ab.result,
         bases: bases ?? [null, null, null],
         outs: outsBefore,
+        defenseLeadDeficit: gameContext?.defenseLeadDeficit,
         sprayAngleDeg: ball.sprayAngleDeg,
         batterHand: ab.batter.hand,
         forceTarget: piCoverage.throwTarget ?? undefined,

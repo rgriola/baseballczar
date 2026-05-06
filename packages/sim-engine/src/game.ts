@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T12:36:52Z
 /**
  * Full game simulation. 9 innings (extras up to maxInnings), runner
  * advancement on hits, manager pulls pitcher when needed.
@@ -200,6 +201,7 @@ function simulateHalfInning(
       outs, bases,
       fieldedBy: ab.fieldedBy,
       fielderDefense: fielderDef,
+      defenseLeadDeficit: fielding.runs - batting.runs,
     }, rng);
 
     // ─── Resolve runner advance (single source of truth) ─────────
