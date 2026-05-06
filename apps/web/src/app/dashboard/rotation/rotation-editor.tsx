@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T13:37:53Z
 'use client';
 
 import { useState, useTransition } from 'react';
@@ -34,23 +35,32 @@ function totalSkill(p: Pitcher) {
 }
 
 export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
+  const BULLPEN_MIN = 4;
+  const BULLPEN_MAX = 6;
+  const TOTAL_MIN = 10;
+  const TOTAL_MAX = 12;
+
   const [rotation, setRotation] = useState<Pitcher[]>(
     pitchers.filter((p) => p.rotation_slot >= 1 && p.rotation_slot <= 5).sort((a, b) => a.rotation_slot - b.rotation_slot),
   );
   const [bullpen, setBullpen] = useState<Pitcher[]>(
-    pitchers.filter((p) => p.rotation_slot >= 6 && p.rotation_slot <= 9).sort((a, b) => a.rotation_slot - b.rotation_slot),
+    pitchers
+      .filter((p) => (p.rotation_slot >= 6 && p.rotation_slot <= 9) || (p.rotation_slot >= 11 && p.rotation_slot <= 12))
+      .sort((a, b) => a.rotation_slot - b.rotation_slot),
   );
   const [closer, setCloser] = useState<Pitcher | null>(
     pitchers.find((p) => p.rotation_slot === 10) ?? null,
   );
   const [unassigned, setUnassigned] = useState<Pitcher[]>(
-    pitchers.filter((p) => p.rotation_slot === 0 || p.rotation_slot > 10),
+    pitchers.filter((p) => p.rotation_slot === 0 || p.rotation_slot > 12),
   );
   const [dragIdx, setDragIdx] = useState<{ group: 'rotation' | 'bullpen'; idx: number } | null>(null);
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
 
   const totalAssigned = rotation.length + bullpen.length + (closer ? 1 : 0);
+  const totalInRange = totalAssigned >= TOTAL_MIN && totalAssigned <= TOTAL_MAX;
+  const shapeValid = rotation.length === 5 && bullpen.length >= BULLPEN_MIN && bullpen.length <= BULLPEN_MAX && Boolean(closer);
 
   function moveToRotation(p: Pitcher) {
     if (rotation.length >= 5) return;
@@ -61,7 +71,7 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
   }
 
   function moveToBullpen(p: Pitcher) {
-    if (bullpen.length >= 4) return;
+    if (bullpen.length >= BULLPEN_MAX) return;
     setBullpen([...bullpen, p]);
     setRotation(rotation.filter((r) => r.id !== p.id));
     setCloser(closer?.id === p.id ? null : closer);
@@ -114,16 +124,16 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
   }
 
   function save() {
-    if (totalAssigned !== 10) {
-      setMessage('Rotation must have exactly 10 pitchers (5 SP + 4 RP + 1 CL)');
+    if (!totalInRange) {
+      setMessage(`Rotation must include ${TOTAL_MIN}-${TOTAL_MAX} pitchers total (currently ${totalAssigned}).`);
       return;
     }
     if (rotation.length !== 5) {
       setMessage('Need exactly 5 starting pitchers');
       return;
     }
-    if (bullpen.length !== 4) {
-      setMessage('Need exactly 4 relief pitchers');
+    if (bullpen.length < BULLPEN_MIN || bullpen.length > BULLPEN_MAX) {
+      setMessage(`Need ${BULLPEN_MIN}-${BULLPEN_MAX} relief pitchers.`);
       return;
     }
     if (!closer) {
@@ -229,7 +239,7 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
 
       {/* Bullpen */}
       <section>
-        <h2 className="mb-3 text-lg font-semibold text-white">Bullpen ({bullpen.length}/4)</h2>
+        <h2 className="mb-3 text-lg font-semibold text-white">Bullpen ({bullpen.length}/{BULLPEN_MAX})</h2>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>{tableHeaders}</thead>
@@ -289,7 +299,7 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
 
       {/* Available */}
       <section>
-        <h2 className="mb-3 text-lg font-semibold text-white">Available ({unassigned.length}) <span className="text-sm font-normal text-gray-400">— {totalAssigned}/10 assigned</span></h2>
+        <h2 className="mb-3 text-lg font-semibold text-white">Available ({unassigned.length}) <span className="text-sm font-normal text-gray-400">— {totalAssigned}/{TOTAL_MAX} assigned</span></h2>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -325,7 +335,7 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
                       {rotation.length < 5 && (
                         <button onClick={() => moveToRotation(p)} className="rounded bg-green-900/40 px-2 py-0.5 text-xs text-green-400 hover:bg-green-800/50">→ SP</button>
                       )}
-                      {bullpen.length < 4 && (
+                      {bullpen.length < BULLPEN_MAX && (
                         <button onClick={() => moveToBullpen(p)} className="rounded bg-yellow-900/40 px-2 py-0.5 text-xs text-yellow-400 hover:bg-yellow-800/50">→ RP</button>
                       )}
                       <button onClick={() => moveToCloser(p)} className="rounded bg-red-900/40 px-2 py-0.5 text-xs text-red-400 hover:bg-red-800/50">→ CL</button>
@@ -344,15 +354,15 @@ export default function RotationEditor({ pitchers }: { pitchers: Pitcher[] }) {
       <div className="flex items-center gap-3">
         <button
           onClick={save}
-          disabled={isPending || totalAssigned !== 10}
+          disabled={isPending || !totalInRange || !shapeValid}
           className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
         >
           {isPending ? 'Saving...' : 'Save Rotation'}
         </button>
 
-        {totalAssigned !== 10 && !message && (
+        {!totalInRange && !message && (
           <p className="text-sm text-yellow-400">
-            Assign exactly 10 pitchers: 5 SP + 4 RP + 1 CL ({totalAssigned}/10)
+            Assign {TOTAL_MIN}-{TOTAL_MAX} pitchers: 5 SP + 4-6 RP + 1 CL ({totalAssigned}/{TOTAL_MAX})
           </p>
         )}
 

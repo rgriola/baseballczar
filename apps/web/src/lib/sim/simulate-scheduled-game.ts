@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-06T04:02:00Z
+// Last touched by agent: 2026-05-06T13:37:53Z
 /**
  * Simulate a single scheduled game — loads rosters from Supabase,
  * runs the sim engine, and persists all results.
@@ -259,7 +259,7 @@ async function buildTeamInput(
     throw new Error(`Team ${teamId} has insufficient lineup hitters (${finalHitters.length})`);
   }
 
-  // Load pitchers (rotation slots 1-10: SP1-5, RP1-4, CL)
+  // Load pitchers (rotation slots 1-12: SP1-5, RP1-4, CL, optional RP5-6)
   const { data: pitchers, error: pErr } = await supabase
     .from('players')
     .select('id, first_name, last_name, jersey_no, hand_batting, rotation_slot, speed, stamina, ag, eye, avg, strength, dhr, play_intel, bunting, fielding, throw, karma')
@@ -267,7 +267,7 @@ async function buildTeamInput(
     .eq('fielder', false)
     .eq('roster_status', 'active')
     .gt('rotation_slot', 0)
-    .lte('rotation_slot', 10)
+    .lte('rotation_slot', 12)
     .order('rotation_slot');
 
   if (pErr || !pitchers || pitchers.length < 1) {
@@ -286,8 +286,11 @@ async function buildTeamInput(
     throw new Error(`Team ${teamId} has no starting pitcher for slot SP${starterSlot}`);
   }
 
-  // Separate relievers (RP slots 6-9) and closer (slot 10)
-  const relievers = pitcherRows.filter((p) => p.rotation_slot >= 6 && p.rotation_slot <= 9);
+  // Separate relievers (RP slots 6-9 primary, 11-12 optional) and closer (slot 10)
+  const relievers = pitcherRows.filter((p) =>
+    (p.rotation_slot >= 6 && p.rotation_slot <= 9)
+    || (p.rotation_slot >= 11 && p.rotation_slot <= 12),
+  );
   const closerPitcher = pitcherRows.find((p) => p.rotation_slot === 10);
 
   // Build legacy lineup
@@ -362,7 +365,7 @@ async function buildTeamInput(
 
   const bullpenPlayers: V2Player[] = [];
   for (const row of pitcherRows) {
-    if (row.rotation_slot < 6 || row.rotation_slot > 10) continue;
+    if (row.rotation_slot < 6 || row.rotation_slot > 12) continue;
     const pitcher = v2PitchersById.get(row.id);
     if (!pitcher) continue;
     bullpenPlayers.push(pitcher);

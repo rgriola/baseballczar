@@ -1,3 +1,5 @@
+// Last touched by agent: 2026-05-06T13:21:29Z
+// Last touched by agent: 2026-05-06T13:21:29Z
 /**
  * Phase 3 — Play Intelligence (PI) decision functions.
  *
@@ -190,19 +192,88 @@ export function decideThrowTarget(
  */
 export type RunnerDecision = 'r1-to-3rd-single' | 'r2-to-home-single';
 
+export interface RunnerAdvanceContext {
+  /** Spray angle in degrees: negative=LF side, positive=RF side. */
+  sprayAngleDeg?: number;
+}
+
+export interface TagUpDecisionContext {
+  /** Carry distance of the caught fly ball in feet. */
+  flyBallDepthFt?: number;
+  /** Arm strength (1..10) of the fielder making the catch/throw. */
+  defenseArm?: number;
+}
+
 const RUNNER_DIFFICULTY: Record<RunnerDecision, number> = {
   'r1-to-3rd-single': 6,
   'r2-to-home-single': 5,
 };
 
+const TAG_UP_BASE_DIFFICULTY = 5.8;
+const TAG_UP_SPEED_LEVERAGE = 0.5;
+const TAG_UP_ARM_LEVERAGE = 0.35;
+
+function tagUpDepthDifficultyMod(flyBallDepthFt?: number): number {
+  if (flyBallDepthFt == null || !Number.isFinite(flyBallDepthFt)) return 0;
+  if (flyBallDepthFt >= 300) return -1.2;
+  if (flyBallDepthFt >= 250) return -0.8;
+  if (flyBallDepthFt >= 210) return -0.4;
+  if (flyBallDepthFt <= 180) return 1.1;
+  if (flyBallDepthFt <= 200) return 0.6;
+  return 0;
+}
+
+function runnerAdvanceDifficultyMod(
+  decision: RunnerDecision,
+  context?: RunnerAdvanceContext,
+): number {
+  if (decision !== 'r1-to-3rd-single') return 0;
+  const spray = context?.sprayAngleDeg;
+  if (spray == null || !Number.isFinite(spray)) return 0;
+
+  // S-15: singles to RF generally let r1 take 3B more often,
+  // while singles to LF hold r1 at 2B more often.
+  if (spray >= 25) return -1.2;
+  if (spray >= 10) return -0.8;
+  if (spray <= -25) return 1.2;
+  if (spray <= -10) return 0.8;
+  return 0;
+}
+
 export function decideRunnerAdvance(
   decision: RunnerDecision,
   runner: Player | undefined,
   rng: Rng,
+  context?: RunnerAdvanceContext,
 ): boolean {
   const pi = getPlayIntelligence(runner);
   const speed = runner?.skills.speed ?? 5;
-  const difficulty = RUNNER_DIFFICULTY[decision];
+  const difficulty = RUNNER_DIFFICULTY[decision] + runnerAdvanceDifficultyMod(decision, context);
   const effective = pi + (speed - 5) * 0.4 + rng.gaussian(0, 1.5);
+  return effective >= difficulty;
+}
+
+/**
+ * S-14 tag-up decision for runner on 3B with <2 outs on a caught OF fly.
+ *
+ * Read model: f(PI, speed, depth, defense arm)
+ *   effective = PI + speed bonus + gaussian noise
+ *   difficulty = base + depth modifier + defense arm pressure
+ *
+ * Deeper flies reduce difficulty (easier tag), shallow flies and stronger
+ * OF arms raise it (runner holds more often).
+ */
+export function decideTagUpSacFly(
+  runner: Player | undefined,
+  rng: Rng,
+  context: TagUpDecisionContext = {},
+): boolean {
+  const pi = getPlayIntelligence(runner);
+  const speed = runner?.skills.speed ?? 5;
+  const arm = context.defenseArm ?? 5;
+  const difficulty = TAG_UP_BASE_DIFFICULTY
+    + tagUpDepthDifficultyMod(context.flyBallDepthFt)
+    + (arm - 5) * TAG_UP_ARM_LEVERAGE;
+  const effective = pi + (speed - 5) * TAG_UP_SPEED_LEVERAGE + rng.gaussian(0, 1.5);
   return effective >= difficulty;
 }

@@ -1,7 +1,8 @@
-// Last touched by agent: 2026-05-06T03:12:05Z
+// Last touched by agent: 2026-05-06T13:37:53Z
 // Purpose: Adapts package sim-engine scheduled outputs to legacy persistence types.
 
 import {
+  CONFIG,
   buildEvents,
   type AtBatRecord as V2AtBatRecord,
   type AtBatResult as V2AtBatResult,
@@ -160,17 +161,66 @@ function appendWaypoint(
   waypoints.push(next);
 }
 
+function solveTravelTimeSec(
+  distanceFt: number,
+  initialSpeedFps: number,
+  decelFtPerSec2: number,
+): number {
+  if (!Number.isFinite(distanceFt) || distanceFt <= 0) return 0;
+  if (!Number.isFinite(initialSpeedFps) || initialSpeedFps <= 0) {
+    return distanceFt / 8;
+  }
+  if (!Number.isFinite(decelFtPerSec2) || decelFtPerSec2 <= 0) {
+    return distanceFt / initialSpeedFps;
+  }
+
+  const disc = initialSpeedFps * initialSpeedFps - 2 * decelFtPerSec2 * distanceFt;
+  if (disc >= 0) {
+    return Math.max(0, (initialSpeedFps - Math.sqrt(disc)) / decelFtPerSec2);
+  }
+
+  // Distance exceeds what this initial speed can cover under constant
+  // deceleration; use a conservative fallback so timing still increases.
+  return distanceFt / Math.max(4, initialSpeedFps * 0.5);
+}
+
 function buildBallPathWaypoints(ball: V2BattedBall | undefined): BallPathWaypoint[] | undefined {
   if (!ball) return undefined;
 
   const waypoints: BallPathWaypoint[] = [];
   appendWaypoint(waypoints, 'contact', 0, 0, 3, 0);
 
+  const rollDecel = CONFIG.flight.roll.grassDecelFtPerSec2;
+  const landingT = Number.isFinite(ball.hangTimeSec) ? Math.max(0, ball.hangTimeSec) : undefined;
   const landingDist = Math.hypot(ball.landingPoint.x, ball.landingPoint.y);
   const wallHitDist = ball.wallHitPoint
     ? Math.hypot(ball.wallHitPoint.x, ball.wallHitPoint.y)
     : null;
   const wallBeforeLanding = wallHitDist != null && wallHitDist <= landingDist + 0.5;
+  const wallHitHeight = wallBeforeLanding
+    ? Math.max(CONFIG.park.wallHeightFt + 1, 9)
+    : 0;
+
+  let wallHitTSec: number | undefined;
+  if (ball.wallHitPoint) {
+    if (wallBeforeLanding) {
+      if (landingT != null && landingDist > 0 && wallHitDist != null) {
+        const frac = Math.max(0, Math.min(1, wallHitDist / landingDist));
+        wallHitTSec = landingT * frac;
+      }
+    } else if (landingT != null) {
+      const toWallDist = Math.hypot(
+        ball.wallHitPoint.x - ball.landingPoint.x,
+        ball.wallHitPoint.y - ball.landingPoint.y,
+      );
+      const toWallSec = solveTravelTimeSec(
+        toWallDist,
+        Math.max(1, ball.landingSpeedFps),
+        rollDecel,
+      );
+      wallHitTSec = landingT + toWallSec;
+    }
+  }
 
   if (ball.wallHitPoint && wallBeforeLanding) {
     appendWaypoint(
@@ -178,7 +228,8 @@ function buildBallPathWaypoints(ball: V2BattedBall | undefined): BallPathWaypoin
       'wall-hit',
       ball.wallHitPoint.x,
       ball.wallHitPoint.y,
-      10,
+      wallHitHeight,
+      wallHitTSec,
     );
   }
 
@@ -188,7 +239,7 @@ function buildBallPathWaypoints(ball: V2BattedBall | undefined): BallPathWaypoin
     ball.landingPoint.x,
     ball.landingPoint.y,
     0,
-    ball.hangTimeSec,
+    landingT,
   );
 
   if (ball.wallHitPoint && !wallBeforeLanding) {
@@ -197,23 +248,60 @@ function buildBallPathWaypoints(ball: V2BattedBall | undefined): BallPathWaypoin
       'wall-hit',
       ball.wallHitPoint.x,
       ball.wallHitPoint.y,
-      10,
+      wallHitHeight,
+      wallHitTSec,
     );
   }
 
-  if (ball.fieldedAtPoint) {
+  const restDx = ball.restPoint.x - ball.landingPoint.x;
+  const restDy = ball.restPoint.y - ball.landingPoint.y;
+  const restDistFromLanding = Math.hypot(restDx, restDy);
+  let restTSec: number | undefined;
+
+  if (restDistFromLanding > 0.25 && landingT != null) {
+    if (ball.wallHitPoint && !wallBeforeLanding && wallHitTSec != null) {
+      const wallToRestDist = Math.hypot(
+        ball.restPoint.x - ball.wallHitPoint.x,
+        ball.restPoint.y - ball.wallHitPoint.y,
+      );
+      const bounceStartFps = Math.max(
+        1,
+        ball.wallBounceSpeedFps ?? (ball.landingSpeedFps * CONFIG.flight.roll.wallBounceKeepFrac),
+      );
+      restTSec = wallHitTSec + solveTravelTimeSec(wallToRestDist, bounceStartFps, rollDecel);
+    } else {
+      restTSec = landingT + solveTravelTimeSec(
+        restDistFromLanding,
+        Math.max(1, ball.landingSpeedFps),
+        rollDecel,
+      );
+    }
+  }
+
+  const fieldedTSec =
+    typeof ball.fieldedAtSec === 'number' && Number.isFinite(ball.fieldedAtSec)
+      ? Math.max(0, ball.fieldedAtSec)
+      : undefined;
+  const appendFielded = () => {
+    if (!ball.fieldedAtPoint) return;
     appendWaypoint(
       waypoints,
       'fielded',
       ball.fieldedAtPoint.x,
       ball.fieldedAtPoint.y,
       0,
-      ball.fieldedAtSec,
+      fieldedTSec,
     );
-  }
+  };
 
-  const restDx = ball.restPoint.x - ball.landingPoint.x;
-  const restDy = ball.restPoint.y - ball.landingPoint.y;
+  // Keep event order aligned with physical time when we know both.
+  const fieldedBeforeRest =
+    fieldedTSec != null
+    && restTSec != null
+    && fieldedTSec <= restTSec;
+
+  if (fieldedBeforeRest) appendFielded();
+
   if (Math.hypot(restDx, restDy) > 0.25) {
     appendWaypoint(
       waypoints,
@@ -221,8 +309,11 @@ function buildBallPathWaypoints(ball: V2BattedBall | undefined): BallPathWaypoin
       ball.restPoint.x,
       ball.restPoint.y,
       0,
+      restTSec,
     );
   }
+
+  if (!fieldedBeforeRest) appendFielded();
 
   return waypoints.length > 0 ? waypoints : undefined;
 }

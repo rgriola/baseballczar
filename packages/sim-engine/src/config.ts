@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-06T12:36:52Z
+// Last touched by agent: 2026-05-06T13:21:29Z
 /**
  * ═══════════════════════════════════════════════════════════════════
  * SIM-LAB CONFIG — All tunable knobs in one place
@@ -268,7 +268,8 @@ export const CONFIG = {
   },
 
   baserunning: {
-    sacFlyTagProb: 0.85,
+    // Sac-fly tag-ups are now PI/speed/depth/arm-gated in
+    // defense/decide.ts (`decideTagUpSacFly`), not a flat probability.
     // Probability that a non-DP ground-out with a forced runner is
     // scored as a fielder's choice (lead runner out at the next bag,
     // batter safe). Combined with DP, ~70% of MIF grounders with R1

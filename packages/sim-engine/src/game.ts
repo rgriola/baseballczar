@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-06T12:36:52Z
+// Last touched by agent: 2026-05-06T13:21:29Z
 /**
  * Full game simulation. 9 innings (extras up to maxInnings), runner
  * advancement on hits, manager pulls pitcher when needed.
@@ -194,14 +194,17 @@ function simulateHalfInning(
     }
 
     // ─── Phase 5: situational reclassification (DP / FC / sac-fly) ─
-    const fielderDef = ab.fieldedBy
-      ? fielding.defenseMap.get(ab.fieldedBy)?.skills.fielding ?? 5
-      : 5;
+    const fielder = ab.fieldedBy ? fielding.defenseMap.get(ab.fieldedBy) : undefined;
+    const fielderDef = fielder?.skills.fielding ?? 5;
+    const fielderThrowing = fielder?.skills.throwing ?? 5;
     ab.result = classifySituationalOut(ab.result, {
       outs, bases,
       fieldedBy: ab.fieldedBy,
       fielderDefense: fielderDef,
       defenseLeadDeficit: fielding.runs - batting.runs,
+      runnerOn3: bases[2] ?? undefined,
+      flyBallDepthFt: ab.battedBall?.distanceFt,
+      fielderThrowing,
     }, rng);
 
     // ─── Resolve runner advance (single source of truth) ─────────
@@ -209,7 +212,9 @@ function simulateHalfInning(
     let r1HoldsAtSecond = false;
     const r1OnBase = bases[0];
     if (ab.result === 'single' && r1OnBase) {
-      const goes = decideRunnerAdvance('r1-to-3rd-single', r1OnBase, rng);
+      const goes = decideRunnerAdvance('r1-to-3rd-single', r1OnBase, rng, {
+        sprayAngleDeg: ab.battedBall?.sprayAngleDeg,
+      });
       r1HoldsAtSecond = !goes;
       ab.runnerAdvances = { r1OnSingle: goes ? 'third' : 'second' };
     }

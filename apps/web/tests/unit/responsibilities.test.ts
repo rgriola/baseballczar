@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T13:37:53Z
 import { describe, it, expect } from 'vitest';
 // Direct deep import — keeps the public sim-engine surface tight while
 // still exercising the module under test.
@@ -11,23 +12,23 @@ const noBases = [null, null, null] as const;
 describe('Defensive responsibilities — textbook coverage table', () => {
   describe('Outfield singles', () => {
     it('single, no runners → throw to 2B with SS or B2 trailing as cutoff', () => {
-      // Ball pulled to RF: B2 trails, SS covers.
+      // Ball pulled to RF: B2 covers, SS trails as cutoff.
       const right = getCoverage({
         fielder: 'RF', fieldedAt: { x: 170, y: 280 },
         result: 'single', bases: noBases, outs: 0, sprayAngleDeg: 30,
       });
       expect(right.throwTarget).toBe('second');
-      expect(right.cutoff?.position).toBe('B2');
-      expect(right.covers.find(c => c.base === 'second')?.position).toBe('SS');
+      expect(right.cutoff?.position).toBe('SS');
+      expect(right.covers.find(c => c.base === 'second')?.position).toBe('B2');
 
-      // Ball to LF: SS trails, B2 covers.
+      // Ball to LF: SS covers, B2 trails as cutoff.
       const left = getCoverage({
         fielder: 'LF', fieldedAt: { x: -170, y: 280 },
         result: 'single', bases: noBases, outs: 0, sprayAngleDeg: -30,
       });
       expect(left.throwTarget).toBe('second');
-      expect(left.cutoff?.position).toBe('SS');
-      expect(left.covers.find(c => c.base === 'second')?.position).toBe('B2');
+      expect(left.cutoff?.position).toBe('B2');
+      expect(left.covers.find(c => c.base === 'second')?.position).toBe('SS');
     });
 
     it('single, runner on 1st → throw to 3B, SS cutoff, P backs up 3B', () => {
@@ -53,22 +54,22 @@ describe('Defensive responsibilities — textbook coverage table', () => {
   });
 
   describe('Outfield doubles', () => {
-    it('double, no runners → throw to 3B, SS cutoff', () => {
+    it('double, no runners → throw to 2B with SS cutoff', () => {
       const c = getCoverage({
         fielder: 'RF', fieldedAt: { x: 200, y: 320 },
         result: 'double', bases: noBases, outs: 0, sprayAngleDeg: 30,
       });
-      expect(c.throwTarget).toBe('third');
+      expect(c.throwTarget).toBe('second');
       expect(c.cutoff?.position).toBe('SS');
     });
 
-    it('double with R1 → throw home, B1 cutoff', () => {
+    it('double with R1 → throw to 3B, SS cutoff', () => {
       const c = getCoverage({
         fielder: 'CF', fieldedAt: { x: 0, y: 350 },
         result: 'double', bases: [runner, null, null], outs: 0, sprayAngleDeg: 0,
       });
-      expect(c.throwTarget).toBe('home');
-      expect(c.cutoff?.position).toBe('B1');
+      expect(c.throwTarget).toBe('third');
+      expect(c.cutoff?.position).toBe('SS');
     });
   });
 
@@ -110,6 +111,25 @@ describe('Defensive responsibilities — textbook coverage table', () => {
       // SS fielded → B2 is the pivot at 2B
       expect(c.covers.find(cv => cv.base === 'second')?.position).toBe('B2');
       expect(c.covers.find(cv => cv.base === 'first')?.position).toBe('B1');
+    });
+
+    it('double-play from 3B side (5-4-3): B2 pivots and B1 holds first', () => {
+      const c = getCoverage({
+        fielder: 'B3', fieldedAt: { x: -75, y: 95 },
+        result: 'double-play', bases: [runner, null, null], outs: 0, sprayAngleDeg: -25,
+      });
+      expect(c.throwTarget).toBe('second');
+      expect(c.covers.find(cv => cv.base === 'second')?.position).toBe('B2');
+      expect(c.covers.find(cv => cv.base === 'first')?.position).toBe('B1');
+    });
+
+    it('fielders-choice from SS keeps B2 covering second base', () => {
+      const c = getCoverage({
+        fielder: 'SS', fieldedAt: { x: -30, y: 120 },
+        result: 'fielders-choice', bases: [runner, null, null], outs: 0, sprayAngleDeg: -8,
+      });
+      expect(c.throwTarget).toBe('second');
+      expect(c.covers.find(cv => cv.base === 'second')?.position).toBe('B2');
     });
   });
 

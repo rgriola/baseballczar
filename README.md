@@ -1,4 +1,4 @@
-> Last touched by agent: 2026-05-06T12:22:14Z
+> Last touched by agent: 2026-05-06T13:37:53Z
 
 # Baseball Czar v2
 
@@ -134,7 +134,7 @@ app/
 └── dashboard/        # 14 feature pages
     ├── roster/       # Team roster — 10 skills, Ht/Wt/Ctr, country flag
     ├── lineup/       # Batting order — position assignment, DH, B1/B2/B3 bench
-    ├── rotation/     # Pitching rotation — SP1-5 + RP1-4
+    ├── rotation/     # Pitching rotation — SP1-5 + RP1-6 + CL (10-12 total)
     ├── games/        # Game results and box scores
     ├── schedule/     # Season schedule
     ├── standings/    # League standings
@@ -275,6 +275,8 @@ All tunable knobs are centralized in [packages/sim-engine/src/config.ts](package
 
 `CONFIG_V1` target (162 games, seed 1): BB% .085 · K% .251 · BABIP .322 · HR/FB .148 · R/G 4.08
 
+Current operating decision: keep doubles distribution near ~0.5 2B per team-game for now. Widening spray spread to chase higher 2B rates increased foul/HR side effects beyond current guardrail goals.
+
 ### Verification loop after config changes
 
 1. Update values in [packages/sim-engine/src/config.ts](packages/sim-engine/src/config.ts).
@@ -344,7 +346,7 @@ cd apps/web && npx tsx tests/smoke-test.ts
 
 - **Roster page** — All 10 player skills, TOT column, Ht/Wt/Ctr demographics, country flag SVG
 - **Lineup page** — Position dropdown per slot (C/1B/2B/3B/SS/LF/CF/RF/DH); bench labeled B1/B2/B3; drag-to-reorder; bench↔starter swap
-- **Rotation page** — Three skill tables (SP1–5, RP1–4, Available); drag-to-reorder; assign buttons
+- **Rotation page** — Three skill tables (SP1–5, RP1–6, CL, Available); drag-to-reorder; dynamic 10–12 pitcher validation
 - **Stats page** — Hitting (r/h/b2/b3) and pitching (ip/h/r/er/bb/so) columns fixed
 
 ## Recent Stabilization Updates (May 6, 2026)
@@ -356,6 +358,8 @@ cd apps/web && npx tsx tests/smoke-test.ts
 - Replay scoreboard now ends with R/H/E and uses slim themed scrollbars in large box-score panels
 - Replay games API now falls back to plain stats queries and hydrates player names if relation joins fail
 - Batting and pitching value cells in replay box score now use explicit high-contrast text colors
+- Persisted replay now times wall ricochets from `wallBounceSpeedFps` and runs ball travel to full `restPoint`
+- Pitching roster flow now supports 10–12 active pitchers (5 SP, 4–6 RP, 1 CL) across UI, server actions, and scheduled sim loading
 - Historical note: games persisted before migration 011 may show `E=0` unless backfilled
 
 ## Improvement Plan Status

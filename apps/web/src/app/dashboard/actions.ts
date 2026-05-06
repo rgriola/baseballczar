@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-06T03:49:31Z
+// Last touched by agent: 2026-05-06T13:37:53Z
 'use server';
 
 import { z } from 'zod';
@@ -98,32 +98,39 @@ export async function updateLineup(formData: FormData) {
 
 const rotationSchema = z.object({
   /** Array of pitcher IDs for rotation slots 1-5 */
-  pitcherIds: z.array(z.number().int().positive()).min(1).max(5),
-  /** Array of pitcher IDs for bullpen RP1-RP4 (slots 6-9) */
-  bullpenIds: z.array(z.number().int().positive()).max(4),
-  /** Pitcher ID for the closer CL (slot 10), or null if unset */
-  closerId: z.number().int().positive().nullable().optional(),
+  pitcherIds: z.array(z.number().int().positive()).length(5),
+  /** Array of pitcher IDs for bullpen RP1-RP6 (slots 6-9, 11-12) */
+  bullpenIds: z.array(z.number().int().positive()).min(4).max(6),
+  /** Pitcher ID for the closer CL (slot 10) */
+  closerId: z.number().int().positive(),
 });
 
 export async function updateRotation(formData: FormData) {
   const rawPitchers = formData.get('pitcherIds');
   const rawBullpen = formData.get('bullpenIds');
   const rawCloser = formData.get('closerId');
-  if (typeof rawPitchers !== 'string' || typeof rawBullpen !== 'string') {
+  if (typeof rawPitchers !== 'string' || typeof rawBullpen !== 'string' || typeof rawCloser !== 'string') {
     return { error: 'Invalid data' };
   }
 
   const parsed = rotationSchema.safeParse({
     pitcherIds: JSON.parse(rawPitchers),
     bullpenIds: JSON.parse(rawBullpen),
-    closerId: rawCloser ? JSON.parse(rawCloser as string) : null,
+    closerId: JSON.parse(rawCloser),
   });
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
-  const closerId = parsed.data.closerId ?? null;
-  const totalAssigned = parsed.data.pitcherIds.length + parsed.data.bullpenIds.length + (closerId ? 1 : 0);
-  if (totalAssigned !== 10) {
-    return { error: `Rotation must have exactly 10 pitchers (5 SP + 4 RP + 1 CL). Currently ${totalAssigned}.` };
+  const closerId = parsed.data.closerId;
+  const totalAssigned = parsed.data.pitcherIds.length + parsed.data.bullpenIds.length + 1;
+  if (totalAssigned < 10 || totalAssigned > 12) {
+    return {
+      error: `Rotation must include 10-12 pitchers (5 SP + 4-6 RP + 1 CL). Currently ${totalAssigned}.`,
+    };
+  }
+
+  const allIds = [...parsed.data.pitcherIds, ...parsed.data.bullpenIds, closerId];
+  if (new Set(allIds).size !== allIds.length) {
+    return { error: 'A pitcher cannot be assigned to multiple rotation roles.' };
   }
 
   const supabase = await createClient();
@@ -138,7 +145,6 @@ export async function updateRotation(formData: FormData) {
   if (!team) return { error: 'No team found' };
 
   // Verify all pitchers belong to this team
-  const allIds = [...parsed.data.pitcherIds, ...parsed.data.bullpenIds, ...(closerId ? [closerId] : [])];
   const { data: pitchers } = await supabase
     .from('players')
     .select('id')
@@ -158,21 +164,20 @@ export async function updateRotation(formData: FormData) {
       .eq('id', parsed.data.pitcherIds[i]);
   }
 
-  // Update bullpen slots (6-9)
+  // Update bullpen slots (6-9 primary, then 11-12 extra)
   for (let i = 0; i < parsed.data.bullpenIds.length; i++) {
+    const slot = i < 4 ? 6 + i : 11 + (i - 4);
     await supabase
       .from('players')
-      .update({ rotation_slot: 6 + i })
+      .update({ rotation_slot: slot })
       .eq('id', parsed.data.bullpenIds[i]);
   }
 
   // Update closer slot (10)
-  if (closerId) {
-    await supabase
-      .from('players')
-      .update({ rotation_slot: 10 })
-      .eq('id', closerId);
-  }
+  await supabase
+    .from('players')
+    .update({ rotation_slot: 10 })
+    .eq('id', closerId);
 
   // Set rotation_slot to 0 for all other pitchers
   const assignedSet = new Set(allIds);
@@ -278,7 +283,7 @@ export async function toggleRosterStatus(formData: FormData) {
     if ((count ?? 0) >= 15) return { error: 'You already have 15 active position players. Move one to reserve first.' };
   }
 
-  // Enforce exactly 10 active pitchers
+  // Enforce max 12 active pitchers
   if (parsed.data.newStatus === 'active' && !player.fielder) {
     const { count } = await supabase
       .from('players')
@@ -286,7 +291,9 @@ export async function toggleRosterStatus(formData: FormData) {
       .eq('team_id', team.id)
       .eq('fielder', false)
       .eq('roster_status', 'active');
-    if ((count ?? 0) >= 10) return { error: 'You already have 10 active pitchers. Move one to reserve first.' };
+    if ((count ?? 0) >= 12) {
+      return { error: 'You already have 12 active pitchers. Move one to reserve first.' };
+    }
   }
 
   await supabase

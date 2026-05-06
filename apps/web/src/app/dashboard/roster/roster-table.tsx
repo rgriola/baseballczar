@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T13:37:53Z
 'use client';
 
 import { useState, useMemo } from 'react';
@@ -218,30 +219,33 @@ function slotLabel(slot: number): string {
   if (slot >= 1 && slot <= 5) return `SP${slot}`;
   if (slot >= 6 && slot <= 9) return `RP${slot - 5}`;
   if (slot === 10) return 'CL';
+  if (slot >= 11 && slot <= 12) return `RP${slot - 6}`;
   return '—';
 }
 
 export function PitcherTable({ pitchers, activeCount }: { pitchers: Player[]; activeCount: number }) {
   const { sorted, sortKey, sortDir, onSort } = useSortedPlayers(pitchers);
-  const atLimit = activeCount === 10;
-  const over = activeCount > 10;
-  const under = activeCount < 10;
+  const MIN_ACTIVE = 10;
+  const MAX_ACTIVE = 12;
+  const inRange = activeCount >= MIN_ACTIVE && activeCount <= MAX_ACTIVE;
+  const over = activeCount > MAX_ACTIVE;
+  const under = activeCount < MIN_ACTIVE;
 
   return (
     <div className="overflow-x-auto">
       {under && (
         <div className="mb-3 rounded border border-yellow-700/50 bg-yellow-900/20 px-3 py-2 text-sm text-yellow-400">
-          {activeCount}/10 active — you need {10 - activeCount} more active pitcher{10 - activeCount > 1 ? 's' : ''}
+          {activeCount}/{MIN_ACTIVE} active — you need {MIN_ACTIVE - activeCount} more active pitcher{MIN_ACTIVE - activeCount > 1 ? 's' : ''}
         </div>
       )}
       {over && (
         <div className="mb-3 rounded border border-red-700/50 bg-red-900/20 px-3 py-2 text-sm text-red-400">
-          {activeCount}/10 active — move {activeCount - 10} pitcher{activeCount - 10 > 1 ? 's' : ''} to reserve
+          {activeCount}/{MAX_ACTIVE} active — move {activeCount - MAX_ACTIVE} pitcher{activeCount - MAX_ACTIVE > 1 ? 's' : ''} to reserve
         </div>
       )}
-      {atLimit && (
+      {inRange && (
         <div className="mb-3 rounded border border-green-700/50 bg-green-900/20 px-3 py-2 text-sm text-green-400">
-          10/10 active pitchers ✓
+          {activeCount}/{MAX_ACTIVE} active pitchers ✓ (valid range: {MIN_ACTIVE}-{MAX_ACTIVE})
         </div>
       )}
       <table className="w-full text-sm">

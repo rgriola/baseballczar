@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-06T12:36:52Z
+// Last touched by agent: 2026-05-06T13:21:29Z
 /**
  * Phase A refactor — pure situational reclassification of an at-bat.
  *
@@ -14,9 +14,10 @@
  * Pure: no mutation, no I/O. The caller is responsible for applying
  * the result (mutating bases, recording outs/runs).
  */
-import type { AtBatResult } from '../types';
+import type { AtBatResult, Player } from '../types';
 import type { Position } from '../config';
 import { CONFIG } from '../config';
+import { decideTagUpSacFly } from '../defense/decide';
 import type { Rng } from '../rng';
 
 export interface SituationalContext {
@@ -30,6 +31,12 @@ export interface SituationalContext {
   fielderDefense?: number;
   /** Defense lead/deficit before this play. Positive means defense leads. */
   defenseLeadDeficit?: number;
+  /** Runner on 3B (if occupied) for PI/speed-gated tag-up decisions. */
+  runnerOn3?: Player;
+  /** Carry distance for caught fly balls used by tag-up depth model. */
+  flyBallDepthFt?: number;
+  /** Arm skill of the OF making the catch/throw home. */
+  fielderThrowing?: number;
 }
 
 /**
@@ -71,7 +78,10 @@ export function classifySituationalOut(
   if (result === 'fly-out' && runnerOn3 && ctx.outs < 2) {
     const isOFfly =
       ctx.fieldedBy === 'LF' || ctx.fieldedBy === 'CF' || ctx.fieldedBy === 'RF';
-    if (isOFfly && rng.bool(CONFIG.baserunning.sacFlyTagProb)) return 'sac-fly';
+    if (isOFfly && decideTagUpSacFly(ctx.runnerOn3, rng, {
+      flyBallDepthFt: ctx.flyBallDepthFt,
+      defenseArm: ctx.fielderThrowing,
+    })) return 'sac-fly';
   }
 
   return result;
