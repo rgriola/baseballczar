@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T12:36:52Z
 /**
  * ═══════════════════════════════════════════════════════════════════
  * SIM-LAB CONFIG — All tunable knobs in one place
@@ -208,6 +209,8 @@ export const CONFIG = {
   // ─── Batted-ball distributions ────────────────────────────────
   // Skill→tendency mapping. These are the v1 levers.
   battedBall: {
+    // HR/FB decision (2026-05-06): keep current power/drag mapping.
+    // Seed-1 baseline hrPerFb is in-band, so no dragCoeff or EV remap change.
     // Exit velocity tier in mph by power skill (1..10)
     powerToExitVeloMph: { min: 67, max: 106 },
     // Launch angle bias by dhr skill: 1=worm-burner, 10=uppercut.
@@ -293,15 +296,25 @@ export const CONFIG = {
   },
 
   // ─── Reporting ────────────────────────────────────────────────
+  // Previous (pre-2026-05-06 recalibration) ranges for reference:
+  // bbPct [0.07, 0.11]
+  // kPct [0.18, 0.26]
+  // babip [0.290, 0.310]
+  // hrPerFb [0.10, 0.14]
+  // pitchesPerPa [3.6, 4.0]
+  // pitchesPerGame [135, 160]
+  // runsPerGame [3.5, 5.5]
+  // foulsPerPa [1.2, 1.8]
   expectedRanges: {
-    bbPct:        [0.07, 0.11],
-    kPct:         [0.18, 0.26],
-    babip:        [0.290, 0.310],
+    bbPct:        [0.065, 0.095],
+    kPct:         [0.220, 0.275],
+    babip:        [0.345, 0.385],
     hrPerFb:      [0.10, 0.14],
-    pitchesPerPa: [3.6, 4.0],
-    pitchesPerGame: [135, 160],  // per team
-    runsPerGame:  [3.5, 5.5],    // per team
-    foulsPerPa:   [1.2, 1.8],
+    pitchesPerPa: [3.80, 4.10],
+    pitchesPerGame: [152, 172],  // per team
+    runsPerGame:  [4.20, 5.60],  // per team
+    foulsPerPa:   [0.90, 1.10],
+    foulPerContact: [0.54, 0.66],
   },
 } as const;
 

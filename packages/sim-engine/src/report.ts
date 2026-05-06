@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T12:36:52Z
 /**
  * Aggregate rate stats across multiple games and compare to expected
  * MLB ranges from CONFIG.expectedRanges. Used by the CLI runner and
@@ -31,6 +32,7 @@ export interface RateReport {
   pitchesPerGame: number;       // per team
   runsPerGame: number;          // per team
   foulsPerPa: number;
+  foulPerContact: number;
   hPerGame: number;             // per team
   doublesPerGame: number;
   triplesPerGame: number;
@@ -94,6 +96,7 @@ export function aggregate(games: GameResult[]): RateReport {
     pitchesPerGame: pitches / Math.max(1, teamGames),
     runsPerGame: runs / Math.max(1, teamGames),
     foulsPerPa: fouls / Math.max(1, pa),
+    foulPerContact: fouls / Math.max(1, contact),
     hPerGame: hits / Math.max(1, teamGames),
     doublesPerGame: doubles / Math.max(1, teamGames),
     triplesPerGame: triples / Math.max(1, teamGames),
@@ -113,6 +116,7 @@ export function aggregate(games: GameResult[]): RateReport {
   check('pitchesPerGame',r.pitchesPerGame,E.pitchesPerGame);
   check('runsPerGame',   r.runsPerGame,   E.runsPerGame);
   check('foulsPerPa',    r.foulsPerPa,    E.foulsPerPa);
+  check('foulPerContact',r.foulPerContact,E.foulPerContact);
   return r;
 }
 
