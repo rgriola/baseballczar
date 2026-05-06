@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T06:10:00Z
 /**
  * Spatial utilities — colliders, raycasts, wall geometry, and proximity queries.
  *
@@ -35,7 +36,81 @@ export const COLLIDERS = {
   ballAtTarget: 5,
   /** Ball radius (for ball-wall and ball-ground collision). */
   ballRadius: 0.12,  // ~1.45 inches = regulation baseball
+  /** Fielder body radius for player-vs-player spacing. */
+  fielderBody: 3.2,
+  /** Runner body radius for player-vs-player spacing. */
+  runnerBody: 2.8,
 } as const;
+
+export interface BodyCollider {
+  pos: Point2D;
+  radiusFt: number;
+  lockPosition?: boolean;
+}
+
+/**
+ * Resolve overlaps between circular body colliders in place.
+ *
+ * Use this after movement updates so entities maintain hard separation
+ * in simulation space instead of only in the renderer.
+ */
+export function separateBodyColliders(
+  colliders: BodyCollider[],
+  iterations = 2,
+): void {
+  if (colliders.length < 2) return;
+
+  for (let pass = 0; pass < iterations; pass++) {
+    for (let i = 0; i < colliders.length; i++) {
+      for (let j = i + 1; j < colliders.length; j++) {
+        const a = colliders[i];
+        const b = colliders[j];
+
+        let dx = b.pos.x - a.pos.x;
+        let dy = b.pos.y - a.pos.y;
+        let dist = Math.hypot(dx, dy);
+        const minDist = a.radiusFt + b.radiusFt;
+        if (dist >= minDist) continue;
+
+        if (dist < 1e-4) {
+          dx = (j - i) % 2 === 0 ? 1 : -1;
+          dy = 0;
+          dist = 1;
+        }
+
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const overlap = minDist - dist;
+        const aLocked = Boolean(a.lockPosition);
+        const bLocked = Boolean(b.lockPosition);
+
+        if (aLocked && bLocked) continue;
+
+        if (aLocked) {
+          b.pos.x += nx * overlap;
+          b.pos.y += ny * overlap;
+          clampInsideWall(b.pos, DEFAULT_WALL, b.radiusFt);
+          continue;
+        }
+
+        if (bLocked) {
+          a.pos.x -= nx * overlap;
+          a.pos.y -= ny * overlap;
+          clampInsideWall(a.pos, DEFAULT_WALL, a.radiusFt);
+          continue;
+        }
+
+        const push = overlap * 0.5;
+        a.pos.x -= nx * push;
+        a.pos.y -= ny * push;
+        b.pos.x += nx * push;
+        b.pos.y += ny * push;
+        clampInsideWall(a.pos, DEFAULT_WALL, a.radiusFt);
+        clampInsideWall(b.pos, DEFAULT_WALL, b.radiusFt);
+      }
+    }
+  }
+}
 
 // ─── Circle collision ────────────────────────────────────────────
 

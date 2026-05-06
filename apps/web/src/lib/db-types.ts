@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T15:02:00Z
 /** Auto-generated types matching the Supabase schema in 001_initial_schema.sql */
 
 export interface League {
@@ -118,6 +119,8 @@ export interface Game {
   visitor_runs: number;
   home_hits: number;
   visitor_hits: number;
+  home_errors: number;
+  visitor_errors: number;
   innings: number;
   winning_team_id: number | null;
   losing_team_id: number | null;
@@ -143,6 +146,12 @@ export interface GameEvent {
   home_hits: number;
   runners_scored: string[] | null;
   hit_zone: string | null;
+  spray_angle_deg: number | null;
+  launch_angle_deg: number | null;
+  exit_velo_mph: number | null;
+  ball_path_waypoints: Array<Record<string, unknown>> | null;
+  base_occupancy_before: Record<string, unknown> | null;
+  base_occupancy_after: Record<string, unknown> | null;
 }
 
 export interface PlayerStatsHitting {

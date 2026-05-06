@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev":     "lsof -ti :3000 | xargs kill -9 2>/dev/null || true",
+    "prebuild:deps": "npm run build -w @baseballczar/sim-engine && npm run build -w @baseballczar/tick-engine",
+    "predev":     "npm run prebuild:deps && lsof -ti :3000 | xargs kill -9 2>/dev/null || true",
     "dev":        "next dev -p 3000 --webpack",
+    "prebuild":   "npm run prebuild:deps",
     "build":      "next build",
     "start":      "next start",
     "lint":       "next lint",

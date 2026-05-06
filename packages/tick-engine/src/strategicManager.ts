@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T03:33:20Z
 /**
  * Strategic Manager — Tier 1 AI decisions.
  *
@@ -18,6 +19,8 @@ import type { Player, Team, Skills } from '@baseballczar/sim-engine';
 import type { GameSituation } from './aiManager';
 
 // ─── Persistent game state ──────────────────────────────────────
+
+export type BullpenRole = 'RP1' | 'RP2' | 'RP3' | 'RP4' | 'CL' | 'MR';
 
 export interface StrategicState {
   /** Current pitcher. */
@@ -41,13 +44,35 @@ export interface StrategicState {
   half: 'top' | 'bottom';
   /** Is this a save situation? */
   isSaveSituation: boolean;
+  /** Rotation slot used to start this game. */
+  starterIndex: number;
+  /** Adjacent starters are not eligible as relievers for this game. */
+  starterLockoutIds: Set<number>;
+  /** Best late-game reliever candidate. */
+  closerId: number | null;
+  /** Role lane assignment for each bullpen arm. */
+  bullpenRoles: Map<number, BullpenRole>;
 }
 
 /** Initialize strategic state from team roster. */
 export function createStrategicState(
   team: Team,
   startingPitcher: Player,
+  starterIndex = 0,
 ): StrategicState {
+  const rotationSize = Math.max(1, team.rotation.length);
+  const normalizedStarterIndex = ((starterIndex % rotationSize) + rotationSize) % rotationSize;
+  const starterLockoutIds = new Set<number>();
+  if (team.rotation.length > 1) {
+    const prev = team.rotation[(normalizedStarterIndex - 1 + team.rotation.length) % team.rotation.length];
+    const next = team.rotation[(normalizedStarterIndex + 1) % team.rotation.length];
+    if (prev) starterLockoutIds.add(prev.id);
+    if (next) starterLockoutIds.add(next.id);
+  }
+
+  const closer = pickCloser(team.bullpen);
+  const bullpenRoles = assignBullpenRoles(team.bullpen, closer?.id ?? null);
+
   return {
     currentPitcher: startingPitcher,
     pitchCount: 0,
@@ -60,7 +85,54 @@ export function createStrategicState(
     inning: 1,
     half: 'top',
     isSaveSituation: false,
+    starterIndex: normalizedStarterIndex,
+    starterLockoutIds,
+    closerId: closer?.id ?? null,
+    bullpenRoles,
   };
+}
+
+function assignBullpenRoles(
+  bullpen: Player[],
+  closerId: number | null,
+): Map<number, BullpenRole> {
+  const roles = new Map<number, BullpenRole>();
+
+  if (bullpen[0]) roles.set(bullpen[0].id, 'RP1');  // long / bridge
+  if (bullpen[1]) roles.set(bullpen[1].id, 'RP2');  // middle
+  if (bullpen[2]) roles.set(bullpen[2].id, 'RP3');  // setup bridge
+  if (bullpen[3]) roles.set(bullpen[3].id, 'RP4');  // high leverage
+
+  for (let i = 4; i < bullpen.length; i++) {
+    roles.set(bullpen[i].id, 'MR');
+  }
+
+  if (closerId !== null) {
+    roles.set(closerId, 'CL');
+  }
+
+  return roles;
+}
+
+function pickCloser(bullpen: Player[]): Player | null {
+  if (bullpen.length === 0) return null;
+
+  // If roster data eventually tags a closer explicitly, honor it.
+  const taggedCloser = bullpen.find((p) => String(p.position).toUpperCase() === 'CL');
+  if (taggedCloser) return taggedCloser;
+
+  const ranked = bullpen
+    .map((p) => ({
+      player: p,
+      score:
+        p.skills.eye * 2.2 +
+        p.skills.throwing * 1.4 +
+        p.skills.playIntelligence * 1.0 +
+        p.skills.stamina * 0.4,
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  return ranked[0]?.player ?? null;
 }
 
 // ─── Bullpen management ──────────────────────────────────────────
@@ -91,7 +163,6 @@ export function evaluatePitchingChange(
 ): PitchingChange | null {
   const pitcher = state.currentPitcher;
   const stamina = pitcher.skills.stamina;
-  const pitchControl = pitcher.skills.eye;
 
   // Pitch count thresholds by stamina:
   //   Stamina 1 = pull at 60 pitches
@@ -157,11 +228,12 @@ export function evaluatePitchingChange(
   // Pick the best reliever
   const reliever = selectReliever(state, upcomingBatters, scoreDiff);
   if (!reliever) return null;
+  const relieverRole = state.bullpenRoles.get(reliever.id) ?? 'MR';
 
   return {
     remove: pitcher,
     bring: reliever,
-    reasoning: reasons.join(', '),
+    reasoning: `${reasons.join(', ')} [${relieverRole}]`,
     urgency,
   };
 }
@@ -181,15 +253,46 @@ function selectReliever(
 ): Player | null {
   if (state.availableBullpen.length === 0) return null;
 
-  const candidates = state.availableBullpen.map(p => {
+  const available = state.availableBullpen.filter(
+    (p) => !state.usedPitchers.has(p.id) && !state.starterLockoutIds.has(p.id),
+  );
+  if (available.length === 0) return null;
+
+  const preferredLanes = choosePreferredBullpenLanes(state.inning, scoreDiff);
+  const isCloseGame = Math.abs(scoreDiff) <= 3;
+  const isBlowout = Math.abs(scoreDiff) >= 5;
+
+  const candidates = available.map(p => {
+    const role = state.bullpenRoles.get(p.id) ?? 'MR';
     let score = 0;
 
-    // Base quality: pitchIntel + defense combined
-    score += p.skills.eye * 1.5 + p.skills.fielding;
+    // Command and composure drive relief quality more than glove value.
+    score += p.skills.eye * 1.8 + p.skills.throwing * 1.1 + p.skills.playIntelligence;
+    score += laneBonus(role, preferredLanes);
 
-    // Closer bonus: best arm for the 9th
-    if (state.inning >= 9 && scoreDiff > 0 && scoreDiff <= 3) {
-      score += p.skills.eye * 2;  // double weight on closing ability
+    // Explicit closer lane: reserve for true save/high leverage spots.
+    if (role === 'CL') {
+      if (state.inning >= 9 && scoreDiff > 0 && isCloseGame) {
+        score += 8;
+      } else if (state.inning <= 7 || scoreDiff <= 0 || isBlowout) {
+        score -= 10;
+      }
+    }
+
+    // Explicit RP lane behavior by inning bucket.
+    if (role === 'RP1') {
+      if (state.inning <= 5 || isBlowout) score += 6;
+      if (state.inning >= 8 && isCloseGame) score -= 6;
+    }
+    if (role === 'RP2') {
+      if (state.inning >= 5 && state.inning <= 7) score += 4;
+    }
+    if (role === 'RP3') {
+      if (state.inning >= 7 && state.inning <= 8 && isCloseGame) score += 6;
+    }
+    if (role === 'RP4') {
+      if (state.inning >= 8 && isCloseGame) score += 6;
+      if (state.inning <= 6 && !isBlowout) score -= 3;
     }
 
     // Handedness matchup: same hand as upcoming batter = advantage
@@ -205,11 +308,60 @@ function selectReliever(
       score += p.skills.stamina;  // need someone who can go multiple innings
     }
 
+    // Late-game composure bonus for setup innings.
+    if (state.inning >= 7) {
+      score += p.skills.eye * 0.6 + p.skills.playIntelligence * 0.4;
+    }
+
     return { player: p, score };
   });
 
   candidates.sort((a, b) => b.score - a.score);
   return candidates[0]?.player ?? null;
+}
+
+function choosePreferredBullpenLanes(
+  inning: number,
+  scoreDiff: number,
+): BullpenRole[] {
+  const isCloseGame = Math.abs(scoreDiff) <= 3;
+  const isBlowout = Math.abs(scoreDiff) >= 5;
+
+  // Save lane: 9th with a narrow lead goes closer-first.
+  if (inning >= 9 && scoreDiff > 0 && isCloseGame) {
+    return ['CL', 'RP4', 'RP3', 'RP2', 'RP1', 'MR'];
+  }
+
+  // Setup lane: 8th in leverage spots.
+  if (inning >= 8 && isCloseGame) {
+    return ['RP4', 'RP3', 'CL', 'RP2', 'MR', 'RP1'];
+  }
+
+  // Bridge lane: 7th in leverage spots.
+  if (inning >= 7 && isCloseGame) {
+    return ['RP3', 'RP2', 'RP4', 'MR', 'RP1', 'CL'];
+  }
+
+  // Mop-up lane: preserve leverage arms in blowouts.
+  if (isBlowout) {
+    return ['RP1', 'MR', 'RP2', 'RP3', 'RP4', 'CL'];
+  }
+
+  // Early/mid: long and middle relief first.
+  if (inning <= 5) {
+    return ['RP1', 'RP2', 'MR', 'RP3', 'RP4', 'CL'];
+  }
+
+  return ['RP2', 'RP1', 'RP3', 'MR', 'RP4', 'CL'];
+}
+
+function laneBonus(
+  role: BullpenRole,
+  preferred: BullpenRole[],
+): number {
+  const idx = preferred.indexOf(role);
+  if (idx < 0) return 0;
+  return Math.max(0, 12 - idx * 2);
 }
 
 /** Execute a pitching change — update the strategic state. */

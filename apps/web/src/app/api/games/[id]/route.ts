@@ -1,5 +1,28 @@
+// Last touched by agent: 2026-05-06T04:38:04Z
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+
+type PlayerSummary = {
+  id: number;
+  first_name: string | null;
+  last_name: string | null;
+  jersey_no: number | null;
+  position: string | null;
+};
+
+type BoxRow = {
+  player_id: number;
+  players?: PlayerSummary | PlayerSummary[] | null;
+};
+
+function hydratePlayers<T extends BoxRow>(rows: T[], playerMap: Map<number, PlayerSummary>): T[] {
+  return rows.map((row) => {
+    if (row.players) return row;
+    const player = playerMap.get(Number(row.player_id));
+    if (!player) return row;
+    return { ...row, players: player };
+  });
+}
 
 export async function GET(
   _req: NextRequest,
@@ -34,31 +57,83 @@ export async function GET(
     (teams ?? []).map((t) => [t.id, t.team_name]),
   );
 
-  // Fetch events
-  const { data: events } = await supabase
-    .from('game_events')
-    .select('*')
-    .eq('game_id', gameId)
-    .order('seq');
+  const [eventsRes, hittingRes, pitchingRes] = await Promise.all([
+    supabase
+      .from('game_events')
+      .select('*')
+      .eq('game_id', gameId)
+      .order('seq'),
+    supabase
+      .from('game_stats_hitting')
+      .select('*, players(first_name, last_name, jersey_no, position)')
+      .eq('game_id', gameId)
+      .order('bat_order'),
+    supabase
+      .from('game_stats_pitching')
+      .select('*, players(first_name, last_name, jersey_no, position)')
+      .eq('game_id', gameId)
+      .order('pitch_app'),
+  ]);
 
-  // Fetch hitting box
-  const { data: hitting } = await supabase
-    .from('game_stats_hitting')
-    .select('*, players(first_name, last_name, jersey_no, position)')
-    .eq('game_id', gameId)
-    .order('bat_order');
+  let hitting = hittingRes.data ?? [];
+  let pitching = pitchingRes.data ?? [];
 
-  // Fetch pitching box
-  const { data: pitching } = await supabase
-    .from('game_stats_pitching')
-    .select('*, players(first_name, last_name, jersey_no)')
-    .eq('game_id', gameId)
-    .order('pitch_app');
+  // Fallback if relation joins fail in an environment with stale relation metadata.
+  if (hittingRes.error || pitchingRes.error) {
+    const [plainHittingRes, plainPitchingRes] = await Promise.all([
+      supabase
+        .from('game_stats_hitting')
+        .select('*')
+        .eq('game_id', gameId)
+        .order('bat_order'),
+      supabase
+        .from('game_stats_pitching')
+        .select('*')
+        .eq('game_id', gameId)
+        .order('pitch_app'),
+    ]);
+
+    if (plainHittingRes.error || plainPitchingRes.error) {
+      return NextResponse.json({ error: 'An internal error occurred' }, { status: 500 });
+    }
+
+    hitting = plainHittingRes.data ?? [];
+    pitching = plainPitchingRes.data ?? [];
+
+    const playerIds = new Set<number>();
+    for (const row of [...hitting, ...pitching]) {
+      const id = Number((row as { player_id: unknown }).player_id);
+      if (Number.isFinite(id)) playerIds.add(id);
+    }
+
+    if (playerIds.size > 0) {
+      const { data: players } = await supabase
+        .from('players')
+        .select('id, first_name, last_name, jersey_no, position')
+        .in('id', Array.from(playerIds));
+
+      const playerMap = new Map<number, PlayerSummary>();
+      for (const player of players ?? []) {
+        const id = Number(player.id);
+        if (!Number.isFinite(id)) continue;
+        playerMap.set(id, {
+          id,
+          first_name: player.first_name,
+          last_name: player.last_name,
+          jersey_no: player.jersey_no,
+          position: player.position,
+        });
+      }
+
+      hitting = hydratePlayers(hitting as BoxRow[], playerMap);
+      pitching = hydratePlayers(pitching as BoxRow[], playerMap);
+    }
+  }
 
   return NextResponse.json({
     game,
     teamMap,
-    events: events ?? [],
+    events: eventsRes.data ?? [],
     hitting: hitting ?? [],
     pitching: pitching ?? [],
   });

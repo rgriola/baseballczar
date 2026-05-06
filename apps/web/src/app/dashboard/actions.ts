@@ -1,8 +1,10 @@
+// Last touched by agent: 2026-05-06T03:49:31Z
 'use server';
 
 import { z } from 'zod';
 import { createClient } from '@/lib/supabase/server';
 import { createServiceClient } from '@/lib/supabase/service';
+import { simulateScheduledGame } from '@/lib/sim/simulate-scheduled-game';
 
 const FIELD_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'] as const;
 /** Matches field positions and bench codes (B1, B2, … B99) */
@@ -304,25 +306,55 @@ export async function simAll(): Promise<{ error?: string; message?: string }> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: 'Not authenticated' };
 
-  // Delegate to the /api/sim/sim-all route which has maxDuration=300 (5 min)
-  // Server actions have a default 30s timeout — too short for 150 games.
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!serviceKey) return { error: 'Service key not configured' };
+  const service = createServiceClient();
 
-  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
+  const { data: allGames, error: schedulesError } = await service
+    .from('schedules')
+    .select('id')
+    .eq('played', false)
+    .order('game_time');
 
-  const res = await fetch(`${baseUrl}/api/sim/sim-all`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${serviceKey}` },
-  });
-
-  const body = await res.json();
-
-  if (!res.ok) {
-    return { error: body.error ?? `Sim failed (${res.status})` };
+  if (schedulesError) {
+    console.error('Failed to load unplayed schedules for simAll action', schedulesError);
+    return { error: 'An internal error occurred' };
   }
 
-  return { message: body.message ?? `Simulated ${body.simulated} games` };
+  if (!allGames || allGames.length === 0) {
+    return { message: 'No games to simulate' };
+  }
+
+  let simulated = 0;
+  let failed = 0;
+  const maxRetries = 2;
+
+  for (let index = 0; index < allGames.length; index++) {
+    const game = allGames[index];
+    let success = false;
+
+    for (let attempt = 0; attempt <= maxRetries && !success; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        }
+        await simulateScheduledGame(service, game.id);
+        simulated++;
+        success = true;
+      } catch (err) {
+        if (attempt === maxRetries) {
+          console.error(`Sim-all action failed schedule ${game.id} after ${maxRetries + 1} attempts`, err);
+          failed++;
+        }
+      }
+    }
+
+    if ((index + 1) % 5 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+
+  return {
+    message: `Simulated ${simulated} of ${allGames.length} games (${failed} failed)`,
+  };
 }
 
 /**

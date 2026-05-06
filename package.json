@@ -7,12 +7,18 @@
     "packages/*"
   ],
   "scripts": {
+    "build:engines": "npm run build -w @baseballczar/sim-engine && npm run build -w @baseballczar/tick-engine",
     "dev":         "npm run dev -w apps/web",
     "build":       "npm run build -w apps/web",
     "start":       "npm run start -w apps/web",
     "test":        "npm run test -w apps/web",
     "test:e2e":    "npm run test:e2e -w apps/web",
     "sim":         "npm run sim -w packages/sim-engine",
+    "sim2":        "npm run sim2 -w packages/sim-engine --",
+    "sim:due":     "node scripts/sim-api.mjs run-due",
+    "sim:all":     "node scripts/sim-api.mjs sim-all",
+    "sim:run":     "node scripts/sim-api.mjs run",
+    "due":         "npm run sim:due",
     "skill-test":  "npm run skill-test -w packages/sim-engine",
     "typecheck":   "npm run typecheck -w packages/sim-engine"
   }

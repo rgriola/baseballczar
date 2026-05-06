@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T06:10:11Z
 /**
  * Play-by-play formatter for sim-lab-2 tick events.
  *
@@ -22,6 +23,21 @@ const baseShort = (b: string) =>
   b === 'home' ? 'home' : b === 'first' ? '1B' : b === 'second' ? '2B' : b === 'third' ? '3B' : b;
 const displayPos = (p: string) => p.replace(/^B(\d)/, '$1B');
 
+function lastNameOnly(name: string): string {
+  const raw = name.replace(/^#\d+\s+/, '').trim();
+  const parts = raw.split(/\s+/);
+  return parts[parts.length - 1] ?? raw;
+}
+
+function formatPlayerTag(name?: string, id?: number, fallback = 'Player'): string {
+  if (name?.startsWith('#')) return name;
+  if (id != null && id > 0) {
+    const taggedName = name ? lastNameOnly(name) : fallback;
+    return `#${id} ${taggedName}`;
+  }
+  return name ?? fallback;
+}
+
 // ─── Pitch narrative helpers ─────────────────────────────────────
 
 /** Describe where the pitch was relative to the zone. */
@@ -42,10 +58,33 @@ function outcomeNarrative(outcome: string, swung: boolean, zone: 'in' | 'edge' |
     case 'swinging-strike': return zone === 'off' ? 'Chases — swinging strike' : 'Swings and misses';
     case 'foul':           return 'Fouled off';
     case 'foul-out':       return 'Foul ball caught!';
+    case 'in-play':        return 'In play';
     case 'ball':           return swung ? 'Checked swing — ball' : 'Takes for a ball';
     case 'hit':            return 'Puts it in play';
     case 'hbp':            return 'Hit by pitch!';
     default:               return outcome;
+  }
+}
+
+function namedOutcomeNarrative(outcome: string, batter: string): string {
+  switch (outcome) {
+    case 'called-strike':
+      return `Called strike to ${batter}`;
+    case 'swinging-strike':
+      return `${batter} swings and misses`;
+    case 'foul':
+      return `${batter} fouls it off`;
+    case 'foul-out':
+      return `${batter} pops it up in foul ground`;
+    case 'in-play':
+    case 'hit':
+      return `${batter} puts the ball in play`;
+    case 'ball':
+      return `Ball to ${batter}`;
+    case 'hbp':
+      return `${batter} is hit by the pitch`;
+    default:
+      return outcome;
   }
 }
 
@@ -118,11 +157,13 @@ export function formatTickEvents(events: TickEvent[], time: number): PbpEntry[] 
         const baseDots = ['first', 'second', 'third']
           .map(b => e.bases.includes(b) ? '●' : '○')
           .join('');
+        const batterName = formatPlayerTag(e.batter.name, e.batter.id, 'Batter');
+        const pitcherName = formatPlayerTag(e.pitcher.name, e.pitcher.id, 'Pitcher');
 
         // Matchup header
         out.push({
           time, kind: 'ab-header', bold: true,
-          text: `\n${e.batter.name} (${e.batter.hand}H) vs ${e.pitcher.name} (${e.pitcher.hand}H)`,
+          text: `\n${batterName} (${e.batter.hand}H) vs ${pitcherName} (${e.pitcher.hand}H)`,
           color: 'text-white',
         });
 
@@ -155,25 +196,34 @@ export function formatTickEvents(events: TickEvent[], time: number): PbpEntry[] 
       // ── PITCH ─────────────────────────────────────────────
       case 'pitch': {
         const loc = zoneNarrative(e.zone, e.actualInZone);
+        const pitcher = formatPlayerTag(e.pitcherName, e.pitcherId, 'Pitcher');
+        const batter = formatPlayerTag(e.batterName, e.batterId, 'Batter');
         out.push({
           time, kind: 'pitch',
-          text: `  ${e.pitchNum}. ${e.speed} ${e.mph} mph — ${loc}`,
+          text: `  ${e.pitchNum}. ${pitcher} throws ${e.speed} ${e.mph} mph to ${batter} — ${loc}`,
           color: 'text-violet-300',
         });
         break;
       }
 
       case 'pitch-result': {
-        const narr = outcomeNarrative(e.outcome, false, 'in');
+        const hasBatterContext = Boolean(e.batterName || (e.batterId != null && e.batterId > 0));
+        const batter = formatPlayerTag(e.batterName, e.batterId, 'Batter');
+        const narr = hasBatterContext
+          ? namedOutcomeNarrative(e.outcome, batter)
+          : outcomeNarrative(e.outcome, false, 'in');
         const countStr = `(${e.balls}-${e.strikes})`;
 
         // Combine outcome with count
         let text = `     ${narr} ${countStr}`;
 
-        // Add foul ball stats if present
-        if (e.foulBall) {
-          const fb = e.foulBall;
-          text += ` — ${Math.round(fb.exitVeloMph)} mph, LA ${Math.round(fb.launchAngleDeg)}°, ${Math.round(fb.distanceFt)} ft ${fb.sprayDirection}`;
+        // Add contact stats for foul or fair balls when available.
+        const contactBall = e.foulBall ?? e.inPlayBall;
+        if (contactBall) {
+          const apex = contactBall.peakHeightFt != null
+            ? `, Apex ${Math.round(contactBall.peakHeightFt)} ft`
+            : '';
+          text += ` — ${Math.round(contactBall.exitVeloMph)} mph, LA ${Math.round(contactBall.launchAngleDeg)}°, ${Math.round(contactBall.distanceFt)} ft ${contactBall.sprayDirection}${apex}`;
         }
 
         out.push({
@@ -194,19 +244,24 @@ export function formatTickEvents(events: TickEvent[], time: number): PbpEntry[] 
         const spray = Math.round(e.sprayAngleDeg);
         const dist = Math.round(e.distanceFt);
         const descriptor = contactDescriptor(la, ev);
+        const batter = formatPlayerTag(e.batterName, e.batterId, 'Batter');
+        const hasBatterContext = Boolean(e.batterName || (e.batterId != null && e.batterId > 0));
+        const batterAction = hasBatterContext
+          ? `${batter} ${descriptor.charAt(0).toLowerCase()}${descriptor.slice(1)}`
+          : descriptor;
         const apex = e.peakHeightFt != null ? ` | apex ${Math.round(e.peakHeightFt)} ft` : '';
         const hang = e.hangTimeSec != null ? ` | hang ${e.hangTimeSec.toFixed(1)}s` : '';
 
         if (e.isHomeRun) {
           out.push({
             time, kind: 'contact', bold: true,
-            text: `  🚀 ${descriptor} to ${e.sprayDirection}! EV ${ev} mph | LA ${la}° | Spray ${spray}° | ${dist} ft${apex}`,
+            text: `  🚀 ${batterAction} to ${e.sprayDirection}! EV ${ev} mph | LA ${la}° | Spray ${spray}° | ${dist} ft${apex}`,
             color: 'text-yellow-300',
           });
         } else {
           out.push({
             time, kind: 'contact',
-            text: `  💥 ${descriptor} to ${e.sprayDirection} — EV ${ev} mph | LA ${la}° | Spray ${spray}° | ${dist} ft${apex}${hang}`,
+            text: `  💥 ${batterAction} to ${e.sprayDirection} — EV ${ev} mph | LA ${la}° | Spray ${spray}° | ${dist} ft${apex}${hang}`,
             color: 'text-amber-300',
           });
         }
@@ -224,7 +279,9 @@ export function formatTickEvents(events: TickEvent[], time: number): PbpEntry[] 
       }
 
       case 'ball-caught': {
-        const who = e.playerName ? `${e.playerName} (${displayPos(e.by)})` : displayPos(e.by);
+        const who = (e.playerName || (e.playerId != null && e.playerId > 0))
+          ? `${formatPlayerTag(e.playerName, e.playerId, displayPos(e.by))} (${displayPos(e.by)})`
+          : displayPos(e.by);
         out.push({
           time, kind: 'play',
           text: `  🧤 ${who} makes the catch!`,
@@ -234,7 +291,9 @@ export function formatTickEvents(events: TickEvent[], time: number): PbpEntry[] 
       }
 
       case 'ball-fielded': {
-        const who = e.playerName ? `${e.playerName} (${displayPos(e.by)})` : displayPos(e.by);
+        const who = (e.playerName || (e.playerId != null && e.playerId > 0))
+          ? `${formatPlayerTag(e.playerName, e.playerId, displayPos(e.by))} (${displayPos(e.by)})`
+          : displayPos(e.by);
         const verb = fieldedVerb(e.by);
         out.push({
           time, kind: 'play',
@@ -245,7 +304,9 @@ export function formatTickEvents(events: TickEvent[], time: number): PbpEntry[] 
       }
 
       case 'throw-released': {
-        const from = e.fromName ? `${e.fromName} (${displayPos(e.from)})` : displayPos(e.from);
+        const from = (e.fromName || (e.fromId != null && e.fromId > 0))
+          ? `${formatPlayerTag(e.fromName, e.fromId, displayPos(e.from))} (${displayPos(e.from)})`
+          : displayPos(e.from);
         const baseName = baseShort(e.toBase);
         out.push({
           time, kind: 'play',
@@ -255,11 +316,35 @@ export function formatTickEvents(events: TickEvent[], time: number): PbpEntry[] 
         break;
       }
 
+      case 'ball-received': {
+        const who = (e.playerName || (e.playerId != null && e.playerId > 0))
+          ? `${formatPlayerTag(e.playerName, e.playerId, displayPos(e.by))} (${displayPos(e.by)})`
+          : displayPos(e.by);
+        out.push({
+          time, kind: 'play',
+          text: `  👐 ${who} receives the throw`,
+          color: 'text-blue-200',
+        });
+        break;
+      }
+
       case 'wall-bounce': {
         out.push({
           time, kind: 'play', bold: true,
           text: `  💥 OFF THE WALL!`,
           color: 'text-orange-300',
+        });
+        break;
+      }
+
+      case 'wall-cleared': {
+        const height = e.heightFt != null && e.heightFt > 0.5
+          ? ` at ${Math.round(e.heightFt)} ft`
+          : '';
+        out.push({
+          time, kind: 'play', bold: true,
+          text: `  🧱 Cleared the wall at (${Math.round(e.at.x)}, ${Math.round(e.at.y)})${height}`,
+          color: 'text-yellow-200',
         });
         break;
       }
@@ -275,30 +360,33 @@ export function formatTickEvents(events: TickEvent[], time: number): PbpEntry[] 
 
       // ── RUNNER EVENTS ─────────────────────────────────────
       case 'runner-safe': {
+        const runner = formatPlayerTag(e.runnerName, e.runnerId, 'Runner');
         const base = baseShort(e.base);
-        const verb = base === 'home' ? 'slides in safely at home!' : `safe at ${base}`;
+        const verb = base === 'home' ? `${runner} slides in safely at home!` : `${runner} is safe at ${base}`;
         out.push({
           time, kind: 'play',
-          text: `  ✅ Runner ${verb}`,
+          text: `  ✅ ${verb}`,
           color: 'text-emerald-300',
         });
         break;
       }
 
       case 'runner-out': {
+        const runner = formatPlayerTag(e.runnerName, e.runnerId, 'Runner');
         const at = baseShort(e.at);
         out.push({
           time, kind: 'play',
-          text: `  ❌ OUT at ${at}!`,
+          text: `  ❌ ${runner} is OUT at ${at}!`,
           color: 'text-red-400',
         });
         break;
       }
 
       case 'runner-scored': {
+        const runner = formatPlayerTag(e.runnerName, e.runnerId, 'Runner');
         out.push({
           time, kind: 'score', bold: true,
-          text: `  🏠 RUN SCORES!`,
+          text: `  🏠 ${runner} scores!`,
           color: 'text-emerald-400',
         });
         break;
@@ -306,12 +394,13 @@ export function formatTickEvents(events: TickEvent[], time: number): PbpEntry[] 
 
       // ── AT-BAT RESULT ─────────────────────────────────────
       case 'at-bat-end': {
+        const batter = formatPlayerTag(e.batterName, e.batterId, 'Batter');
         const r = resultLabel(e.result);
         const rbi = e.rbis > 0 ? ` (${e.rbis} RBI)` : '';
         const where = e.fieldedBy ? ` — off ${e.fieldedBy}` : '';
         out.push({
           time, kind: 'result', bold: true,
-          text: `→ ${e.batterName}: ${r}${where}${rbi}`,
+          text: `→ ${batter}: ${r}${where}${rbi}`,
           color: e.result === 'home-run' ? 'text-yellow-300' :
                  ['single', 'double', 'triple', 'walk', 'hbp', 'reached-on-error'].includes(e.result)
                    ? 'text-emerald-300' : 'text-red-300',

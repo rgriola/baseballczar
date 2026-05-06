@@ -1,8 +1,8 @@
+// Last touched by agent: 2026-05-05T17:26:42Z
 import { withSentryConfig } from '@sentry/nextjs';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  transpilePackages: ['@baseballczar/sim-engine'],
   webpack: (config, { isServer }) => {
     // Suppress BullMQ dynamic require warning (child-processor.js uses expression-based require)
     if (isServer) {

@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T06:10:11Z
 /**
  * Entity types for the tick-based simulation engine.
  *
@@ -42,6 +43,9 @@ export interface FielderEntity {
   homePos: Point2D;                  // default position
   state: FielderState;
   speedFps: number;                  // max sprint speed (ft/sec)
+  agility: number;                   // 1-10 AG skill (drives turn rate)
+  facingRad: number;                 // current facing direction (radians)
+  turnRateRad: number;               // max turning speed (radians/sec)
   throwVeloFps: number;              // throw velocity (ft/sec)
   defense: number;                   // 1-10 defense skill
   playerId: number;
@@ -60,6 +64,9 @@ export interface RunnerEntity {
   pos: Point2D;
   state: RunnerState;
   speedFps: number;
+  agility: number;                   // 1-10 AG skill (drives turn rate)
+  facingRad: number;                 // current facing direction (radians)
+  turnRateRad: number;               // max turning speed (radians/sec)
 }
 
 // ─── Game state (for HUD overlay) ────────────────────────────────
@@ -98,8 +105,8 @@ export type TickEvent =
   // At-bat lifecycle (emitted by orchestrator)
   | {
       type: 'at-bat-start';
-      batter: { name: string; hand: string; avg: number; power: number; eye: number; speed: number };
-      pitcher: { name: string; hand: string; ctrl: number; stam: number; throwing: number };
+      batter: { id?: number; name: string; hand: string; avg: number; power: number; eye: number; speed: number };
+      pitcher: { id?: number; name: string; hand: string; ctrl: number; stam: number; throwing: number };
       inning: number; half: 'top' | 'bottom'; outs: number;
       homeScore: number; awayScore: number;
       homeName: string; awayName: string;
@@ -108,13 +115,16 @@ export type TickEvent =
   | {
       type: 'at-bat-end';
       result: string;   // 'single', 'fly-out', etc.
+      batterId?: number;
       batterName: string;
       rbis: number;
-      fieldedBy?: string;  // position + name, e.g. "S. Garcia (RF)"
+      fieldedBy?: string;  // position + name, e.g. "#14 Garcia (RF)"
     }
   // Ball events
   | {
       type: 'contact'; exitVeloMph: number; launchAngleDeg: number; sprayAngleDeg: number;
+      batterId?: number;
+      batterName?: string;
       sprayDirection: string;  // "LF", "RF-line", "CF", etc.
       distanceFt: number;
       peakHeightFt?: number;
@@ -122,20 +132,25 @@ export type TickEvent =
       isHomeRun?: boolean;
     }
   | { type: 'ball-landed'; at: Point2D }
-  | { type: 'ball-caught'; by: string; playerName?: string; at: Point2D }
-  | { type: 'ball-fielded'; by: string; playerName?: string; at: Point2D }
-  | { type: 'throw-released'; from: string; fromName?: string; toBase: string }
-  | { type: 'ball-received'; by: string; playerName?: string; at: Point2D }
+  | { type: 'ball-caught'; by: string; playerId?: number; playerName?: string; at: Point2D }
+  | { type: 'ball-fielded'; by: string; playerId?: number; playerName?: string; at: Point2D }
+  | { type: 'throw-released'; from: string; fromId?: number; fromName?: string; toBase: string }
+  | { type: 'ball-received'; by: string; playerId?: number; playerName?: string; at: Point2D }
   | { type: 'wall-bounce'; at: Point2D }
+  | { type: 'wall-cleared'; at: Point2D; heightFt?: number }
   | { type: 'home-run'; distanceFt: number }
   // Runner events
-  | { type: 'runner-safe'; runnerId: number; base: string }
-  | { type: 'runner-out'; runnerId: number; at: string }
-  | { type: 'runner-scored'; runnerId: number }
+  | { type: 'runner-safe'; runnerId: number; runnerName?: string; base: string }
+  | { type: 'runner-out'; runnerId: number; runnerName?: string; at: string }
+  | { type: 'runner-scored'; runnerId: number; runnerName?: string }
   // Pitch events
   | {
       type: 'pitch';
       pitchNum: number;
+      batterId?: number;
+      batterName?: string;
+      pitcherId?: number;
+      pitcherName?: string;
       zone: 'in' | 'edge' | 'off';
       actualInZone: boolean;
       speed: string;         // pitch type label: 'Four-seam', 'Changeup', etc.
@@ -147,12 +162,26 @@ export type TickEvent =
       outcome: string;
       balls: number;
       strikes: number;
+      batterId?: number;
+      pitcherId?: number;
+      pitcherName?: string;
+      /** Batter display name for richer pitch-result narration. */
+      batterName?: string;
       /** Foul ball contact data — shows exit velo, LA, distance even on fouls */
       foulBall?: {
         exitVeloMph: number;
         launchAngleDeg: number;
         distanceFt: number;
         sprayDirection: string;
+        peakHeightFt?: number;
+      };
+      /** Fair-ball contact data — mirrors foul metrics for in-play readouts */
+      inPlayBall?: {
+        exitVeloMph: number;
+        launchAngleDeg: number;
+        distanceFt: number;
+        sprayDirection: string;
+        peakHeightFt?: number;
       };
     }
   // Manager decision events (Phase 3)

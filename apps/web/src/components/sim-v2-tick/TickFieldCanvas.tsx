@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T03:49:31Z
 'use client';
 
 /**
@@ -7,7 +8,7 @@
  */
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import type { WorldSnapshot } from '@baseballczar/tick-engine';
-import { TickScene, type ViewMode } from './tickScene';
+import type { ViewMode, EventDispatchMeta, DebugPlayerLookup } from './tickScene';
 
 interface TickFieldCanvasProps {
   snapshots: WorldSnapshot[];
@@ -15,9 +16,28 @@ interface TickFieldCanvasProps {
   speed?: number;
   width?: number;
   height?: number;
-  onEvent?: (events: WorldSnapshot['events'], time: number) => void;
+  onEvent?: (events: WorldSnapshot['events'], time: number, meta?: EventDispatchMeta) => void;
   onTimeUpdate?: (time: number) => void;
+  debugPlayerTags?: boolean;
+  playerLookup?: DebugPlayerLookup;
 }
+
+type TickSceneLike = {
+  init: () => Promise<void>;
+  destroy: () => void;
+  loadSnapshots: (
+    snapshots: WorldSnapshot[],
+    onEvent?: (events: WorldSnapshot['events'], time: number, meta?: EventDispatchMeta) => void,
+  ) => void;
+  play: (speed?: number) => void;
+  pause: () => void;
+  seek: (time: number) => void;
+  setSpeed: (speed: number) => void;
+  setDebugPlayerTags: (enabled: boolean, lookup?: DebugPlayerLookup) => void;
+  setViewMode: (mode: ViewMode) => void;
+  getTime: () => number;
+  isFinished: () => boolean;
+};
 
 export default function TickFieldCanvas({
   snapshots,
@@ -27,15 +47,22 @@ export default function TickFieldCanvas({
   height = 600,
   onEvent,
   onTimeUpdate,
+  debugPlayerTags = false,
+  playerLookup = {},
 }: TickFieldCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const sceneRef = useRef<TickScene | null>(null);
+  const sceneRef = useRef<TickSceneLike | null>(null);
   const [ready, setReady] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>('full');
   const [speed, setSpeed] = useState(initialSpeed);
   const [isPlaying, setIsPlaying] = useState(autoplay);
   const scrubberRef = useRef<HTMLDivElement>(null);
+  const onEventRef = useRef<typeof onEvent>(onEvent);
+
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  }, [onEvent]);
 
   const duration = useMemo(() => {
     if (snapshots.length === 0) return 0;
@@ -47,16 +74,40 @@ export default function TickFieldCanvas({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const scene = new TickScene({ canvas, width, height });
-    sceneRef.current = scene;
+    let cancelled = false;
+    let scene: TickSceneLike | null = null;
+    setReady(false);
 
-    scene.init().then(() => {
-      setReady(true);
-    });
+    const initScene = async () => {
+      try {
+        const { TickScene } = await import('./tickScene');
+        if (cancelled) return;
+
+        scene = new TickScene({ canvas, width, height });
+        sceneRef.current = scene;
+        await scene.init();
+
+        if (cancelled) {
+          scene.destroy();
+          if (sceneRef.current === scene) sceneRef.current = null;
+          return;
+        }
+
+        setReady(true);
+      } catch (err) {
+        if (!cancelled) {
+          console.error('Failed to initialize TickScene', err);
+        }
+      }
+    };
+
+    void initScene();
 
     return () => {
-      scene.destroy();
-      sceneRef.current = null;
+      cancelled = true;
+      setReady(false);
+      scene?.destroy();
+      if (sceneRef.current === scene) sceneRef.current = null;
     };
   }, [width, height]);
 
@@ -65,8 +116,8 @@ export default function TickFieldCanvas({
     const scene = sceneRef.current;
     if (!scene || !ready) return;
 
-    scene.loadSnapshots(snapshots, (events, time) => {
-      onEvent?.(events, time);
+    scene.loadSnapshots(snapshots, (events, time, meta) => {
+      onEventRef.current?.(events, time, meta);
     });
 
     if (autoplay) {
@@ -99,6 +150,13 @@ export default function TickFieldCanvas({
   useEffect(() => {
     sceneRef.current?.setSpeed(speed);
   }, [speed]);
+
+  // Toggle on-field debug player tags and refresh lookup data.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene || !ready) return;
+    scene.setDebugPlayerTags(debugPlayerTags, playerLookup);
+  }, [ready, debugPlayerTags, playerLookup]);
 
   const handlePlay = useCallback(() => {
     sceneRef.current?.play(speed);

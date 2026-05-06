@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T06:39:42Z
 /**
  * Per-tick fielder AI — decides where each fielder should go and
  * transitions state machines based on ball/game state.
@@ -10,8 +11,45 @@ import { FIELDER_POSITIONS_FT } from '@baseballczar/sim-engine';
 import type { Position } from '@baseballczar/sim-engine';
 import { throwBall } from './ballPhysics';
 import { COLLIDERS, dist2D, clampInsideWall } from './spatial';
+import { getBaseAnchor, getFielderCoverPoint } from './fieldGeometry';
 
 // ─── Movement ────────────────────────────────────────────────────
+
+const BACKPEDAL_PENALTY = 0.5;
+const BACKPEDAL_ANGLE_RAD = (120 * Math.PI) / 180;
+const CATCH_FACING_TOLERANCE_RAD = (65 * Math.PI) / 180;
+const FIELD_FACING_TOLERANCE_RAD = (70 * Math.PI) / 180;
+const RECEIVE_FACING_TOLERANCE_RAD = (85 * Math.PI) / 180;
+const THROW_FACING_TOLERANCE_RAD = (25 * Math.PI) / 180;
+const SHORT_CONTACT_DEPTH_FT = 70;
+const INFIELD_CONTACT_DEPTH_FT = 150;
+const CORNER_SIDE_THRESHOLD_FT = 35;
+
+function angleToPoint(from: Point2D, to: Point2D): number {
+  return Math.atan2(-(to.y - from.y), to.x - from.x);
+}
+
+function normalizeAngle(rad: number): number {
+  let out = rad;
+  while (out <= -Math.PI) out += Math.PI * 2;
+  while (out > Math.PI) out -= Math.PI * 2;
+  return out;
+}
+
+function angleDelta(current: number, target: number): number {
+  return normalizeAngle(target - current);
+}
+
+function rotateToward(current: number, target: number, maxStep: number): number {
+  const delta = angleDelta(current, target);
+  if (Math.abs(delta) <= maxStep) return target;
+  return normalizeAngle(current + Math.sign(delta) * maxStep);
+}
+
+function isFacingPoint(fielder: FielderEntity, target: Point2D, toleranceRad: number): boolean {
+  const desired = angleToPoint(fielder.pos, target);
+  return Math.abs(angleDelta(fielder.facingRad, desired)) <= toleranceRad;
+}
 
 /** Move a fielder toward a target point at their speed. Returns true
  *  if the fielder has arrived (within 2 ft).
@@ -34,7 +72,16 @@ export function moveToward(
     return true;
   }
 
-  const speed = speedOverride ?? fielder.speedFps;
+  const desiredFacing = angleToPoint(fielder.pos, target);
+  fielder.facingRad = rotateToward(
+    fielder.facingRad,
+    desiredFacing,
+    fielder.turnRateRad * dt,
+  );
+
+  const facingError = Math.abs(angleDelta(fielder.facingRad, desiredFacing));
+  const speedPenalty = facingError > BACKPEDAL_ANGLE_RAD ? BACKPEDAL_PENALTY : 1;
+  const speed = (speedOverride ?? fielder.speedFps) * speedPenalty;
   const move = Math.min(speed * dt, dist);
   fielder.pos.x += (dx / dist) * move;
   fielder.pos.y += (dy / dist) * move;
@@ -99,15 +146,33 @@ export function assignFielderRoles(
   ball: BallEntity,
   predictedLanding: Point2D,
 ): void {
-  // Find the closest fielder to the predicted landing
-  const primary = closestFielder(fielders, predictedLanding);
+  const depthFt = Math.hypot(predictedLanding.x, predictedLanding.y);
+  const isOutfieldBall = depthFt > INFIELD_CONTACT_DEPTH_FT;
+
+  const primaryPool: Position[] = depthFt <= SHORT_CONTACT_DEPTH_FT
+    ? ['P', 'C', 'B1', 'B2', 'SS', 'B3']
+    : isOutfieldBall
+      ? ['LF', 'CF', 'RF']
+      : ['P', 'B1', 'B2', 'SS', 'B3'];
+
+  // Pick primary from a realistic responsibility pool first.
+  const primary = closestFielder(fielders, predictedLanding, primaryPool)
+    ?? closestFielder(fielders, predictedLanding);
   if (!primary) return;
 
   // The primary fielder tracks the ball
   primary.state = { type: 'tracking', target: predictedLanding };
 
-  // Determine the throw target base (simplified: always second for now)
-  const targetBase: Point2D = { x: 0, y: 127 };  // second base
+  const secondBase = getBaseAnchor('second');
+  const cutoffPos: Position = predictedLanding.x < -CORNER_SIDE_THRESHOLD_FT
+    ? 'SS'
+    : predictedLanding.x > CORNER_SIDE_THRESHOLD_FT
+      ? 'B2'
+      : 'SS';
+  const cutoffPt: Point2D = {
+    x: (predictedLanding.x + secondBase.x) / 2,
+    y: (predictedLanding.y + secondBase.y) / 2,
+  };
 
   // Assign other fielders
   for (const f of fielders) {
@@ -117,42 +182,37 @@ export function assignFielderRoles(
     const isIF = ['B1', 'B2', 'SS', 'B3'].includes(f.position);
 
     if (f.position === 'P') {
-      // Pitcher backs up the throw
-      f.state = { type: 'backing-up', target: { x: 0, y: 75 } };
+      // Pitcher backs up infield plays near the mound, OF plays toward home.
+      f.state = {
+        type: 'backing-up',
+        target: isOutfieldBall ? { x: 0, y: 90 } : { x: 0, y: 70 },
+      };
     } else if (f.position === 'C') {
-      // Catcher stays home
-      f.state = { type: 'covering', base: { x: 0, y: 0 } };
+      // Catcher stays home; no deep-ball chasing except very short contact.
+      f.state = { type: 'covering', base: getBaseAnchor('home') };
     } else if (isOF && f.position !== primary.position) {
-      // Other outfielders back up
+      // Non-primary OF backs up to keep extra bases honest.
       const backupPt: Point2D = {
         x: (f.homePos.x + predictedLanding.x) / 2,
         y: (f.homePos.y + predictedLanding.y) / 2,
       };
       f.state = { type: 'backing-up', target: backupPt };
     } else if (isIF) {
-      // Infielders cover bases or cut off
-      const bases: Record<string, Point2D> = {
-        first: { x: 64, y: 64 },
-        second: { x: 0, y: 127 },
-        third: { x: -64, y: 64 },
-      };
-      // Simple assignment: SS/B2 cover second, B1 covers first, B3 covers third
+      // Infield progression by contact depth:
+      // - Infield ball: corners hold bags, MIF hold middle.
+      // - Outfield ball: one MIF is cutoff, one covers second.
       if (f.position === 'B1') {
-        f.state = { type: 'covering', base: bases.first };
+        f.state = { type: 'covering', base: getFielderCoverPoint('first', f.position) };
       } else if (f.position === 'B3') {
-        f.state = { type: 'covering', base: bases.third };
-      } else {
-        // SS or B2: one covers second, one cuts off
-        // Cutoff: position on the line between fielder and target base
-        const cutPt: Point2D = {
-          x: (predictedLanding.x + targetBase.x) / 2,
-          y: (predictedLanding.y + targetBase.y) / 2,
-        };
-        if (f.position === 'SS') {
-          f.state = { type: 'cutting', relayPoint: cutPt };
+        f.state = { type: 'covering', base: getFielderCoverPoint('third', f.position) };
+      } else if (f.position === 'B2' || f.position === 'SS') {
+        if (isOutfieldBall && f.position === cutoffPos) {
+          f.state = { type: 'cutting', relayPoint: cutoffPt };
         } else {
-          f.state = { type: 'covering', base: bases.second };
+          f.state = { type: 'covering', base: getFielderCoverPoint('second', f.position) };
         }
+      } else {
+        f.state = { type: 'returning' };
       }
     }
   }
@@ -184,13 +244,22 @@ export function tickFielder(
       // Check if we can catch the ball (collider-based)
       if (ball.state.type === 'in-flight') {
         const distToBall = dist2D(fielder.pos, ball.pos);
-        const ballInRange = distToBall < COLLIDERS.catchStanding && ball.pos.z < 12 && ball.pos.z > 0;
+        const ballInRange =
+          distToBall < COLLIDERS.catchStanding &&
+          ball.pos.z < 12 &&
+          ball.pos.z > 0 &&
+          isFacingPoint(fielder, { x: ball.pos.x, y: ball.pos.y }, CATCH_FACING_TOLERANCE_RAD);
         if (ballInRange) {
           // Caught it!
           ball.state = { type: 'held', by: fielder.position };
           fielder.state = { type: 'has-ball', decideSec: 0.4 };
           result.caught = true;
-          result.event = { type: 'ball-caught', by: fielder.position, at: { ...fielder.pos } };
+          result.event = {
+            type: 'ball-caught',
+            by: fielder.position,
+            playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
+            at: { ...fielder.pos },
+          };
         }
       }
 
@@ -211,11 +280,17 @@ export function tickFielder(
       // Check if close enough to pick up (collider-based)
       const distToBall = dist2D(fielder.pos, ball.pos);
       if (distToBall < COLLIDERS.fieldGrounder && ball.pos.z < 3 &&
-          (ball.state.type === 'rolling' || ball.state.type === 'idle')) {
+          (ball.state.type === 'rolling' || ball.state.type === 'idle') &&
+          isFacingPoint(fielder, { x: ball.pos.x, y: ball.pos.y }, FIELD_FACING_TOLERANCE_RAD)) {
         ball.state = { type: 'held', by: fielder.position };
         fielder.state = { type: 'has-ball', decideSec: 0.5 };
         result.fielded = true;
-        result.event = { type: 'ball-fielded', by: fielder.position, at: { ...fielder.pos } };
+        result.event = {
+          type: 'ball-fielded',
+          by: fielder.position,
+          playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
+          at: { ...fielder.pos },
+        };
       }
       break;
     }
@@ -225,19 +300,34 @@ export function tickFielder(
       fielder.state.decideSec -= dt;
       if (fielder.state.decideSec <= 0) {
         // Default: throw to second base (simplified for Phase 1)
-        const target: Point2D = { x: 0, y: 127 };
+        const target = getBaseAnchor('second');
         fielder.state = { type: 'throwing', target, windupSec: 0.15 };
       }
       break;
     }
 
     case 'throwing': {
+      const desiredFacing = angleToPoint(fielder.pos, fielder.state.target);
+      fielder.facingRad = rotateToward(
+        fielder.facingRad,
+        desiredFacing,
+        fielder.turnRateRad * dt,
+      );
+      if (Math.abs(angleDelta(fielder.facingRad, desiredFacing)) > THROW_FACING_TOLERANCE_RAD) {
+        break;
+      }
+
       fielder.state.windupSec -= dt;
       if (fielder.state.windupSec <= 0) {
         // Release the throw
         throwBall(ball, fielder.pos, fielder.state.target, fielder.throwVeloFps, fielder.position);
         result.threw = true;
-        result.event = { type: 'throw-released', from: fielder.position, toBase: 'second' };
+        result.event = {
+          type: 'throw-released',
+          from: fielder.position,
+          fromId: fielder.playerId > 0 ? fielder.playerId : undefined,
+          toBase: 'second',
+        };
         fielder.state = { type: 'returning' };
       }
       break;
@@ -248,10 +338,18 @@ export function tickFielder(
       // Check if a thrown ball arrives (collider-based)
       if (ball.state.type === 'thrown') {
         const distToBall = dist2D(fielder.pos, ball.pos);
-        if (distToBall < COLLIDERS.receiveThrow && ball.pos.z < 8 && ball.pos.z > 0) {
+        if (distToBall < COLLIDERS.receiveThrow &&
+            ball.pos.z < 8 &&
+            ball.pos.z > 0 &&
+            isFacingPoint(fielder, { x: ball.pos.x, y: ball.pos.y }, RECEIVE_FACING_TOLERANCE_RAD)) {
           ball.state = { type: 'held', by: fielder.position };
           fielder.state = { type: 'has-ball', decideSec: 0.8 };
-          result.event = { type: 'ball-received', by: fielder.position, at: { ...fielder.pos } };
+          result.event = {
+            type: 'ball-received',
+            by: fielder.position,
+            playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
+            at: { ...fielder.pos },
+          };
         }
       }
       break;
@@ -262,10 +360,18 @@ export function tickFielder(
       // Cutoff man catches thrown ball if close (collider-based)
       if (ball.state.type === 'thrown') {
         const distToBall = dist2D(fielder.pos, ball.pos);
-        if (distToBall < COLLIDERS.receiveThrow && ball.pos.z < 10 && ball.pos.z > 0) {
+        if (distToBall < COLLIDERS.receiveThrow &&
+            ball.pos.z < 10 &&
+            ball.pos.z > 0 &&
+            isFacingPoint(fielder, { x: ball.pos.x, y: ball.pos.y }, RECEIVE_FACING_TOLERANCE_RAD)) {
           ball.state = { type: 'held', by: fielder.position };
           fielder.state = { type: 'has-ball', decideSec: 0.3 };
-          result.event = { type: 'ball-received', by: fielder.position, at: { ...fielder.pos } };
+          result.event = {
+            type: 'ball-received',
+            by: fielder.position,
+            playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
+            at: { ...fielder.pos },
+          };
         }
       }
       break;
@@ -292,5 +398,15 @@ export interface TickFielderResult {
   caught?: boolean;
   fielded?: boolean;
   threw?: boolean;
-  event?: { type: string; by?: string; from?: string; at?: Point2D; toBase?: string };
+  event?: {
+    type: string;
+    by?: string;
+    playerId?: number;
+    playerName?: string;
+    from?: string;
+    fromId?: number;
+    fromName?: string;
+    at?: Point2D;
+    toBase?: string;
+  };
 }

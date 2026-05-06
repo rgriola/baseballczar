@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T06:39:42Z
 /**
  * Tick-based simulation engine (Phase 2).
  *
@@ -31,6 +32,7 @@ import {
   moveToward,
 } from './fielderAI';
 import { tickRunner, BASE_POS, commandRunner } from './runnerAI';
+import { COLLIDERS, separateBodyColliders, reflectVelocity } from './spatial';
 import {
   decideThrowTarget,
   commandRunners,
@@ -41,13 +43,19 @@ import {
 } from './aiManager';
 import {
   FIELDER_POSITIONS_FT,
+  CONFIG,
+  wallDistanceFt,
   type Position,
 } from '@baseballczar/sim-engine';
 import type { AtBatRecord, Player } from '@baseballczar/sim-engine';
+import { getRunnerOnBasePoint } from './fieldGeometry';
 
 const TICK_RATE = 60;
 const DT = 1 / TICK_RATE;
 const MAX_PLAY_SECS = 8;    // safety cap per at-bat (tighter = fewer ticks)
+const PLAYER_COLLISION_PASSES = 2;
+const BALL_BODY_COLLISION_MAX_Z_FT = 8;
+const BALL_BODY_MIN_SPEED_FPS = 2;
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -63,6 +71,291 @@ function throwVeloFromSkill(def: number): number {
   return 85 + (def - 1) * 5.56;
 }
 
+/** Turn rate in radians/sec from AG skill (1-10). */
+function turnRateFromAg(ag: number): number {
+  const clamped = Math.max(1, Math.min(10, ag));
+  const degPerSec = 90 + (clamped - 1) * 30;
+  return (degPerSec * Math.PI) / 180;
+}
+
+function facingToPoint(from: Point2D, to: Point2D): number {
+  return Math.atan2(-(to.y - from.y), to.x - from.x);
+}
+
+function playerTag(player: Player): string {
+  return `#${player.id} ${player.lastName}`;
+}
+
+function enforcePlayerBodySeparation(
+  fielders: FielderEntity[],
+  runners: RunnerEntity[],
+): void {
+  const activeRunners = runners.filter(
+    r => r.state.type !== 'out' && r.state.type !== 'scored',
+  );
+
+  // Keep bodies separated within each team first.
+  const fielderColliders: Array<{
+    pos: Point2D;
+    radiusFt: number;
+    lockPosition?: boolean;
+  }> = fielders.map((f) => ({
+    pos: f.pos,
+    radiusFt: COLLIDERS.fielderBody,
+  }));
+
+  const runnerColliders: Array<{
+    pos: Point2D;
+    radiusFt: number;
+    lockPosition?: boolean;
+  }> = activeRunners.map((r) => ({
+    pos: r.pos,
+    radiusFt: COLLIDERS.runnerBody,
+  }));
+
+  separateBodyColliders(fielderColliders, PLAYER_COLLISION_PASSES);
+  separateBodyColliders(runnerColliders, PLAYER_COLLISION_PASSES);
+
+  // Runner right-of-way: fielders must clear runner lanes and avoid interference.
+  const runnerPriorityColliders: Array<{
+    pos: Point2D;
+    radiusFt: number;
+    lockPosition?: boolean;
+  }> = [];
+
+  for (const f of fielders) {
+    runnerPriorityColliders.push({ pos: f.pos, radiusFt: COLLIDERS.fielderBody });
+  }
+
+  for (const r of activeRunners) {
+    runnerPriorityColliders.push({
+      pos: r.pos,
+      radiusFt: COLLIDERS.runnerBody,
+      lockPosition: true,
+    });
+  }
+
+  separateBodyColliders(runnerPriorityColliders, PLAYER_COLLISION_PASSES);
+}
+
+function ballVelocity2D(ball: BallEntity): Point2D | null {
+  switch (ball.state.type) {
+    case 'in-flight':
+    case 'thrown':
+      return { x: ball.state.vel.x, y: ball.state.vel.y };
+    case 'rolling':
+      return { x: ball.state.vel.x, y: ball.state.vel.y };
+    default:
+      return null;
+  }
+}
+
+function applyBallBodyDeflection(
+  ball: BallEntity,
+  fielders: FielderEntity[],
+  runners: RunnerEntity[],
+): boolean {
+  if (ball.state.type === 'idle' || ball.state.type === 'held') return false;
+  if (ball.pos.z > BALL_BODY_COLLISION_MAX_Z_FT) return false;
+
+  const velocity2D = ballVelocity2D(ball);
+  if (!velocity2D) return false;
+
+  const speed = Math.hypot(velocity2D.x, velocity2D.y);
+  if (speed < BALL_BODY_MIN_SPEED_FPS) return false;
+
+  const actors: Array<{ pos: Point2D; radiusFt: number }> = [];
+  for (const f of fielders) {
+    actors.push({ pos: f.pos, radiusFt: COLLIDERS.fielderBody });
+  }
+  for (const r of runners) {
+    if (r.state.type === 'out' || r.state.type === 'scored') continue;
+    actors.push({ pos: r.pos, radiusFt: COLLIDERS.runnerBody });
+  }
+
+  let hitActor: { pos: Point2D; radiusFt: number } | null = null;
+  let hitDist = Infinity;
+
+  for (const actor of actors) {
+    // Ignore actors behind the ball's current movement direction.
+    // This prevents immediate false collisions at contact near home plate
+    // (e.g., catcher overlap when the ball is launched toward the field).
+    const toActorX = actor.pos.x - ball.pos.x;
+    const toActorY = actor.pos.y - ball.pos.y;
+    const motionDot = velocity2D.x * toActorX + velocity2D.y * toActorY;
+    if (motionDot <= 0) continue;
+
+    const dx = ball.pos.x - actor.pos.x;
+    const dy = ball.pos.y - actor.pos.y;
+    const dist = Math.hypot(dx, dy);
+    const minDist = actor.radiusFt + COLLIDERS.ballRadius;
+    if (dist > minDist) continue;
+    if (dist < hitDist) {
+      hitActor = actor;
+      hitDist = dist;
+    }
+  }
+
+  if (!hitActor) return false;
+
+  let nx = ball.pos.x - hitActor.pos.x;
+  let ny = ball.pos.y - hitActor.pos.y;
+  let nLen = Math.hypot(nx, ny);
+
+  if (nLen < 1e-5) {
+    nx = velocity2D.x;
+    ny = velocity2D.y;
+    nLen = Math.hypot(nx, ny);
+    if (nLen < 1e-5) {
+      nx = 1;
+      ny = 0;
+      nLen = 1;
+    }
+  }
+
+  nx /= nLen;
+  ny /= nLen;
+
+  const targetDist = hitActor.radiusFt + COLLIDERS.ballRadius + 0.02;
+  ball.pos.x = hitActor.pos.x + nx * targetDist;
+  ball.pos.y = hitActor.pos.y + ny * targetDist;
+
+  const restitution = ball.state.type === 'rolling' ? 0.24 :
+    ball.state.type === 'thrown' ? 0.28 :
+    0.18;
+  const reflected = reflectVelocity(velocity2D, { x: nx, y: ny }, restitution);
+
+  if (ball.state.type === 'rolling') {
+    ball.state.vel.x = reflected.x;
+    ball.state.vel.y = reflected.y;
+    return true;
+  }
+
+  if (ball.state.type === 'in-flight') {
+    ball.state.vel.x = reflected.x;
+    ball.state.vel.y = reflected.y;
+    ball.state.vel.z *= 0.65;
+    if (ball.pos.z < 1.5) {
+      ball.pos.z = 0;
+      ball.state = {
+        type: 'rolling',
+        vel: {
+          x: reflected.x * 0.8,
+          y: reflected.y * 0.8,
+        },
+      };
+    }
+    return true;
+  }
+
+  if (ball.state.type === 'thrown') {
+    if (ball.pos.z <= 3.5) {
+      ball.pos.z = 0;
+      ball.state = {
+        type: 'rolling',
+        vel: {
+          x: reflected.x * 0.75,
+          y: reflected.y * 0.75,
+        },
+      };
+    } else {
+      ball.state.vel.x = reflected.x;
+      ball.state.vel.y = reflected.y;
+      ball.state.vel.z *= 0.55;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function buildPlayerLabelMap(
+  ab: AtBatRecord,
+  defenseRoster: Map<Position, Player>,
+  existingRunners?: { player: Player; base: 'first' | 'second' | 'third' }[],
+): Map<number, string> {
+  const labels = new Map<number, string>();
+  const addPlayer = (player: Player | undefined) => {
+    if (!player) return;
+    labels.set(player.id, playerTag(player));
+  };
+
+  addPlayer(ab.batter);
+  addPlayer(ab.pitcher);
+
+  for (const player of defenseRoster.values()) {
+    addPlayer(player);
+  }
+
+  if (existingRunners) {
+    for (const r of existingRunners) {
+      addPlayer(r.player);
+    }
+  }
+
+  return labels;
+}
+
+function enrichEventsWithPlayerTags(
+  events: TickEvent[],
+  fielders: FielderEntity[],
+  playerLabels: Map<number, string>,
+): TickEvent[] {
+  for (const event of events) {
+    switch (event.type) {
+      case 'ball-caught':
+      case 'ball-fielded':
+      case 'ball-received': {
+        let playerId = event.playerId;
+        if (playerId == null) {
+          const fielder = fielders.find(f => f.position === event.by);
+          if (fielder && fielder.playerId > 0) {
+            playerId = fielder.playerId;
+            event.playerId = playerId;
+          }
+        }
+        if (!event.playerName && playerId != null && playerId > 0) {
+          event.playerName = playerLabels.get(playerId) ?? `#${playerId} ${displayPos(event.by)}`;
+        }
+        break;
+      }
+
+      case 'throw-released': {
+        let fromId = event.fromId;
+        if (fromId == null) {
+          const fielder = fielders.find(f => f.position === event.from);
+          if (fielder && fielder.playerId > 0) {
+            fromId = fielder.playerId;
+            event.fromId = fromId;
+          }
+        }
+        if (!event.fromName && fromId != null && fromId > 0) {
+          event.fromName = playerLabels.get(fromId) ?? `#${fromId} ${displayPos(event.from)}`;
+        }
+        break;
+      }
+
+      case 'runner-safe':
+      case 'runner-out':
+      case 'runner-scored': {
+        if (!event.runnerName && event.runnerId > 0) {
+          event.runnerName = playerLabels.get(event.runnerId) ?? `#${event.runnerId} Runner`;
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+
+  return events;
+}
+
+function displayPos(pos: string): string {
+  return pos.replace(/^B(\d)/, '$1B');
+}
+
 // ─── Entity factories ────────────────────────────────────────────
 
 function makeFielder(
@@ -72,6 +365,7 @@ function makeFielder(
 ): FielderEntity {
   const home = FIELDER_POSITIONS_FT[pos];
   const speed = player?.skills.speed ?? 5;
+  const ag = player?.skills.ag ?? 5;
   const defense = player?.skills.fielding ?? 5;
   return {
     position: pos,
@@ -79,6 +373,9 @@ function makeFielder(
     homePos: { ...home },
     state: { type: 'idle' },
     speedFps: speedFromSkill(speed),
+    agility: ag,
+    facingRad: facingToPoint(home, BASE_POS.home),
+    turnRateRad: turnRateFromAg(ag),
     throwVeloFps: throwVeloFromSkill(defense),
     defense,
     playerId: player?.id ?? -1,
@@ -91,23 +388,36 @@ function makeRunner(
   base: 'first' | 'second' | 'third',
   teamColor: number,
 ): RunnerEntity {
-  const pos = BASE_POS[base];
+  const pos = getRunnerOnBasePoint(base);
+  const ag = player.skills.ag ?? 5;
   return {
     id: player.id,
     pos: { ...pos },
     state: { type: 'on-base', base },
     speedFps: speedFromSkill(player.skills.speed),
+    agility: ag,
+    facingRad: facingToPoint(pos, BASE_POS.home),
+    turnRateRad: turnRateFromAg(ag),
   };
 }
 
 function makeBatterRunner(
   player: Player,
 ): RunnerEntity {
+  const ag = player.skills.ag ?? 5;
+  const start: Point2D = {
+    // Batter starts in the box by handedness.
+    x: player.hand === 'L' ? 5 : -5, // do not change. 
+    y: 0,
+  };
   return {
     id: player.id,
-    pos: { x: 0, y: 0 },  // home plate
+    pos: start,  // batter box
     state: { type: 'on-base', base: 'first' },  // will be commanded to advance
     speedFps: speedFromSkill(player.skills.speed),
+    agility: ag,
+    facingRad: facingToPoint(start, FIELDER_POSITIONS_FT.P),
+    turnRateRad: turnRateFromAg(ag),
   };
 }
 
@@ -149,6 +459,12 @@ export function simulateAtBatTick(
 
   const battedBall = ab.battedBall;
   if (!battedBall) return snapshots;
+  const hrWallDistanceFt = wallDistanceFt(battedBall.sprayAngleDeg);
+  const hrSprayRad = (battedBall.sprayAngleDeg * Math.PI) / 180;
+  const hrWallCrossPoint: Point2D = {
+    x: hrWallDistanceFt * Math.sin(hrSprayRad),
+    y: hrWallDistanceFt * Math.cos(hrSprayRad),
+  };
 
   // Create runner entities from existing baserunners + batter
   const runners: RunnerEntity[] = [];
@@ -159,6 +475,8 @@ export function simulateAtBatTick(
   }
   // Batter becomes a runner on contact
   const batterRunner = makeBatterRunner(ab.batter);
+  const preContactBatter = makeBatterRunner(ab.batter);
+  const playerLabels = buildPlayerLabelMap(ab, defenseRoster, opts.runners);
 
   const situation: GameSituation = opts.situation ?? {
     outs: ab.outs,
@@ -198,7 +516,22 @@ export function simulateAtBatTick(
 
         if (u >= 1) {
           // Contact!
-          launchBall(ball, battedBall.exitVeloMph, battedBall.launchAngleDeg, battedBall.sprayAngleDeg);
+          const targetDistanceFt = battedBall.isHomeRun
+            ? Math.max(battedBall.distanceFt, hrWallDistanceFt + 8)
+            : battedBall.distanceFt;
+
+          launchBall(
+            ball,
+            battedBall.exitVeloMph,
+            battedBall.launchAngleDeg,
+            battedBall.sprayAngleDeg,
+            {
+              targetDistanceFt,
+              targetHangTimeSec: battedBall.hangTimeSec > 0 ? battedBall.hangTimeSec : undefined,
+              targetPeakHeightFt: battedBall.peakHeightFt,
+              minPeakHeightFt: battedBall.isHomeRun ? CONFIG.park.wallHeightFt + 1.5 : undefined,
+            },
+          );
           const sa = battedBall.sprayAngleDeg;
           const sprayDirection =
             sa < -45 ? 'foul-L' :
@@ -210,6 +543,8 @@ export function simulateAtBatTick(
             'foul-R';
           events.push({
             type: 'contact',
+            batterId: ab.batter.id,
+            batterName: playerLabels.get(ab.batter.id),
             exitVeloMph: battedBall.exitVeloMph,
             launchAngleDeg: battedBall.launchAngleDeg,
             sprayAngleDeg: battedBall.sprayAngleDeg,
@@ -245,10 +580,13 @@ export function simulateAtBatTick(
         // Tick ball physics
         const ballResult = tickBall(ball, DT);
 
-        if (ballResult.landed) {
+        if (ballResult.landed && !battedBall.isHomeRun) {
           events.push({ type: 'ball-landed', at: ballResult.landingPoint! });
         }
-        if (ballResult.homeRun) {
+        if (ballResult.homeRun || (battedBall.isHomeRun && ballResult.landed)) {
+          const wallCrossPoint = ballResult.wallHitPoint ?? hrWallCrossPoint;
+          const wallCrossHeightFt = ballResult.wallCrossHeightFt ?? ball.pos.z;
+          events.push({ type: 'wall-cleared', at: wallCrossPoint, heightFt: wallCrossHeightFt });
           events.push({ type: 'play-complete' });
           phase = 'done';
           playComplete = true;
@@ -272,8 +610,18 @@ export function simulateAtBatTick(
             // Stop all non-tag-up runners
             for (const r of runners) {
               if (r.state.type === 'running' && r !== batterRunner) {
-                // Runners who were going on contact need to retreat
-                // (simplified: they hold)
+                // Runners who went on contact should retreat to their origin base.
+                let retreatBase = 'first';
+                let retreatDist = Infinity;
+                for (const [baseName, basePos] of Object.entries(BASE_POS)) {
+                  if (baseName === 'home') continue;
+                  const d = Math.hypot(r.state.from.x - basePos.x, r.state.from.y - basePos.y);
+                  if (d < retreatDist) {
+                    retreatDist = d;
+                    retreatBase = baseName;
+                  }
+                }
+                commandRunner(r, { type: 'retreat', targetBase: retreatBase });
               }
             }
 
@@ -358,7 +706,7 @@ export function simulateAtBatTick(
               // Execute the throw to the manager's chosen base
               throwBall(ball, f.pos, mgrTarget.point, f.throwVeloFps, f.position);
               throwCount++;
-              events.push({ type: 'throw-released', from: f.position, toBase: mgrTarget.base });
+              events.push({ type: 'throw-released', from: f.position, fromId: f.playerId > 0 ? f.playerId : undefined, toBase: mgrTarget.base });
               f.state = { type: 'returning' };
               delete (f as any)._managerThrowTarget;
             } else {
@@ -376,7 +724,7 @@ export function simulateAtBatTick(
           if (fResult.event?.type === 'ball-received') {
             // AI Manager: should this fielder relay or hold?
             const activeRunners = runners.filter(r =>
-              r.state.type === 'running' || r.state.type === 'on-base'
+              r.state.type === 'running'
             );
             if (activeRunners.length > 0 && throwCount < MAX_THROWS) {
               const newTarget = decideThrowTarget(f, runners, situation);
@@ -422,11 +770,42 @@ export function simulateAtBatTick(
       }
     }
 
+    enforcePlayerBodySeparation(fielders, runners);
+    applyBallBodyDeflection(ball, fielders, runners);
+
     time += DT;
     tickCount++;
 
     // Capture snapshot
     if (tickCount % captureEvery === 0 || playComplete) {
+      const enrichedEvents = events.length > 0
+        ? enrichEventsWithPlayerTags(events, fielders, playerLabels)
+        : events;
+      const snapshotRunners = runners
+        .filter(r => r.state.type !== 'out')
+        .map(r => ({
+          id: r.id,
+          pos: { ...r.pos },
+          state: { ...r.state } as RunnerEntity['state'],
+          speedFps: r.speedFps,
+          agility: r.agility,
+          facingRad: r.facingRad,
+          turnRateRad: r.turnRateRad,
+        }));
+
+      const hasBatterRunner = snapshotRunners.some(r => r.id === batterRunner.id);
+      if (!hasBatterRunner) {
+        snapshotRunners.push({
+          id: preContactBatter.id,
+          pos: { ...preContactBatter.pos },
+          state: { ...preContactBatter.state } as RunnerEntity['state'],
+          speedFps: preContactBatter.speedFps,
+          agility: preContactBatter.agility,
+          facingRad: preContactBatter.facingRad,
+          turnRateRad: preContactBatter.turnRateRad,
+        });
+      }
+
       const isFirst = snapshots.length === 0;
       snapshots.push({
         time,
@@ -447,21 +826,17 @@ export function simulateAtBatTick(
               pos: { ...f.pos },
               homePos: f.homePos,
               state: { ...f.state } as FielderEntity['state'],
-              speedFps: 0,       // placeholder — renderer uses first-snapshot values
-              throwVeloFps: 0,
-              defense: 0,
-              playerId: 0,
-              teamColor: 0,
+              speedFps: f.speedFps,
+              agility: f.agility,
+              facingRad: f.facingRad,
+              turnRateRad: f.turnRateRad,
+              throwVeloFps: f.throwVeloFps,
+              defense: f.defense,
+              playerId: f.playerId,
+              teamColor: f.teamColor,
             })),
-        runners: runners
-          .filter(r => r.state.type !== 'out')
-          .map(r => ({
-            id: r.id,
-            pos: { ...r.pos },
-            state: { ...r.state } as RunnerEntity['state'],
-            speedFps: 0,
-          })),
-        events: events.length > 0 ? [...events] : [],
+        runners: snapshotRunners,
+        events: enrichedEvents.length > 0 ? [...enrichedEvents] : [],
       });
     }
   }

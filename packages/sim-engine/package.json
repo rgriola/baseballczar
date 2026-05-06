@@ -4,11 +4,44 @@
   "private": true,
   "description": "Baseball Czar physics-based simulation engine. Pure TypeScript, no runtime deps.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./boxScore": {
+      "types": "./dist/boxScore.d.ts",
+      "default": "./dist/boxScore.js"
+    },
+    "./rng": {
+      "types": "./dist/rng.d.ts",
+      "default": "./dist/rng.js"
+    },
+    "./randomTeam": {
+      "types": "./dist/randomTeam.d.ts",
+      "default": "./dist/randomTeam.js"
+    },
+    "./game": {
+      "types": "./dist/game.d.ts",
+      "default": "./dist/game.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
+    }
   },
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "build":      "tsc -p tsconfig.build.json",
     "sim":        "tsx scripts/sim-lab.ts",
+    "sim2":       "tsx scripts/sim2.ts",
     "sim:season": "tsx scripts/sim-lab.ts --games 162",
     "skill-test": "tsx scripts/skill-test.ts",
     "typecheck":  "tsc --noEmit"

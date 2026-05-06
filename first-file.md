@@ -116,29 +116,100 @@ Balls are still not rolling to a stop.
 
 Also the ball should bounce off the wall or players. Eventually we will add more dynamic stadiums and the ball will need to bounce off other objects. The wall if its 10 feet should stop a ball at 9 feet the ball should bounce.
 
-
 ...
-*** Outfielder Play ***
+**_ Outfielder Play _**
+
 - Lets start with outfielder play first, it is the simpliest.
-- One given is all players know the number of outs, runs, and where the runners are on base, including the batter runner << This is called the game situation.  the game situation informs players decisions where they move to, what base they cover, where and when to throw the ball.  I may have written this out in another doc. 
+- One given is all players know the number of outs, runs, and where the runners are on base, including the batter runner << This is called the game situation. the game situation informs players decisions where they move to, what base they cover, where and when to throw the ball. I may have written this out in another doc.
 - All three outfielders should be 75 feet from the wall.
 - Outfielders always throw ahead of the runner ie; if there is no one on base they would always throw second base. hits to left field the short stop covers second. Throws to right field the 2nd baseman covers second. For Centerfield if depends on the batter, a right handed batter the second baseman covers second, a left handed batter the short stop covers second.
-- the center fielder takes priority when tracking a ball. he helps both the left and right fielder as a back up, and should converge on hits or outs to the outfield no matter the field. 
+- the center fielder takes priority when tracking a ball. he helps both the left and right fielder as a back up, and should converge on hits or outs to the outfield no matter the field.
 
-*** Outfielder to Infield Login ***
-- Improve outfielder decisions. 
-- With Runners on base. When a hit is made to the outfield (not and out) their priority is to throw the ball ahead of the runner ie; runner at 2nd, that runner will try to get to 3rd. The throw should be to 3rd base, or home hitting the cutoff man between the bases. If the runner gets to 3rd or will the throw goes to the home (infield). A hit to left field the runner at 2nd may hold since the throw to third would be easier than say right field. 
-- right now we need to corridiate outfield defensive logic and positioning of cutoff men and throw priority. (runner logic will come later). 
+**_ Outfielder to Infield _**
+
+- Improve outfielder decisions.
+- With Runners on base. When a hit is made to the outfield (not and out) their priority is to throw the ball ahead of the runner ie; runner at 2nd, that runner will try to get to 3rd. The throw should be to 3rd base, or home hitting the cutoff man between the bases. If the runner gets to 3rd or will the throw goes to the home (infield). A hit to left field the runner at 2nd may hold since the throw to third would be easier than say right field.
+- right now we need to corridiate outfield defensive logic and positioning of cutoff men and throw priority. (runner logic will come later).
 
 ...
 
-*** Task ***
-- game_engine_redesign
-- Lets move forward with your hybrid approach. 
-- Notes: 
-a) keep the sim we have worked do not change it,  call this new one 
-/sim-lab-2. 
-b) I like the current layout and view and UI. 
-c) Reuse the baseball field and layout, remember we will add stadium graphics and they need to be interchangeable. and we will add sprites for the players. 
-c) Keep the player spites as they currently work where we can see the direction they are facing. Later we will add animation spites. 
+**_ Task _**
 
+- game_engine_redesign
+- Lets move forward with your hybrid approach.
+- Notes:
+  a) keep the sim we have worked do not change it, call this new one
+  /sim-lab-2.
+  b) I like the current layout and view and UI.
+  c) Reuse the baseball field and layout, remember we will add stadium graphics and they need to be interchangeable. and we will add sprites for the players.
+  c) Keep the player spites as they currently work where we can see the direction they are facing. Later we will add animation spites.
+
+....
+
+**\*_ Task _**
+
+- Review the Sim-Lab-2 project in the baseballczar web app. We have run into some issue and hoping to get a fresh set of eyes.
+- This app contains the sim logic - non graphic sim, the Playback of those games for the user to watch. Sim_Status.md has the run down of the app.
+- earlier we did a refactor to improve architecture.
+- Issues we are working on: play back sometimes does not show player either fielders or batter/runners. This is a persistant problem.
+- Play by play needs a more specific readout for the user and Devs so we can know what is supposed to be happening v the renderer
+- Time line Play/pause works but does not resume properly with the play by play continuing and the render not able to catch up.
+- Sometime when the Sim Game starts the browser will not reload.
+- Once these issues are fixed then we can work on game play, these are priorities.
+
+**_ Game play Issues _**
+
+- [ ] Batter readouts need to be added to play by play currently only
+      Fouled off (2-2) — 68 mph, LA 23°, 172 ft LF-line << when a player puts the ball in play needs to be added >>
+
+  > > on the pitch
+  > > Lets work on a few visual items and fix these: - all player sprites have triangular hats on, this points to the front (player face) of the sprite.
+
+- Runners need to face the home plate then turn to run to the next base.
+- Fielders (and the pitcher) need to face home plate. They should turn to run to the ball, and turn to throw the ball to the target (player or base). This is a soft rule, but they cannot be turned away from the ball and catch it, field or throw the ball anywhere. AG determines this rotation speed. all players need some game awareness.
+- Batter should face the pitcher (can you give them a bat an animate it? ).
+- Fielders can run backwards but they have a 50% speed penalty. I believe this was handled in zones in the last sim.
+- Questions just ask.
+
+- Base runners need a lead off, and 1b must be inside the bag.
+
+- Some of the throws aren't being shown.
+- players need clear responsibility knowledge ie; game situation.
+
+> Situation > the ball is hit to the oufield between two outfielders. Player safely reaches first but is called out with a lineout. it was not caught.
+> in-play (0-0)
+> → S. Foster: Lineout — off S. Young (2B)
+
+- zoom in then clicking on ball after a play locked the sim viewer.
+
+...
+
+**_ Issue _**
+
+- The website in dev mode is very slow to load and navigate. Can you evaluate the root cause. I know we are running webpack and probably other items that are pulling resources.
+
+...
+**_ Task _**
+
+- Integrate sim-lab-2 into this UI /dashboard/games/
+- remove old sim UI and replace with our updated module.
+
+**_ Task. _**
+
+- on the sim-lab-2 integration /dashboard/games/1xxxx we found some issues with scores. in this image the recorded score for the league is 8-0 but the sim shows 4-0. The first three games all had reported scores different than the sim-lab-2 score.
+
+**_ Task _**
+
+- Modify /dashboard/schedule - Change "Schedule" to "League" on the header button, update the content to show the entire league Schedule with 10 Game Pagnation.
+- Add Filtering of Schedule By Team
+- Add League Number to top right of schedule header > [League Schedule] [leagueNumber]
+- On the Score Row Order Content left to right
+  [Game Number][Game Date] [Away Team] @ [Home Team] [if played:"score", if not played:"--"][Button:Box][Button:Replay]
+- Button:Box takes user to Box Score.
+- Button:Sim takes user to Sim for Replay(Sim-Lab-2)
+
+**_ Task _**
+
+- Sim-Lab-2 needs a couple modes, maybe this means separate UI depending on use. But lets work through Sim-Lab-2's purpose:
+- 1. This shows replays of simulated games in Baseballzar Web App. It is the Replay module for the Team Owner. When game is scheduled, any game in any league, and simulated the results should create a) player, team, league stats b) a box score of the game c) a Game Event Object containing ticks that are Rendered in Sim-Lab-2 so the game can be watched. This is the primary purpose of Sim-Lab-2. the work we have been doing was to develop the sim strategy off line using seeded games.
+- 2. Replaying games or matchups to create a result with the ab

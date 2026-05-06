@@ -1,3 +1,4 @@
+<!-- Last touched by agent: 2026-05-05T19:52:00Z -->
 <!DOCTYPE html>
 <html lang="en">
 
@@ -104,6 +105,35 @@
     button:hover {
       background: #274bb3;
     }
+
+    .hint {
+      margin: 0.15rem 0 0.4rem;
+      font-size: 0.84rem;
+      color: #b8c2cf;
+      line-height: 1.4;
+    }
+
+    .parity-result {
+      margin-top: 1rem;
+      color: #dbe4f2;
+      font-size: 0.92rem;
+      font-weight: 600;
+      line-height: 1.5;
+    }
+
+    .parity-pass {
+      color: #8ce38c;
+    }
+
+    .parity-fail {
+      color: #ffa6a6;
+    }
+
+    .parity-mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.82rem;
+      opacity: 0.88;
+    }
   </style>
 </head>
 
@@ -173,11 +203,21 @@
         <input type="number" id="evMph" min="0.01" step="0.1" inputmode="decimal" autocomplete="off">
 
         <label for="laDeg">Launch angle (degrees):</label>
-        <input type="number" id="laDeg" min="0" max="89" step="0.1" inputmode="decimal" autocomplete="off">
+        <input type="number" id="laDeg" min="-25" max="70" step="0.1" inputmode="decimal" autocomplete="off">
+
+        <label for="sprayDeg">Spray angle (degrees, -45 LF to +45 RF):</label>
+        <input type="number" id="sprayDeg" min="-90" max="90" step="0.1" value="0" inputmode="decimal" autocomplete="off">
 
         <button type="button" id="trajBtn">Calculate</button>
       </div>
       <div class="result" id="result5"></div>
+    </div>
+
+    <div class="container">
+      <h2>App Parity Check</h2>
+      <p class="hint">Runs fixed EV/LA/spray fixtures against the app-matched formulas.</p>
+      <button type="button" id="parityBtn">Run parity checks</button>
+      <div class="result parity-result" id="parityResult"></div>
     </div>
   </div><!-- /.grid -->
 
@@ -204,10 +244,52 @@
       $('result2').textContent = `Time: ${(d / s).toFixed(2)} seconds`;
     }
 
-    // 1 mph = 5280 ft / 3600 sec = 1.46667 ft/sec
-    // → mph = (ft/sec) * 3600 / 5280 = (ft/sec) * 0.681818...
-    const FPS_TO_MPH = 3600 / 5280;
-    const MPH_TO_FPS = 5280 / 3600;
+    // App constants (packages/sim-engine/src/config.ts)
+    const APP_MPH_TO_FPS = 1.467;
+    const APP_FPS_TO_MPH = 1 / APP_MPH_TO_FPS;
+    const APP_GRAVITY_FT_S2 = 32.174;
+    const APP_CONTACT_HEIGHT_FT = 3;
+    const APP_PARK = {
+      leftLineFt: 320,
+      leftCenterFt: 375,
+      centerFt: 405,
+      rightCenterFt: 375,
+      rightLineFt: 320,
+      wallHeightFt: 10,
+    };
+    const APP_ROLL = {
+      bounceKeepFrac: 0.55,
+      grassDecelFtPerSec2: 14,
+      wallBounceKeepFrac: 0.55,
+    };
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    // Mirror packages/sim-engine/src/physics/park.ts
+    function wallDistanceFt(sprayAngleDeg) {
+      const a = clamp(sprayAngleDeg, -45, 45);
+      if (a <= -22.5) {
+        const t = (a + 45) / 22.5;
+        return APP_PARK.leftLineFt + t * (APP_PARK.leftCenterFt - APP_PARK.leftLineFt);
+      }
+      if (a <= 0) {
+        const t = (a + 22.5) / 22.5;
+        return APP_PARK.leftCenterFt + t * (APP_PARK.centerFt - APP_PARK.leftCenterFt);
+      }
+      if (a <= 22.5) {
+        const t = a / 22.5;
+        return APP_PARK.centerFt + t * (APP_PARK.rightCenterFt - APP_PARK.centerFt);
+      }
+      const t = (a - 22.5) / 22.5;
+      return APP_PARK.rightCenterFt + t * (APP_PARK.rightLineFt - APP_PARK.rightCenterFt);
+    }
+
+    function isFair(sprayAngleDeg) {
+      return sprayAngleDeg >= -45 && sprayAngleDeg <= 45;
+    }
+
     function calcMph() {
       const d = parseFloat($('distance3').value);
       const t = parseFloat($('time3').value);
@@ -216,7 +298,7 @@
         return;
       }
       const fps = d / t;
-      const mph = fps * FPS_TO_MPH;
+      const mph = fps * APP_FPS_TO_MPH;
       $('result3').textContent =
         `Speed: ${mph.toFixed(2)} mph (${fps.toFixed(2)} ft/sec)`;
     }
@@ -228,44 +310,275 @@
         $('result4').textContent = 'Enter a speed > 0 and a distance.';
         return;
       }
-      const fps = mph * MPH_TO_FPS;
+      const fps = mph * APP_MPH_TO_FPS;
       const time = d / fps;
       $('result4').textContent =
         `Time: ${time.toFixed(3)} seconds  (${mph.toFixed(2)} mph = ${fps.toFixed(2)} ft/sec)`;
     }
 
-    // Batted-ball trajectory. Two outputs:
-    //   1) Vacuum (no drag): textbook projectile, useful as upper bound.
-    //   2) With-drag estimate: apply a Statcast-ish range factor that
-    //      grows with EV (faster balls lose proportionally more to drag).
-    //   Apex is reported from the vacuum solution since drag mainly
-    //   shortens range; vertical apex is close enough for a calculator.
-    const G_FT_S2 = 32.174;
+    // Mirrors packages/sim-engine/src/physics/ballFlight.ts.
+    function simulateBattedBall(ev, laDeg, sprayDeg) {
+      const effectiveLA = Math.min(70, laDeg);
+      const angleRad = (effectiveLA * Math.PI) / 180;
+      const sprayRad = (sprayDeg * Math.PI) / 180;
+
+      const v0 = ev * APP_MPH_TO_FPS;
+      const vVert = v0 * Math.sin(angleRad);
+      const vHoriz = v0 * Math.cos(angleRad);
+
+      const vacRange = (v0 * v0 * Math.sin(2 * angleRad)) / APP_GRAVITY_FT_S2;
+      const dragFactor = clamp(1.05 - ev * 0.0042, 0.55, 0.95);
+      let distanceFt = Math.max(0, vacRange * dragFactor);
+
+      const disc = vVert * vVert + 2 * APP_GRAVITY_FT_S2 * APP_CONTACT_HEIGHT_FT;
+      let hangTime = disc > 0
+        ? (vVert + Math.sqrt(disc)) / APP_GRAVITY_FT_S2
+        : Math.sqrt((2 * APP_CONTACT_HEIGHT_FT) / APP_GRAVITY_FT_S2);
+      hangTime = Math.max(0.15, hangTime);
+
+      const peakHeightFt = vVert > 0
+        ? APP_CONTACT_HEIGHT_FT + (vVert * vVert) / (2 * APP_GRAVITY_FT_S2)
+        : APP_CONTACT_HEIGHT_FT;
+
+      const isGrounder = hangTime < 0.6 && distanceFt < 90;
+      if (isGrounder) {
+        const evNorm = Math.max(0, (ev - 50) / 60);
+        distanceFt = 20 + evNorm * 230;
+        const decel = 10;
+        const groundV0 = vHoriz * Math.cos(Math.abs(angleRad) * 0.3);
+        const disc2 = groundV0 * groundV0 - 2 * decel * distanceFt;
+        hangTime = disc2 > 0
+          ? (groundV0 - Math.sqrt(disc2)) / decel
+          : distanceFt / Math.max(20, groundV0 * 0.45);
+        hangTime = Math.max(0.3, hangTime);
+      }
+
+      const landingPoint = {
+        x: distanceFt * Math.sin(sprayRad),
+        y: distanceFt * Math.cos(sprayRad),
+      };
+
+      const fair = isFair(sprayDeg);
+      const wallFt = wallDistanceFt(sprayDeg);
+      const isHomeRun = fair && distanceFt > wallFt && peakHeightFt > APP_PARK.wallHeightFt;
+
+      let rollDistanceFt = 0;
+      let landingSpeedFps = 0;
+      let wallHitPoint;
+      let wallBounceSpeedFps;
+      let restDispFt = 0;
+
+      if (!isGrounder && !isHomeRun && fair) {
+        const vHorizLanding = vHoriz * 0.55;
+        landingSpeedFps = vHorizLanding * APP_ROLL.bounceKeepFrac;
+        const decel = APP_ROLL.grassDecelFtPerSec2;
+        const naturalRoll = (landingSpeedFps * landingSpeedFps) / (2 * decel);
+        const roomToWall = Math.max(0, wallFt - distanceFt);
+
+        if (naturalRoll <= roomToWall) {
+          rollDistanceFt = naturalRoll;
+          restDispFt = naturalRoll;
+        } else {
+          const vAtWallSq = landingSpeedFps * landingSpeedFps - 2 * decel * roomToWall;
+          const vAtWall = Math.sqrt(Math.max(0, vAtWallSq));
+          wallBounceSpeedFps = vAtWall * APP_ROLL.wallBounceKeepFrac;
+          const bounceDist = (wallBounceSpeedFps * wallBounceSpeedFps) / (2 * decel);
+          wallHitPoint = {
+            x: wallFt * Math.sin(sprayRad),
+            y: wallFt * Math.cos(sprayRad),
+          };
+          rollDistanceFt = roomToWall + bounceDist;
+          restDispFt = roomToWall - bounceDist;
+        }
+      }
+
+      const restPoint = isGrounder
+        ? landingPoint
+        : {
+            x: (distanceFt + restDispFt) * Math.sin(sprayRad),
+            y: (distanceFt + restDispFt) * Math.cos(sprayRad),
+          };
+
+      const outcome = !fair
+        ? 'Foul ball'
+        : isHomeRun
+          ? 'Home run'
+          : isGrounder
+            ? 'Ground ball in play'
+            : 'Ball in play';
+
+      return {
+        outcome,
+        distanceFt,
+        dragFactor,
+        peakHeightFt,
+        hangTime,
+        landingPoint,
+        restPoint,
+        rollDistanceFt,
+        wallFt,
+        fair,
+        vacRange,
+        landingSpeedFps,
+        wallHitPoint,
+        wallBounceSpeedFps,
+      };
+    }
+
+    function renderTrajectoryResult(sim) {
+      const {
+        outcome,
+        distanceFt,
+        dragFactor,
+        peakHeightFt,
+        hangTime,
+        landingPoint,
+        restPoint,
+        rollDistanceFt,
+        wallFt,
+        fair,
+        vacRange,
+        landingSpeedFps,
+        wallHitPoint,
+        wallBounceSpeedFps,
+      } = sim;
+
+      $('result5').innerHTML =
+        `Outcome: <b>${outcome}</b><br>` +
+        `Distance: <b>${distanceFt.toFixed(0)} ft</b> (drag factor ${dragFactor.toFixed(2)})<br>` +
+        `Apex height: <b>${peakHeightFt.toFixed(1)} ft</b><br>` +
+        `Hang time: <b>${hangTime.toFixed(2)} s</b><br>` +
+        `Landing point: x ${landingPoint.x.toFixed(1)} ft, y ${landingPoint.y.toFixed(1)} ft<br>` +
+        `Rest point: x ${restPoint.x.toFixed(1)} ft, y ${restPoint.y.toFixed(1)} ft<br>` +
+        `Roll distance after landing: ${rollDistanceFt.toFixed(1)} ft<br>` +
+        `Wall distance on spray line: ${wallFt.toFixed(1)} ft (fair: ${fair ? 'yes' : 'no'})<br>` +
+        `<span style="opacity:0.7;font-weight:normal">` +
+        `vacuum range ${vacRange.toFixed(1)} ft, landing speed ${landingSpeedFps.toFixed(1)} ft/s` +
+        `${wallHitPoint ? `, wall hit at (${wallHitPoint.x.toFixed(1)}, ${wallHitPoint.y.toFixed(1)})` : ''}` +
+        `${wallBounceSpeedFps ? `, bounce speed ${wallBounceSpeedFps.toFixed(1)} ft/s` : ''}` +
+        `</span>`;
+    }
+
     function calcTrajectory() {
       const ev = parseFloat($('evMph').value);
       const laDeg = parseFloat($('laDeg').value);
-      if (!isFinite(ev) || !isFinite(laDeg) || ev <= 0 || laDeg < 0 || laDeg >= 90) {
-        $('result5').textContent = 'Enter EV > 0 and launch angle 0\u201389\u00b0.';
+      const sprayDeg = parseFloat($('sprayDeg').value);
+      if (!isFinite(ev) || !isFinite(laDeg) || !isFinite(sprayDeg) || ev <= 0 || laDeg < -25 || laDeg > 70) {
+        $('result5').textContent = 'Enter EV > 0, LA between -25° and 70°, and spray angle.';
         return;
       }
-      const v = ev * MPH_TO_FPS;          // ft/s
-      const theta = laDeg * Math.PI / 180;
-      const vx = v * Math.cos(theta);
-      const vy = v * Math.sin(theta);
-      const rangeVac = (v * v * Math.sin(2 * theta)) / G_FT_S2;     // ft
-      const apex = (vy * vy) / (2 * G_FT_S2);                        // ft
-      const hang = (2 * vy) / G_FT_S2;                               // s
-      // Drag estimate: real fly balls travel ~60\u201380% of vacuum range.
-      // Linear ramp: 100mph EV \u2248 0.62 factor; 60mph \u2248 0.85.
-      const dragFactor = Math.max(0.55, Math.min(0.95, 1.05 - ev * 0.0042));
-      const rangeReal = rangeVac * dragFactor;
-      $('result5').innerHTML =
-        `Distance (with drag): <b>${rangeReal.toFixed(0)} ft</b><br>` +
-        `Apex height: <b>${apex.toFixed(1)} ft</b><br>` +
-        `Hang time: ${hang.toFixed(2)} s<br>` +
-        `<span style="opacity:0.7;font-weight:normal">` +
-        `(vacuum range ${rangeVac.toFixed(0)} ft \u00d7 ${dragFactor.toFixed(2)} drag)` +
-        `</span>`;
+
+      const sim = simulateBattedBall(ev, laDeg, sprayDeg);
+      renderTrajectoryResult(sim);
+    }
+
+    const PARITY_TOL = {
+      distanceFt: 0.75,
+      hangTime: 0.03,
+      peakHeightFt: 0.15,
+      wallFt: 0.01,
+    };
+
+    const PARITY_CASES = [
+      {
+        name: 'Center-field HR baseline',
+        ev: 110,
+        laDeg: 30,
+        sprayDeg: 0,
+        expected: {
+          outcome: 'Home run',
+          distanceFt: 412.144,
+          hangTime: 5.052,
+          peakHeightFt: 104.170,
+          wallFt: 405.000,
+        },
+      },
+      {
+        name: 'Gap fly ball baseline',
+        ev: 102,
+        laDeg: 28,
+        sprayDeg: 4,
+        expected: {
+          outcome: 'Ball in play',
+          distanceFt: 358.625,
+          hangTime: 4.409,
+          peakHeightFt: 79.691,
+          wallFt: 399.667,
+        },
+      },
+      {
+        name: 'Ground-ball branch baseline',
+        ev: 64,
+        laDeg: -7,
+        sprayDeg: 6,
+        expected: {
+          outcome: 'Ground ball in play',
+          distanceFt: 73.667,
+          hangTime: 0.828,
+          peakHeightFt: 3.000,
+          wallFt: 397.000,
+        },
+      },
+      {
+        name: 'Foul-wedge baseline',
+        ev: 99,
+        laDeg: 33,
+        sprayDeg: 53,
+        expected: {
+          outcome: 'Foul ball',
+          distanceFt: 379.824,
+          hangTime: 4.955,
+          peakHeightFt: 100.233,
+          wallFt: 320.000,
+        },
+      },
+    ];
+
+    function formatDiff(actual, expected) {
+      const d = actual - expected;
+      const sign = d > 0 ? '+' : '';
+      return `${sign}${d.toFixed(3)}`;
+    }
+
+    function runParityChecks() {
+      let passCount = 0;
+      const rows = [];
+
+      PARITY_CASES.forEach((fixture, idx) => {
+        const sim = simulateBattedBall(fixture.ev, fixture.laDeg, fixture.sprayDeg);
+        const expected = fixture.expected;
+
+        const checks = [
+          { key: 'outcome', pass: sim.outcome === expected.outcome },
+          { key: 'distanceFt', pass: Math.abs(sim.distanceFt - expected.distanceFt) <= PARITY_TOL.distanceFt },
+          { key: 'hangTime', pass: Math.abs(sim.hangTime - expected.hangTime) <= PARITY_TOL.hangTime },
+          { key: 'peakHeightFt', pass: Math.abs(sim.peakHeightFt - expected.peakHeightFt) <= PARITY_TOL.peakHeightFt },
+          { key: 'wallFt', pass: Math.abs(sim.wallFt - expected.wallFt) <= PARITY_TOL.wallFt },
+        ];
+
+        const passed = checks.every((c) => c.pass);
+        if (passed) passCount += 1;
+
+        const outcomeLine = `outcome expected ${expected.outcome}, got ${sim.outcome}`;
+        const numericLines = [
+          `distance expected ${expected.distanceFt.toFixed(3)}, got ${sim.distanceFt.toFixed(3)} (d ${formatDiff(sim.distanceFt, expected.distanceFt)})`,
+          `hang expected ${expected.hangTime.toFixed(3)}, got ${sim.hangTime.toFixed(3)} (d ${formatDiff(sim.hangTime, expected.hangTime)})`,
+          `peak expected ${expected.peakHeightFt.toFixed(3)}, got ${sim.peakHeightFt.toFixed(3)} (d ${formatDiff(sim.peakHeightFt, expected.peakHeightFt)})`,
+          `wall expected ${expected.wallFt.toFixed(3)}, got ${sim.wallFt.toFixed(3)} (d ${formatDiff(sim.wallFt, expected.wallFt)})`,
+        ];
+
+        rows.push(
+          `<span class="${passed ? 'parity-pass' : 'parity-fail'}">${passed ? 'PASS' : 'FAIL'} ${idx + 1}. ${fixture.name}</span><br>` +
+          `<span class="parity-mono">EV ${fixture.ev}, LA ${fixture.laDeg}, spray ${fixture.sprayDeg}</span><br>` +
+          `<span class="parity-mono">${outcomeLine}</span><br>` +
+          `<span class="parity-mono">${numericLines.join('<br>')}</span>`
+        );
+      });
+
+      const summaryClass = passCount === PARITY_CASES.length ? 'parity-pass' : 'parity-fail';
+      $('parityResult').innerHTML =
+        `<span class="${summaryClass}">Parity summary: ${passCount}/${PARITY_CASES.length} fixtures passed</span><br><br>` +
+        rows.join('<br><br>');
     }
 
     $('fpsBtn').addEventListener('click', calcFps);
@@ -273,13 +586,14 @@
     $('mphBtn').addEventListener('click', calcMph);
     $('mphTimeBtn').addEventListener('click', calcTimeAtMph);
     $('trajBtn').addEventListener('click', calcTrajectory);
+    $('parityBtn').addEventListener('click', runParityChecks);
 
     // Live update as you type, so values are never lost on click.
     ['distance', 'time'].forEach(id => $(id).addEventListener('input', calcFps));
     ['distance2', 'fps'].forEach(id => $(id).addEventListener('input', calcTime));
     ['distance3', 'time3'].forEach(id => $(id).addEventListener('input', calcMph));
     ['mph4', 'distance4'].forEach(id => $(id).addEventListener('input', calcTimeAtMph));
-    ['evMph', 'laDeg'].forEach(id => $(id).addEventListener('input', calcTrajectory));
+    ['evMph', 'laDeg', 'sprayDeg'].forEach(id => $(id).addEventListener('input', calcTrajectory));
 
     // Allow Enter key to recalc without submitting any form.
     document.addEventListener('keydown', (e) => {
@@ -289,8 +603,10 @@
       if (t.id === 'distance2' || t.id === 'fps') { e.preventDefault(); calcTime(); }
       if (t.id === 'distance3' || t.id === 'time3') { e.preventDefault(); calcMph(); }
       if (t.id === 'mph4' || t.id === 'distance4') { e.preventDefault(); calcTimeAtMph(); }
-      if (t.id === 'evMph' || t.id === 'laDeg') { e.preventDefault(); calcTrajectory(); }
+      if (t.id === 'evMph' || t.id === 'laDeg' || t.id === 'sprayDeg') { e.preventDefault(); calcTrajectory(); }
     });
+
+    runParityChecks();
   </script>
 </body>
 

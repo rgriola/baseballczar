@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T08:18:00Z
 /**
  * Full-game orchestrator for the tick engine.
  *
@@ -17,31 +18,25 @@
  */
 import type { AtBatRecord, Player, Team, GameResult, Position } from '@baseballczar/sim-engine';
 import { throwVelocityMph } from '@baseballczar/sim-engine';
-import type { WorldSnapshot, TickEvent, Point2D, FielderEntity } from './entities';
+import type { WorldSnapshot, FielderEntity, RunnerEntity } from './entities';
 import { simulateAtBatTick, type TickSimOptions } from './tickEngine';
+import { BASE_POS } from './runnerAI';
 import {
   computeDefensiveAlignment,
-  evaluateSignal,
-  selectPitch,
   type GameSituation,
-  type PitchCall,
 } from './aiManager';
 import {
   createStrategicState,
-  evaluatePitchingChange,
-  evaluatePinchDecision,
-  executePitchingChange,
-  executePinchDecision,
   evaluateInningTransition,
-  type StrategicState,
 } from './strategicManager';
 import {
   type ManagerProfile,
   MANAGER_PROFILES,
-  adjustedPitchThreshold,
   shouldShift,
 } from './managerProfiles';
 import { FIELDER_POSITIONS_FT } from '@baseballczar/sim-engine';
+import { normalizeStarterIndex, syncPitcherFromAtBat } from './pitchingPlayback';
+import { getRunnerOnBasePoint } from './fieldGeometry';
 
 // ─── Full-game simulation ────────────────────────────────────────
 
@@ -50,6 +45,10 @@ export interface FullGameOptions extends TickSimOptions {
   homeProfile?: ManagerProfile;
   /** Manager profile for the away team. Default: balanced. */
   awayProfile?: ManagerProfile;
+  /** Rotation slot to use as the home starter for this game. */
+  homeStarterIndex?: number;
+  /** Rotation slot to use as the away starter for this game. */
+  awayStarterIndex?: number;
   /** Max at-bats to simulate (for debugging). 0 = full game. */
   maxAtBats?: number;
 }
@@ -89,6 +88,10 @@ export function simulateFullGame(
 ): FullGameResult {
   const homeProfile = opts.homeProfile ?? MANAGER_PROFILES.balanced;
   const awayProfile = opts.awayProfile ?? MANAGER_PROFILES.balanced;
+  const homeStarterIndex = normalizeStarterIndex(opts.homeStarterIndex ?? 0, homeTeam.rotation.length);
+  const awayStarterIndex = normalizeStarterIndex(opts.awayStarterIndex ?? 0, awayTeam.rotation.length);
+  const homeStartingPitcher = homeTeam.rotation[homeStarterIndex] ?? homeTeam.rotation[0];
+  const awayStartingPitcher = awayTeam.rotation[awayStarterIndex] ?? awayTeam.rotation[0];
   const maxABs = opts.maxAtBats ?? 0;
 
   // Build defense rosters
@@ -96,8 +99,8 @@ export function simulateFullGame(
   const awayDefense = buildDefenseMap(awayTeam);
 
   // Initialize strategic state for both teams
-  const homeStrategic = createStrategicState(homeTeam, homeTeam.rotation[0]);
-  const awayStrategic = createStrategicState(awayTeam, awayTeam.rotation[0]);
+  const homeStrategic = createStrategicState(homeTeam, homeStartingPitcher, homeStarterIndex);
+  const awayStrategic = createStrategicState(awayTeam, awayStartingPitcher, awayStarterIndex);
 
   // Build resting-state fielder arrays so every snapshot has visible fielders.
   // Top of 1st: away team bats, home team fields.
@@ -124,20 +127,28 @@ export function simulateFullGame(
   for (let i = 0; i < limit; i++) {
     const ab = abs[i];
 
+    // Keep strategic context current for inning/score-based decisions.
+    homeStrategic.score = { us: homeScore, them: awayScore };
+    awayStrategic.score = { us: awayScore, them: homeScore };
+    homeStrategic.inning = ab.inning;
+    awayStrategic.inning = ab.inning;
+    homeStrategic.half = ab.half;
+    awayStrategic.half = ab.half;
+
     // Detect inning changes
     if (ab.inning !== currentInning || ab.half !== currentHalf) {
       // Inning transition — evaluate strategic decisions
       const isHomeBatting = ab.half === 'bottom';
       const defensiveTeam = isHomeBatting ? awayTeam : homeTeam;
       const defensiveStrategic = isHomeBatting ? awayStrategic : homeStrategic;
-      const defensiveProfile = isHomeBatting ? awayProfile : homeProfile;
+      const opposingStrategic = isHomeBatting ? homeStrategic : awayStrategic;
 
       // Evaluate inning transition
       const transition = evaluateInningTransition(
         defensiveStrategic,
         0,  // runsAllowedThisInning from previous half
         getUpcomingBatters(abs, i),
-        isHomeBatting ? homeTeam.rotation[0] : awayTeam.rotation[0],
+        opposingStrategic.currentPitcher,
         defensiveTeam.lineup,
       );
 
@@ -153,15 +164,15 @@ export function simulateFullGame(
         });
       }
 
-      // Execute pitching change if warranted
+      // In pre-rolled playback, AB records are the source of truth for pitching changes.
+      // Keep transition decisions as advisory notes only.
       if (transition.pitchingChange) {
-        executePitchingChange(defensiveStrategic, transition.pitchingChange);
         strategicLog.push({
           inning: ab.inning,
           half: ab.half,
           abIndex: i,
-          type: 'pitching-change',
-          detail: `${transition.pitchingChange.remove.lastName} → ${transition.pitchingChange.bring.lastName}`,
+          type: 'manager-signal',
+          detail: `Pitching recommendation: ${transition.pitchingChange.remove.lastName} → ${transition.pitchingChange.bring.lastName}`,
           team: isHomeBatting ? 'away' : 'home',
         });
       }
@@ -192,10 +203,23 @@ export function simulateFullGame(
 
     // ── Pre-AB tactical decisions ────────────────────
     const isHomeBatting = ab.half === 'bottom';
-    const battingProfile = isHomeBatting ? homeProfile : awayProfile;
+    const defensiveTeamTag: 'home' | 'away' = isHomeBatting ? 'away' : 'home';
+    const defensiveStrategic = isHomeBatting ? awayStrategic : homeStrategic;
     const defensiveProfile = isHomeBatting ? awayProfile : homeProfile;
     const defenseMap = isHomeBatting ? awayDefense : homeDefense;
     const teamColor = isHomeBatting ? 0x1e5631 : 0x2a3a6e;
+
+    const pitchingChangeDetail = syncPitcherFromAtBat(defensiveStrategic, ab.pitcher);
+    if (pitchingChangeDetail) {
+      strategicLog.push({
+        inning: ab.inning,
+        half: ab.half,
+        abIndex: i,
+        type: 'pitching-change',
+        detail: pitchingChangeDetail,
+        team: defensiveTeamTag,
+      });
+    }
 
     const situation: GameSituation = {
       outs: ab.outs,
@@ -219,20 +243,22 @@ export function simulateFullGame(
           abIndex: i,
           type: 'defensive-shift',
           detail: alignment.description,
-          team: isHomeBatting ? 'away' : 'home',
+          team: defensiveTeamTag,
         });
       }
     }
 
     // ── Build at-bat-start event ─────────────────────
-    const batterName = `${ab.batter.firstName[0]}. ${ab.batter.lastName}`;
-    const pitcherPlayer = isHomeBatting ? awayTeam.rotation[0] : homeTeam.rotation[0];
-    const pitcherName = `${pitcherPlayer.firstName[0]}. ${pitcherPlayer.lastName}`;
+    const batterName = playerTag(ab.batter);
+    const pitcherPlayer = defensiveStrategic.currentPitcher;
+    defenseMap.set('P', pitcherPlayer);
+    const pitcherName = playerTag(pitcherPlayer);
     const activeBases = runnersOnBase.map(r => r.base);
 
     const abStartEvent: import('./entities').TickEvent = {
       type: 'at-bat-start',
       batter: {
+        id: ab.batter.id,
         name: batterName,
         hand: ab.batter.hand ?? 'R',
         avg: ab.batter.skills.avg,
@@ -241,6 +267,7 @@ export function simulateFullGame(
         speed: ab.batter.skills.speed,
       },
       pitcher: {
+        id: pitcherPlayer.id,
         name: pitcherName,
         hand: pitcherPlayer.hand ?? 'R',
         ctrl: pitcherPlayer.skills.eye ?? 5,
@@ -261,6 +288,7 @@ export function simulateFullGame(
     if (!ab.battedBall) {
       // Update pitch count
       pitchCount += ab.pitches.length;
+      defensiveStrategic.pitchCount += ab.pitches.length;
 
       const gsBase: import('./entities').GameState = {
         inning: ab.inning, half: ab.half, outs: ab.outs,
@@ -272,6 +300,7 @@ export function simulateFullGame(
         },
         batter: batterName, pitcher: pitcherName, abIndex: i,
       };
+      const pitchRunners = buildPitchRunners(runnersOnBase, ab.batter);
 
       for (let pi = 0; pi < ab.pitches.length; pi++) {
         const p = ab.pitches[pi];
@@ -281,15 +310,16 @@ export function simulateFullGame(
         const pitchEvents: import('./entities').TickEvent[] = [];
         if (isFirst) pitchEvents.push(abStartEvent);
 
-        pitchEvents.push(...buildPitchTickEvents(p, pitcherPlayer));
+        pitchEvents.push(...buildPitchTickEvents(p, pitcherPlayer, ab.batter));
 
         if (isLast) {
-          pitchEvents.push({ type: 'at-bat-end', result: ab.result, batterName, rbis: ab.rbis });
+          pitchEvents.push({ type: 'at-bat-end', result: ab.result, batterId: ab.batter.id, batterName, rbis: ab.rbis });
         }
 
         timeOffset = emitPitchSnapshots(
           allSnapshots, timeOffset, currentFielders, pitchEvents,
           isFirst ? gsBase : undefined,
+          pitchRunners,
         );
       }
 
@@ -323,6 +353,7 @@ export function simulateFullGame(
     // ── Pre-contact pitches (count buildup) ────────────
     // Animate each pitch before the final contact pitch.
     const preContactPitches = ab.pitches.slice(0, -1);
+    const pitchRunners = buildPitchRunners(runnersOnBase, ab.batter);
 
     for (let pi = 0; pi < preContactPitches.length; pi++) {
       const p = preContactPitches[pi];
@@ -331,11 +362,12 @@ export function simulateFullGame(
       const pitchEvents: import('./entities').TickEvent[] = [];
       if (isFirst) pitchEvents.push(abStartEvent);
 
-      pitchEvents.push(...buildPitchTickEvents(p, pitcherPlayer));
+      pitchEvents.push(...buildPitchTickEvents(p, pitcherPlayer, ab.batter));
 
       timeOffset = emitPitchSnapshots(
         allSnapshots, timeOffset, currentFielders, pitchEvents,
         isFirst ? gameState : undefined,
+        pitchRunners,
       );
     }
 
@@ -350,7 +382,7 @@ export function simulateFullGame(
     // so every pitch shows in the play-by-play, including the one that was hit.
     if (abSnapshots.length > 0) {
       const contactPitch = ab.pitches[ab.pitches.length - 1];
-      const contactPitchEvents = buildPitchTickEvents(contactPitch, pitcherPlayer);
+      const contactPitchEvents = buildPitchTickEvents(contactPitch, pitcherPlayer, ab.batter);
 
       // Prepend: at-bat-start (if no pre-contact pitches) → pitch → pitch-result → existing events
       const injected: import('./entities').TickEvent[] = [];
@@ -366,13 +398,13 @@ export function simulateFullGame(
       }
     }
 
-    // Build fielded-by label for at-bat-end
-    let fieldedByLabel: string | undefined;
-    if (ab.fieldedBy) {
+    // Build fielded-by label for at-bat-end from actual tick involvement first.
+    let fieldedByLabel = inferFieldedByLabelFromSnapshots(abSnapshots, defenseMap);
+    if (!fieldedByLabel && ab.fieldedBy) {
       const fPlayer = defenseMap.get(ab.fieldedBy);
       if (fPlayer) {
-        const displayPos = ab.fieldedBy.replace(/^B(\d)/, '$1B');
-        fieldedByLabel = `${fPlayer.firstName[0]}. ${fPlayer.lastName} (${displayPos})`;
+        const displayPos = displayPosition(ab.fieldedBy);
+        fieldedByLabel = `${playerTag(fPlayer)} (${displayPos})`;
       }
     }
 
@@ -381,7 +413,7 @@ export function simulateFullGame(
       const lastSnap = abSnapshots[abSnapshots.length - 1];
       lastSnap.events = [
         ...lastSnap.events.filter(e => e.type !== 'play-complete'),
-        { type: 'at-bat-end', result: ab.result, batterName, rbis: ab.rbis, fieldedBy: fieldedByLabel },
+        { type: 'at-bat-end', result: ab.result, batterId: ab.batter.id, batterName, rbis: ab.rbis, fieldedBy: fieldedByLabel },
         { type: 'play-complete' },
       ];
     }
@@ -414,6 +446,7 @@ export function simulateFullGame(
 
     // Update pitch count
     pitchCount += ab.pitches.length;
+    defensiveStrategic.pitchCount += ab.pitches.length;
 
     // Update game state from the at-bat result
     const stateUpdate = updateGameState(ab, runnersOnBase, outs);
@@ -433,6 +466,98 @@ export function simulateFullGame(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
+
+function playerTag(player: Player): string {
+  return `#${player.id} ${player.lastName}`;
+}
+
+function displayPosition(pos: string): string {
+  return pos.replace(/^B(\d)/, '$1B');
+}
+
+function formatFieldingActorLabel(
+  positionCode: string,
+  opts: { playerId?: number; playerName?: string },
+  defenseMap: Map<Position, Player>,
+): string | undefined {
+  const displayPos = displayPosition(positionCode);
+
+  if (opts.playerName) {
+    return `${opts.playerName} (${displayPos})`;
+  }
+
+  if (opts.playerId != null && opts.playerId > 0) {
+    const rosterPlayer = defenseMap.get(positionCode as Position);
+    if (rosterPlayer && rosterPlayer.id === opts.playerId) {
+      return `${playerTag(rosterPlayer)} (${displayPos})`;
+    }
+    return `#${opts.playerId} (${displayPos})`;
+  }
+
+  const rosterPlayer = defenseMap.get(positionCode as Position);
+  return rosterPlayer ? `${playerTag(rosterPlayer)} (${displayPos})` : undefined;
+}
+
+function inferFieldedByLabelFromSnapshots(
+  snapshots: WorldSnapshot[],
+  defenseMap: Map<Position, Player>,
+): string | undefined {
+  const findLabel = (
+    match: (event: import('./entities').TickEvent) => string | undefined,
+  ): string | undefined => {
+    for (const snap of snapshots) {
+      for (const event of snap.events) {
+        const label = match(event);
+        if (label) return label;
+      }
+    }
+    return undefined;
+  };
+
+  const directFielding = findLabel((event) => {
+    if (event.type === 'ball-caught' || event.type === 'ball-fielded') {
+      return formatFieldingActorLabel(
+        event.by,
+        { playerId: event.playerId, playerName: event.playerName },
+        defenseMap,
+      );
+    }
+    return undefined;
+  });
+  if (directFielding) return directFielding;
+
+  const throwOrigin = findLabel((event) => {
+    if (event.type === 'throw-released') {
+      return formatFieldingActorLabel(
+        event.from,
+        { playerId: event.fromId, playerName: event.fromName },
+        defenseMap,
+      );
+    }
+    return undefined;
+  });
+  if (throwOrigin) return throwOrigin;
+
+  return findLabel((event) => {
+    if (event.type === 'ball-received') {
+      return formatFieldingActorLabel(
+        event.by,
+        { playerId: event.playerId, playerName: event.playerName },
+        defenseMap,
+      );
+    }
+    return undefined;
+  });
+}
+
+function turnRateFromAg(ag: number): number {
+  const clamped = Math.max(1, Math.min(10, ag));
+  return ((90 + (clamped - 1) * 30) * Math.PI) / 180;
+}
+
+function facingToPoint(from: { x: number; y: number }, to: { x: number; y: number }): number {
+  return Math.atan2(-(to.y - from.y), to.x - from.x);
+}
 
 /** Map spray angle to human-readable direction label. */
 function sprayDirectionLabel(angleDeg: number): string {
@@ -458,6 +583,7 @@ function pitchTypeLabel(zone: 'in' | 'edge' | 'off'): string {
 function buildPitchTickEvents(
   p: import('@baseballczar/sim-engine').PitchEvent,
   pitcher: Player,
+  batter: Player,
 ): import('./entities').TickEvent[] {
   const events: import('./entities').TickEvent[] = [];
 
@@ -469,6 +595,10 @@ function buildPitchTickEvents(
   events.push({
     type: 'pitch',
     pitchNum: p.pitchNum,
+    batterId: batter.id,
+    batterName: playerTag(batter),
+    pitcherId: pitcher.id,
+    pitcherName: playerTag(pitcher),
     zone: p.intentZone,
     actualInZone: p.actualInZone,
     speed: pitchTypeLabel(p.intentZone),
@@ -476,15 +606,23 @@ function buildPitchTickEvents(
     swung: p.swung,
   });
 
-  // Build foul ball data if the batter made foul contact
-  let foulBall: { exitVeloMph: number; launchAngleDeg: number; distanceFt: number; sprayDirection: string } | undefined;
-  if (p.battedBall && p.battedBall.isFoul) {
-    foulBall = {
+  // Build contact data for fouls and fair balls so pitch-result PBP has EV/LA/spray.
+  let foulBall: { exitVeloMph: number; launchAngleDeg: number; distanceFt: number; sprayDirection: string; peakHeightFt?: number } | undefined;
+  let inPlayBall: { exitVeloMph: number; launchAngleDeg: number; distanceFt: number; sprayDirection: string; peakHeightFt?: number } | undefined;
+  if (p.battedBall) {
+    const contact = {
       exitVeloMph: p.battedBall.exitVeloMph,
       launchAngleDeg: p.battedBall.launchAngleDeg,
       distanceFt: p.battedBall.distanceFt,
       sprayDirection: sprayDirectionLabel(p.battedBall.sprayAngleDeg),
+      peakHeightFt: p.battedBall.peakHeightFt,
     };
+
+    if (p.battedBall.isFoul) {
+      foulBall = contact;
+    } else {
+      inPlayBall = contact;
+    }
   }
 
   events.push({
@@ -492,7 +630,12 @@ function buildPitchTickEvents(
     outcome: p.outcome,
     balls: p.balls,
     strikes: p.strikes,
+    batterId: batter.id,
+    batterName: playerTag(batter),
+    pitcherId: pitcher.id,
+    pitcherName: playerTag(pitcher),
     foulBall,
+    inPlayBall,
   });
 
   return events;
@@ -511,6 +654,7 @@ function emitPitchSnapshots(
   fielders: FielderEntity[],
   events: import('./entities').TickEvent[],
   gameState?: import('./entities').GameState,
+  runners: RunnerEntity[] = [],
 ): number {
   const mound = FIELDER_POSITIONS_FT.P;
   const plate = { x: 0, y: 0 };
@@ -521,7 +665,7 @@ function emitPitchSnapshots(
     time: t,
     ball: { pos: { x: mound.x, y: mound.y, z: 5.5 }, state: { type: 'in-flight', vel: flightVel } },
     fielders,
-    runners: [],
+    runners: cloneRunnersForSnapshot(runners),
     events,
     gameState,
   });
@@ -531,7 +675,7 @@ function emitPitchSnapshots(
     time: t + 0.35,
     ball: { pos: { x: plate.x, y: plate.y, z: 3 }, state: { type: 'in-flight', vel: { x: 0, y: -20, z: -2 } } },
     fielders,
-    runners: [],
+    runners: cloneRunnersForSnapshot(runners),
     events: [],
   });
 
@@ -540,11 +684,63 @@ function emitPitchSnapshots(
     time: t + 0.70,
     ball: { pos: { x: mound.x, y: mound.y, z: 5 }, state: { type: 'idle' } },
     fielders,
-    runners: [],
+    runners: cloneRunnersForSnapshot(runners),
     events: [],
   });
 
   return t + 0.85;  // total pitch cycle
+}
+
+/** Build static runner entities for pitch snapshots between balls in play. */
+function buildPitchRunners(
+  runnersOnBase: { player: Player; base: 'first' | 'second' | 'third' }[],
+  batter?: Player,
+): RunnerEntity[] {
+  const runners: RunnerEntity[] = runnersOnBase.map((r): RunnerEntity => {
+    const pos = getRunnerOnBasePoint(r.base);
+    return {
+      id: r.player.id,
+      pos,
+      state: { type: 'on-base', base: r.base },
+      speedFps: 22 + (Math.max(1, r.player.skills.speed) - 1) * 1.0,
+      agility: r.player.skills.ag,
+      facingRad: facingToPoint(pos, BASE_POS.home),
+      turnRateRad: turnRateFromAg(r.player.skills.ag),
+    };
+  });
+
+  if (!batter) return runners;
+
+  const batterAg = batter.skills.ag ?? 5;
+  const batterStart = {
+    x: batter.hand === 'L' ? 5 : -5,
+    y: 0,
+  };
+
+  runners.push({
+    id: batter.id,
+    pos: batterStart,
+    state: { type: 'on-base', base: 'first' },
+    speedFps: 22 + (Math.max(1, batter.skills.speed) - 1) * 1.0,
+    agility: batterAg,
+    facingRad: facingToPoint(batterStart, FIELDER_POSITIONS_FT.P),
+    turnRateRad: turnRateFromAg(batterAg),
+  });
+
+  return runners;
+}
+
+/** Clone runner entities so snapshots don't share mutable object references. */
+function cloneRunnersForSnapshot(runners: RunnerEntity[]): RunnerEntity[] {
+  return runners.map((r) => ({
+    id: r.id,
+    pos: { ...r.pos },
+    state: { ...r.state } as RunnerEntity['state'],
+    speedFps: r.speedFps,
+    agility: r.agility,
+    facingRad: r.facingRad,
+    turnRateRad: r.turnRateRad,
+  }));
 }
 
 /** Build a resting-state fielder array (all 9 at home positions, state idle). */
@@ -561,7 +757,10 @@ function buildRestingFielders(
       pos: { ...home },
       homePos: { ...home },
       state: { type: 'idle' as const },
-      speedFps: 0,
+      speedFps: 22 + (Math.max(1, player?.skills.speed ?? 5) - 1) * 1.0,
+      agility: player?.skills.ag ?? 5,
+      facingRad: facingToPoint(home, BASE_POS.home),
+      turnRateRad: turnRateFromAg(player?.skills.ag ?? 5),
       throwVeloFps: 0,
       defense: player?.skills.fielding ?? 5,
       playerId: player?.id ?? -1,

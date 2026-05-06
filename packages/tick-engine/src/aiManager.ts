@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T06:39:42Z
 /**
  * AI Manager — the central intelligence layer.
  *
@@ -17,6 +18,7 @@ import type { Position } from '@baseballczar/sim-engine';
 import { dist2D, COLLIDERS, ballWillReachFielder } from './spatial';
 import { commandRunner, BASE_POS, nextBase } from './runnerAI';
 import { throwBall } from './ballPhysics';
+import { getBaseAnchor, getFielderCoverPoint, type BaseName, type OccupiedBase } from './fieldGeometry';
 
 // ─── Game situation awareness ────────────────────────────────────
 
@@ -51,39 +53,26 @@ export function decideThrowTarget(
   runners: RunnerEntity[],
   situation: GameSituation,
 ): ThrowTarget {
-  const activeRunners = runners.filter(r =>
-    r.state.type === 'running' || r.state.type === 'on-base'
-  );
+  const movingRunners = runners.filter((r): r is RunnerEntity & {
+    state: { type: 'running'; from: Point2D; to: Point2D }
+  } => r.state.type === 'running');
 
-  if (activeRunners.length === 0) {
-    // No runners — throw to pitcher/first base
+  if (movingRunners.length === 0) {
+    const settleBase = closestBaseTo(fielder.pos);
     return {
-      base: 'first',
-      point: BASE_POS.first,
-      priority: 1,
-      reason: 'no runners',
+      base: settleBase,
+      point: BASE_POS[settleBase],
+      priority: 0,
+      reason: 'no immediate play',
     };
   }
 
   const targets: ThrowTarget[] = [];
 
-  for (const runner of activeRunners) {
+  for (const runner of movingRunners) {
     // Where is this runner heading?
-    let targetBase: string;
-    let runnerTarget: Point2D;
-
-    if (runner.state.type === 'running') {
-      // Runner is in motion — throw ahead of them
-      const closestBaseToTarget = closestBaseTo(runner.state.to);
-      targetBase = closestBaseToTarget;
-      runnerTarget = runner.state.to;
-    } else if (runner.state.type === 'on-base') {
-      // Runner on base — throw to the NEXT base (where they'd go)
-      targetBase = nextBase(runner.state.base);
-      runnerTarget = BASE_POS[targetBase];
-    } else {
-      continue;
-    }
+    const targetBase = closestBaseTo(runner.state.to);
+    const runnerTarget = BASE_POS[targetBase];
 
     const throwDist = dist2D(fielder.pos, runnerTarget);
     const runnerDist = dist2D(runner.pos, runnerTarget);
@@ -91,11 +80,12 @@ export function decideThrowTarget(
     // Can we beat the runner there?
     // Rough: throw arrives in throwDist / throwVelo seconds
     // Runner arrives in runnerDist / runnerSpeed seconds
-    const throwTime = throwDist / fielder.throwVeloFps;
-    const runnerTime = runnerDist / runner.speedFps;
-    const canBeat = throwTime < runnerTime + 0.3;  // 0.3s buffer for catch/tag
+    const throwTime = throwDist / Math.max(1, fielder.throwVeloFps);
+    const runnerTime = runnerDist / Math.max(1, runner.speedFps);
+    const canBeat = throwTime < runnerTime + 0.2;
+    const startedFromHome = dist2D(runner.state.from, BASE_POS.home) < 12;
 
-    // Priority: lead runner first, then can-beat bonus, then situation
+    // Priority: baseball progression first (lead runner / force), then beatability.
     let priority = 0;
 
     // Lead runner bonus (closer to scoring = higher priority)
@@ -107,11 +97,22 @@ export function decideThrowTarget(
     };
     priority += basePriority[targetBase] ?? 1;
 
+    // Batter-runner force at 1B is the default infield progression.
+    if (targetBase === 'first' && startedFromHome) {
+      priority += 5;
+    }
+
+    // Force play at 2B for lead runner from 1B.
+    if (targetBase === 'second' && !startedFromHome) {
+      priority += 2;
+    }
+
     // Can-beat bonus
-    if (canBeat) priority += 5;
+    if (canBeat) priority += 4;
+    else priority -= 1;
 
     // Two-out bonus (any out is valuable)
-    if (situation.outs === 2) priority += 3;
+    if (situation.outs === 2) priority += 2;
 
     // Close game bonus
     if (Math.abs(situation.scoreDiff) <= 2) priority += 2;
@@ -128,8 +129,8 @@ export function decideThrowTarget(
   targets.sort((a, b) => b.priority - a.priority);
 
   return targets[0] ?? {
-    base: 'second',
-    point: BASE_POS.second,
+    base: 'first',
+    point: BASE_POS.first,
     priority: 0,
     reason: 'fallback',
   };
@@ -295,15 +296,30 @@ export function reassignFielderRoles(
 
   const candidates = fielders.filter(f =>
     (f.state.type === 'idle' || f.state.type === 'returning' || f.state.type === 'backing-up')
-    && ['B1', 'B2', 'SS', 'B3', 'C'].includes(f.position)
+    && ['B1', 'B2', 'SS', 'B3', 'C', 'P'].includes(f.position)
+    && (targetBase === 'home' || f.position !== 'C')
   );
 
-  const closest = candidates.sort((a, b) =>
-    dist2D(a.pos, basePt) - dist2D(b.pos, basePt)
-  )[0];
+  const preferredByBase: Record<BaseName, Position[]> = {
+    home: ['C', 'P', 'B3'],
+    first: ['B1', 'P', 'B2'],
+    second: ['B2', 'SS', 'B1'],
+    third: ['B3', 'SS', 'P'],
+  };
+  const preferred = preferredByBase[targetBase] ?? [];
+
+  const closest = candidates.sort((a, b) => {
+    const aPref = preferred.includes(a.position) ? 0 : 1;
+    const bPref = preferred.includes(b.position) ? 0 : 1;
+    if (aPref !== bPref) return aPref - bPref;
+    return dist2D(a.pos, basePt) - dist2D(b.pos, basePt);
+  })[0];
 
   if (closest) {
-    closest.state = { type: 'covering', base: basePt };
+    const coverPoint = targetBase === 'home'
+      ? getBaseAnchor('home')
+      : getFielderCoverPoint(targetBase as OccupiedBase, closest.position);
+    closest.state = { type: 'covering', base: coverPoint };
   }
 }
 
@@ -344,14 +360,14 @@ export function updatePredictedTracking(
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
-function closestBaseTo(pt: Point2D): string {
-  let best = 'home';
+function closestBaseTo(pt: Point2D): BaseName {
+  let best: BaseName = 'home';
   let bestDist = Infinity;
   for (const [name, pos] of Object.entries(BASE_POS)) {
     const d = dist2D(pt, pos);
     if (d < bestDist) {
       bestDist = d;
-      best = name;
+      best = name as BaseName;
     }
   }
   return best;

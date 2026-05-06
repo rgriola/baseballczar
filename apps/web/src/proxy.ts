@@ -1,20 +1,23 @@
+// Last touched by agent: 2026-05-05T17:09:42Z
 import { type NextRequest, NextResponse } from 'next/server';
+import { classifyProxyPath } from '@/lib/proxy/route-classification';
 import { updateSession } from '@/lib/supabase/middleware';
 import { apiRateLimit, authRateLimit } from '@/lib/redis/rate-limit';
 
 export async function proxy(request: NextRequest) {
-  // Skip rate limiting if Upstash env vars are not configured
+  const path = request.nextUrl.pathname;
+  const route = classifyProxyPath(path);
+
   if (
+    route.shouldRateLimit &&
     process.env.UPSTASH_REDIS_REST_URL &&
     process.env.UPSTASH_REDIS_REST_TOKEN
   ) {
-    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? '127.0.0.1';
-    const path = request.nextUrl.pathname;
+    const ip =
+      request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+      '127.0.0.1';
 
-    const limiter = path.startsWith('/login') || path.startsWith('/signup') || path.startsWith('/reset-password')
-      ? authRateLimit
-      : apiRateLimit;
-
+    const limiter = route.isAuthPage ? authRateLimit : apiRateLimit;
     const { success, limit, remaining, reset } = await limiter.limit(ip);
 
     if (!success) {
@@ -29,18 +32,20 @@ export async function proxy(request: NextRequest) {
     }
   }
 
-  return await updateSession(request);
+  if (route.shouldRunSessionUpdate) {
+    return await updateSession(request);
+  }
+
+  return NextResponse.next();
 }
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization)
-     * - favicon.ico (favicon)
-     * - public folder assets
-     */
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/login',
+    '/signup',
+    '/reset-password',
+    '/auth/:path*',
+    '/dashboard/:path*',
+    '/api/:path*',
   ],
 };

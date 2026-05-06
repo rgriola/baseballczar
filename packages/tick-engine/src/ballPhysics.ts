@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T06:10:11Z
 /**
  * Per-tick ball physics — 3D Euler integration with drag and gravity.
  *
@@ -27,6 +28,10 @@ const GRASS_DECEL = 14;          // outfield grass
 const DIRT_DECEL = 9;            // infield dirt skin — lower friction, ball skips faster
 const BOUNCE_RESTITUTION = 0.35;  // vertical velocity retained on bounce
 const HORIZ_BOUNCE = 0.75;        // horizontal velocity retained on bounce
+const CONTACT_HEIGHT_FT = 3;
+const CALIBRATION_DT = 1 / 120;
+const CALIBRATION_MAX_SEC = 12;
+const CALIBRATION_ITERS = 5;
 
 // Infield dirt geometry: roughly a 95-ft radius arc from the mound center
 // (61 ft from home). Points inside this radius are on dirt.
@@ -49,25 +54,130 @@ function surfaceDecel(pos: Point2D): number {
  * Launch the ball from bat contact. Converts exit velocity / launch angle /
  * spray angle into a 3D velocity vector and sets the ball state to in-flight.
  */
+export interface LaunchBallProfile {
+  targetDistanceFt?: number;
+  targetHangTimeSec?: number;
+  targetPeakHeightFt?: number;
+  minPeakHeightFt?: number;
+}
+
+interface FlightProbe {
+  distanceFt: number;
+  hangTimeSec: number;
+  peakHeightFt: number;
+}
+
+function probeFlight(vHoriz: number, vVert: number): FlightProbe {
+  let s = 0;
+  let z = CONTACT_HEIGHT_FT;
+  let vx = Math.max(1, vHoriz);
+  let vz = vVert;
+  let t = 0;
+  let peak = z;
+
+  while (t < CALIBRATION_MAX_SEC) {
+    const speed = Math.hypot(vx, vz);
+    if (speed > 0.1) {
+      const dragMag = K_DRAG * speed * speed;
+      const ax = -(dragMag * vx) / speed;
+      const az = -(dragMag * vz) / speed - G;
+      vx += ax * CALIBRATION_DT;
+      vz += az * CALIBRATION_DT;
+    } else {
+      vz -= G * CALIBRATION_DT;
+    }
+
+    s += vx * CALIBRATION_DT;
+    z += vz * CALIBRATION_DT;
+    t += CALIBRATION_DT;
+    if (z > peak) peak = z;
+    if (z <= 0) break;
+  }
+
+  return {
+    distanceFt: Math.max(0, s),
+    hangTimeSec: Math.max(CALIBRATION_DT, t),
+    peakHeightFt: Math.max(peak, CONTACT_HEIGHT_FT),
+  };
+}
+
+function calibrateLaunch(
+  baseHoriz: number,
+  baseVert: number,
+  profile?: LaunchBallProfile,
+): { vHoriz: number; vVert: number } {
+  if (!profile) return { vHoriz: baseHoriz, vVert: baseVert };
+
+  const targetDistanceFt = profile.targetDistanceFt;
+  const targetHangTimeSec = profile.targetHangTimeSec;
+
+  if (targetDistanceFt == null || targetHangTimeSec == null
+    || targetDistanceFt <= 0 || targetHangTimeSec <= 0) {
+    return { vHoriz: baseHoriz, vVert: baseVert };
+  }
+
+  let vHoriz = Math.max(5, baseHoriz);
+  let vVert = baseVert;
+
+  for (let i = 0; i < CALIBRATION_ITERS; i++) {
+    const probe = probeFlight(vHoriz, vVert);
+
+    if (probe.distanceFt > 1) {
+      const distScale = Math.max(0.6, Math.min(1.8, targetDistanceFt / probe.distanceFt));
+      vHoriz *= distScale;
+    }
+
+    if (probe.hangTimeSec > 0.05) {
+      const hangScale = Math.max(0.55, Math.min(1.8, targetHangTimeSec / probe.hangTimeSec));
+      vVert *= hangScale;
+    }
+  }
+
+  let probe = probeFlight(vHoriz, vVert);
+  const desiredPeakFt = Math.max(
+    profile.minPeakHeightFt ?? 0,
+    profile.targetPeakHeightFt != null ? profile.targetPeakHeightFt * 0.9 : 0,
+  );
+
+  if (desiredPeakFt > CONTACT_HEIGHT_FT && probe.peakHeightFt < desiredPeakFt) {
+    const currentLift = Math.max(0.25, probe.peakHeightFt - CONTACT_HEIGHT_FT);
+    const neededLift = desiredPeakFt - CONTACT_HEIGHT_FT;
+    vVert *= Math.sqrt(neededLift / currentLift);
+    probe = probeFlight(vHoriz, vVert);
+
+    if (probe.distanceFt > 1) {
+      const distScale = Math.max(0.6, Math.min(1.8, targetDistanceFt / probe.distanceFt));
+      vHoriz *= distScale;
+    }
+  }
+
+  return {
+    vHoriz: Math.max(5, vHoriz),
+    vVert,
+  };
+}
+
 export function launchBall(
   ball: BallEntity,
   exitVeloMph: number,
   launchAngleDeg: number,
   sprayAngleDeg: number,
+  profile?: LaunchBallProfile,
 ): void {
   const v0 = exitVeloMph * MPH_TO_FPS;
   const laRad = (launchAngleDeg * Math.PI) / 180;
   const sprayRad = (sprayAngleDeg * Math.PI) / 180;
 
-  const vHoriz = v0 * Math.cos(laRad);
-  const vVert = v0 * Math.sin(laRad);
+  const baseHoriz = v0 * Math.cos(laRad);
+  const baseVert = v0 * Math.sin(laRad);
+  const { vHoriz, vVert } = calibrateLaunch(baseHoriz, baseVert, profile);
 
   // Engine coords: +x = right (toward 1B), +y = toward CF, z = altitude
   const vx = vHoriz * Math.sin(sprayRad);   // lateral component
   const vy = vHoriz * Math.cos(sprayRad);   // toward CF component
   const vz = vVert;                         // altitude component
 
-  ball.pos = { x: 0, y: 0, z: 3 };  // bat height at home plate
+  ball.pos = { x: 0, y: 0, z: CONTACT_HEIGHT_FT };  // bat height at home plate
   ball.state = { type: 'in-flight', vel: { x: vx, y: vy, z: vz } };
 }
 
@@ -107,6 +217,7 @@ export function tickBall(ball: BallEntity, dt: number): TickBallResult {
       if (wallHit.isHomeRun) {
         result.homeRun = true;
         result.wallHitPoint = wallHit.hitPoint;
+        result.wallCrossHeightFt = ball.pos.z;
         // Ball keeps going (over the wall) — renderer can handle the visual
       } else if (wallHit.segment && wallHit.hitPoint) {
         // Ball bounces off the wall
@@ -219,6 +330,7 @@ export interface TickBallResult {
   homeRun?: boolean;
   wallBounce?: boolean;
   wallHitPoint?: Point2D;
+  wallCrossHeightFt?: number;
 }
 
 /**

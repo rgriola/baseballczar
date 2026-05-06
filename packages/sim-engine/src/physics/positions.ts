@@ -20,7 +20,7 @@ import type { Position } from '../config';
 
 export const FIELDER_POSITIONS_FT: Record<Position, { x: number; y: number }> = {
   P:  { x: 0,    y: 61 },
-  C:  { x: 0,    y: -3 },
+  C:  { x: 0,    y: -6 },
   B1: { x: 50,   y: 85 },
   B2: { x: 35,   y: 130 },
   SS: { x: -35,  y: 130 },

@@ -1,6 +1,8 @@
+> Last touched by agent: 2026-05-06T12:19:00Z
+
 # Sim Lab 2 — Status & TODO
 
-> Last updated: 2026-05-04 (evening)
+> Last updated: 2026-05-06 (replay stability + box score pass)
 
 ---
 
@@ -37,6 +39,7 @@
 ## ✅ Completed Work (May 4, 2026)
 
 ### 12-Skill Refactor
+
 - Split legacy `defense` → `fielding` (glove) + `throwing` (arm strength)
 - Removed `pitchIntel` → absorbed into `eye` (control) + `playIntelligence` (decisions)
 - Fixed `AG` — now means agility/reaction, not plate discipline
@@ -48,12 +51,14 @@
 - Zero TS errors across all packages
 
 ### Fielder Rendering Fix
+
 - **Root cause:** Non-batted-ball snapshots (walks, Ks, mound breathers, inning changes) had `fielders: []`, so no sprites were ever created if the game started with a strikeout/walk
 - **Fix:** Added `buildRestingFielders()` helper — builds 9-player fielder array at home positions from defense map. Every snapshot now carries fielders (10,500+ snapshots, zero empty)
 - Fielder arrays swap when defense changes sides at half-inning transitions
 - Inning-change snapshots now fire on ALL transitions (not just pitching changes)
 
 ### Pitch-by-Pitch Animation
+
 - **Before:** Walks/Ks were a single invisible snapshot. Ball state was `'idle'` (hidden). Field looked frozen.
 - **After:** `emitPitchSnapshots()` creates 3 snapshots per pitch:
   1. Ball at mound (`in-flight`, visible) — PBP events fire
@@ -63,11 +68,13 @@
 - Full count builds up in PBP synced to visual ball travel
 
 ### Visual Polish
+
 - Removed static position labels (CF, LF, etc.) from field background — player sprites carry their own label
 - Fielder sprite radius: reduced from `scale × 3.5` to `scale × 3` to match runner size
 - Ball shadow: flipped behavior — small/faint on ground, grows large when airborne (landing zone indicator)
 
 ### Rich Play-by-Play
+
 - **Every pitch accounted for**: 289/289 pitches verified in PBP — including contact pitches (previously skipped)
 - **Pitch MPH**: Real velocity computed from pitcher `throwing` skill via `throwVelocityMph()` (e.g. 91 mph Four-seam, 78 mph Changeup)
 - **Pitch type labels**: Four-seam (in zone), Slider (edge), Changeup (off)
@@ -81,18 +88,76 @@
 - **Color-coded outcomes**: Balls sky-blue, strikes red, fouls amber, contact amber, HRs yellow
 
 ### Renderer Stability
+
 - **Self-healing fielder sprites**: `updateFielders()` auto-creates sprites on demand if missing — fielders can never be invisible regardless of initialization order
 - **Team color live update**: Fielder body tint updates each frame, so inning swaps show correct team colors immediately
 - **Effect dependency fix**: Removed `speed` and `onEvent` from `loadSnapshots` effect deps — prevents spurious sprite destruction on speed change or re-render
 - **Contact pitch injection**: `buildPitchTickEvents()` for the contact pitch is injected into the tick engine's first snapshot, so "Pitch 3: Four-seam 91 mph" appears before the "Contact:" line
 
 ### Package Sync
+
 - **Root cause of stale PBP**: Page imports from `@baseballczar/tick-engine` package, not `apps/web/src/components/`. All updates to `formatPbp.ts`, `entities.ts`, `gameOrchestrator.ts` now synced to both locations
 - **GameSession.ts** updated with `throwing` field on pitcher at-bat-start event
 
 ### UX
+
 - Sim no longer auto-runs on page load — user must click Run or Random
 - `pinned` starts at `0`, effect skips until user triggers
+
+---
+
+## ✅ Completed Work (May 5, 2026) — Web Dev Performance
+
+### Pass 1 — Runtime overhead reduction (proxy/auth)
+
+- Scoped proxy logic with route classification so expensive work runs only on relevant paths
+- Narrowed proxy matcher to auth/dashboard/api routes
+- Added request-scoped Supabase user lookup caching to avoid duplicate `getUser()` calls per request
+- Added route benchmark utility and route-classification regression tests
+
+### Pass 2 — Compile graph reduction
+
+- Switched local engine workspaces to prebuilt `dist` output consumption in web builds
+- Added explicit subpath exports in engine packages and rewired Sim Lab imports to narrow module entry points
+- Extracted Sim Lab UI constants/helpers to reduce page size and keep file under the 800-line guideline
+
+### Pass 3 experiment (reverted)
+
+- Tried additional dynamic boundaries around worker bootstrap/fallback simulation path
+- Measured cold compile regression on `/sim-lab-2`
+- Reverted those changes and kept only improvements with neutral-or-better outcomes
+
+### Benchmark snapshots (webpack dev)
+
+- Baseline after early compile pass: `/` about 4.9 to 5.1s, `/sim-lab-2` about 2.4 to 2.5s
+- Best measured after import-graph narrowing: `/` about 3.1s, `/sim-lab-2` about 1.6s
+- Warm stabilized runs typically reach: `/sim-lab-2` about 13 to 25ms, `/dashboard` redirect about 3 to 15ms
+- Cold compile remains variable run-to-run; some recent cold `/sim-lab-2` samples were near 3.0s
+
+### Risk notes
+
+- Dev cold compile variance is still high enough that single-run results are noisy
+- Worker-related compile cost is still likely part of `/sim-lab-2` first-hit latency
+- Any new compile optimization should be benchmark-gated before adoption
+
+### Suggested next steps
+
+1. Capture webpack compile trace/profile for `/sim-lab-2` and identify top module cost contributors
+2. Prototype worker graph externalization so the route page does not pay full worker compile cost on first hit
+3. Add a repeatable benchmark workflow (cold + two warm passes) and track deltas in a small log file
+
+---
+
+## ✅ Completed Work (May 6, 2026) — Persisted Replay + Scheduled Sim Stability
+
+- Fixed replay SSR crash path by loading the tick scene on client only in `TickFieldCanvas`
+- Removed dashboard `simAll` internal self-fetch path; now runs direct service-client simulation loop
+- Normalized scheduled lineup creation to batting slots 1-9 (DH included), preventing #9/DH order drift
+- Persisted only played innings in `games.home_linescore` and `games.visitor_linescore` (no trailing 34-inning arrays)
+- Replay linescore now uses `game.innings` with non-zero fallback, and renders Team + inning columns + R/H/E
+- Replay games API now has fallback stats queries + player hydration if relation joins fail
+- Box score batting/pitching stat cells now use explicit high-contrast text for dark panels
+- Replay panel scrollbars are now thin and blended for better readability
 
 ---
 
@@ -128,19 +193,19 @@
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| [gameOrchestrator.ts](apps/web/src/components/sim-v2-tick/gameOrchestrator.ts) | Chains at-bats, pitch animation, fielder persistence |
-| [tickEngine.ts](apps/web/src/components/sim-v2-tick/tickEngine.ts) | Per-tick physics for batted balls |
-| [tickScene.ts](apps/web/src/components/sim-v2-tick/tickScene.ts) | Pixi.js renderer, interpolation, event dispatch |
-| [entities.ts](apps/web/src/components/sim-v2-tick/entities.ts) | All entity/snapshot/event type definitions |
-| [formatPbp.ts](apps/web/src/components/sim-v2-tick/formatPbp.ts) | TickEvent → rich narrative PBP entries |
-| [aiManager.ts](apps/web/src/components/sim-v2-tick/aiManager.ts) | Defensive alignment, pitch selection, signals |
+| File                                                                           | Purpose                                               |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------- |
+| [gameOrchestrator.ts](apps/web/src/components/sim-v2-tick/gameOrchestrator.ts) | Chains at-bats, pitch animation, fielder persistence  |
+| [tickEngine.ts](apps/web/src/components/sim-v2-tick/tickEngine.ts)             | Per-tick physics for batted balls                     |
+| [tickScene.ts](apps/web/src/components/sim-v2-tick/tickScene.ts)               | Pixi.js renderer, interpolation, event dispatch       |
+| [entities.ts](apps/web/src/components/sim-v2-tick/entities.ts)                 | All entity/snapshot/event type definitions            |
+| [formatPbp.ts](apps/web/src/components/sim-v2-tick/formatPbp.ts)               | TickEvent → rich narrative PBP entries                |
+| [aiManager.ts](apps/web/src/components/sim-v2-tick/aiManager.ts)               | Defensive alignment, pitch selection, signals         |
 | [strategicManager.ts](apps/web/src/components/sim-v2-tick/strategicManager.ts) | Pitching changes, pinch decisions, inning transitions |
-| [drawField.ts](apps/web/src/components/sim-v2/field/drawField.ts) | Static field rendering (grass, dirt, bases, dugouts) |
-| [page.tsx](apps/web/src/app/sim-lab-2/page.tsx) | Sim Lab 2 UI — controls, PBP panel, roster, box score |
-| [types.ts](packages/sim-engine/src/types.ts) | 12-skill PlayerSkills interface |
-| [meaning-of-skills.md](meaning-of-skills.md) | Definitive guide to all skill definitions |
+| [drawField.ts](apps/web/src/components/sim-v2/field/drawField.ts)              | Static field rendering (grass, dirt, bases, dugouts)  |
+| [page.tsx](apps/web/src/app/sim-lab-2/page.tsx)                                | Sim Lab 2 UI — controls, PBP panel, roster, box score |
+| [types.ts](packages/sim-engine/src/types.ts)                                   | 12-skill PlayerSkills interface                       |
+| [meaning-of-skills.md](meaning-of-skills.md)                                   | Definitive guide to all skill definitions             |
 
 ---
 
@@ -149,5 +214,5 @@
 1. ~~**Pitch speed display** — All pitches show as "fastball" or "offspeed"~~ ✅ Fixed — now shows Four-seam/Slider/Changeup + real MPH
 2. **Team color on tick snapshots** — Subsequent tick-engine snapshots may use `teamColor: 0` (partially mitigated by live tint update)
 3. **Seek re-fires events** — Scrubbing backward replays all PBP events from the beginning
-4. **Single pitcher per game** — `awayTeam.rotation[0]` is always used for pitcher name, even after pitching changes
+4. **Historical E values pre-migration** — New games persist `home_errors`/`visitor_errors`; older rows created before this migration may still show `0` unless backfilled
 5. **Dual-source code** — `packages/tick-engine/src/` and `apps/web/src/components/sim-v2-tick/` must be kept in sync manually until a proper barrel export is set up

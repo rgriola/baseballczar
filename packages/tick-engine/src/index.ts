@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T13:12:00Z
 /**
  * @baseballczar/tick-engine — Frame-by-frame simulation engine.
  *
@@ -26,6 +27,15 @@ export type {
 // ── Tick engine (per-AB simulation) ──────────────────────────────
 export { simulateAtBatTick } from './tickEngine';
 export type { TickSimOptions } from './tickEngine';
+
+// ── Tick authority (headless result authority) ──────────────────
+export { resolveAtBatHeadless } from './tickAuthority';
+export type {
+  HeadlessAtBatResolution,
+  HeadlessAtBatStatDeltas,
+  HeadlessRunnerState,
+  HeadlessTickResolveOptions,
+} from './tickAuthority';
 
 // ── Game orchestrator (full-game batch) ──────────────────────────
 export { simulateFullGame } from './gameOrchestrator';

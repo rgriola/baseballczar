@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T08:18:00Z
 /**
  * GameSession — Stateful, incremental game simulation.
  *
@@ -30,7 +31,6 @@ import {
 import {
   createStrategicState,
   evaluateInningTransition,
-  executePitchingChange,
   type StrategicState,
 } from './strategicManager';
 import {
@@ -38,6 +38,7 @@ import {
   MANAGER_PROFILES,
   shouldShift,
 } from './managerProfiles';
+import { normalizeStarterIndex, syncPitcherFromAtBat } from './pitchingPlayback';
 
 // ─── Public types ────────────────────────────────────────────────
 
@@ -49,6 +50,10 @@ export interface GameSessionConfig {
   awayTeam: Team;
   homeProfile?: ManagerProfile;
   awayProfile?: ManagerProfile;
+  /** Rotation slot to use as home starter for this game. */
+  homeStarterIndex?: number;
+  /** Rotation slot to use as away starter for this game. */
+  awayStarterIndex?: number;
   /** Pre-rolled game result. Required for 'batch' mode; ignored otherwise. */
   preRolled?: GameResult;
   /** Tick simulation options (speed multiplier, etc.). */
@@ -140,8 +145,12 @@ export class GameSession {
 
     this.homeDefense = this.buildDefenseMap(this.homeTeam);
     this.awayDefense = this.buildDefenseMap(this.awayTeam);
-    this.homeStrategic = createStrategicState(this.homeTeam, this.homeTeam.rotation[0]);
-    this.awayStrategic = createStrategicState(this.awayTeam, this.awayTeam.rotation[0]);
+    const homeStarterIndex = normalizeStarterIndex(config.homeStarterIndex ?? 0, this.homeTeam.rotation.length);
+    const awayStarterIndex = normalizeStarterIndex(config.awayStarterIndex ?? 0, this.awayTeam.rotation.length);
+    const homeStartingPitcher = this.homeTeam.rotation[homeStarterIndex] ?? this.homeTeam.rotation[0];
+    const awayStartingPitcher = this.awayTeam.rotation[awayStarterIndex] ?? this.awayTeam.rotation[0];
+    this.homeStrategic = createStrategicState(this.homeTeam, homeStartingPitcher, homeStarterIndex);
+    this.awayStrategic = createStrategicState(this.awayTeam, awayStartingPitcher, awayStarterIndex);
   }
 
   /** Current game state (read-only snapshot). */
@@ -181,17 +190,26 @@ export class GameSession {
 
     const strategicNotes: string[] = [];
 
+    // Keep strategic context current for inning/score-driven decisions.
+    this.homeStrategic.score = { us: this._homeScore, them: this._awayScore };
+    this.awayStrategic.score = { us: this._awayScore, them: this._homeScore };
+    this.homeStrategic.inning = ab.inning;
+    this.awayStrategic.inning = ab.inning;
+    this.homeStrategic.half = ab.half;
+    this.awayStrategic.half = ab.half;
+
     // ── Inning transition ──────────────────────────
     if (ab.inning !== this._inning || ab.half !== this._half) {
       const isHomeBatting = ab.half === 'bottom';
       const defensiveStrategic = isHomeBatting ? this.awayStrategic : this.homeStrategic;
       const defensiveTeam = isHomeBatting ? this.awayTeam : this.homeTeam;
+      const opposingStrategic = isHomeBatting ? this.homeStrategic : this.awayStrategic;
 
       const transition = evaluateInningTransition(
         defensiveStrategic,
         0,
         this.getUpcomingBatters(3),
-        isHomeBatting ? this.homeTeam.rotation[0] : this.awayTeam.rotation[0],
+        opposingStrategic.currentPitcher,
         defensiveTeam.lineup,
       );
 
@@ -200,9 +218,8 @@ export class GameSession {
       }
 
       if (transition.pitchingChange) {
-        executePitchingChange(defensiveStrategic, transition.pitchingChange);
         strategicNotes.push(
-          `Pitching change: ${transition.pitchingChange.remove.lastName} → ${transition.pitchingChange.bring.lastName}`
+          `Pitching recommendation: ${transition.pitchingChange.remove.lastName} → ${transition.pitchingChange.bring.lastName}`
         );
       }
 
@@ -214,9 +231,16 @@ export class GameSession {
 
     // ── Pre-AB tactical decisions ──────────────────
     const isHomeBatting = ab.half === 'bottom';
+    const defensiveTeamTag = isHomeBatting ? 'away' : 'home';
+    const defensiveStrategic = isHomeBatting ? this.awayStrategic : this.homeStrategic;
     const defensiveProfile = isHomeBatting ? this.awayProfile : this.homeProfile;
     const defenseMap = isHomeBatting ? this.awayDefense : this.homeDefense;
     const teamColor = isHomeBatting ? 0x1e5631 : 0x2a3a6e;
+
+    const pitchingChangeDetail = syncPitcherFromAtBat(defensiveStrategic, ab.pitcher);
+    if (pitchingChangeDetail) {
+      strategicNotes.push(`Pitching change (${defensiveTeamTag}): ${pitchingChangeDetail}`);
+    }
 
     const situation: GameSituation = {
       outs: ab.outs,
@@ -246,13 +270,15 @@ export class GameSession {
     }
 
     // ── Build snapshot events ──────────────────────
-    const batterName = `${ab.batter.firstName[0]}. ${ab.batter.lastName}`;
-    const pitcherPlayer = isHomeBatting ? this.awayTeam.rotation[0] : this.homeTeam.rotation[0];
-    const pitcherName = `${pitcherPlayer.firstName[0]}. ${pitcherPlayer.lastName}`;
+    const batterName = playerTag(ab.batter);
+    const pitcherPlayer = defensiveStrategic.currentPitcher;
+    defenseMap.set('P', pitcherPlayer);
+    const pitcherName = playerTag(pitcherPlayer);
 
     const abStartEvent: TickEvent = {
       type: 'at-bat-start',
       batter: {
+        id: ab.batter.id,
         name: batterName,
         hand: ab.batter.hand ?? 'R',
         avg: ab.batter.skills.avg,
@@ -261,6 +287,7 @@ export class GameSession {
         speed: ab.batter.skills.speed,
       },
       pitcher: {
+        id: pitcherPlayer.id,
         name: pitcherName,
         hand: pitcherPlayer.hand ?? 'R',
         ctrl: pitcherPlayer.skills.eye ?? 5,
@@ -288,7 +315,7 @@ export class GameSession {
         fielders: [], runners: [],
         events: [
           abStartEvent,
-          { type: 'at-bat-end', result: ab.result, batterName, rbis: ab.rbis },
+          { type: 'at-bat-end', result: ab.result, batterId: ab.batter.id, batterName, rbis: ab.rbis },
         ],
         gameState: {
           inning: ab.inning, half: ab.half, outs: ab.outs,
@@ -327,18 +354,18 @@ export class GameSession {
 
       // Inject at-bat-end into last snapshot
       if (abSnapshots.length > 0) {
-        let fieldedByLabel: string | undefined;
-        if (ab.fieldedBy) {
+        let fieldedByLabel = inferFieldedByLabelFromSnapshots(abSnapshots, defenseMap);
+        if (!fieldedByLabel && ab.fieldedBy) {
           const fPlayer = defenseMap.get(ab.fieldedBy);
           if (fPlayer) {
-            const displayPos = ab.fieldedBy.replace(/^B(\d)/, '$1B');
-            fieldedByLabel = `${fPlayer.firstName[0]}. ${fPlayer.lastName} (${displayPos})`;
+            const displayPos = displayPosition(ab.fieldedBy);
+            fieldedByLabel = `${playerTag(fPlayer)} (${displayPos})`;
           }
         }
         const lastSnap = abSnapshots[abSnapshots.length - 1];
         lastSnap.events = [
           ...lastSnap.events.filter(e => e.type !== 'play-complete'),
-          { type: 'at-bat-end', result: ab.result, batterName, rbis: ab.rbis, fieldedBy: fieldedByLabel },
+          { type: 'at-bat-end', result: ab.result, batterId: ab.batter.id, batterName, rbis: ab.rbis, fieldedBy: fieldedByLabel },
           { type: 'play-complete' },
         ];
       }
@@ -362,6 +389,7 @@ export class GameSession {
 
     // ── Update game state ──────────────────────────
     this._pitchCount += ab.pitches.length;
+    defensiveStrategic.pitchCount += ab.pitches.length;
     const stateUpdate = this.updateGameState(ab);
     this._runners = stateUpdate.runners;
     this._outs = stateUpdate.outs;
@@ -500,4 +528,87 @@ export class GameSession {
 
     return { runners: newRunners, outs: Math.min(3, newOuts) };
   }
+}
+
+function playerTag(player: Player): string {
+  return `#${player.id} ${player.lastName}`;
+}
+
+function displayPosition(pos: string): string {
+  return pos.replace(/^B(\d)/, '$1B');
+}
+
+function formatFieldingActorLabel(
+  positionCode: string,
+  opts: { playerId?: number; playerName?: string },
+  defenseMap: Map<Position, Player>,
+): string | undefined {
+  const displayPos = displayPosition(positionCode);
+
+  if (opts.playerName) {
+    return `${opts.playerName} (${displayPos})`;
+  }
+
+  if (opts.playerId != null && opts.playerId > 0) {
+    const rosterPlayer = defenseMap.get(positionCode as Position);
+    if (rosterPlayer && rosterPlayer.id === opts.playerId) {
+      return `${playerTag(rosterPlayer)} (${displayPos})`;
+    }
+    return `#${opts.playerId} (${displayPos})`;
+  }
+
+  const rosterPlayer = defenseMap.get(positionCode as Position);
+  return rosterPlayer ? `${playerTag(rosterPlayer)} (${displayPos})` : undefined;
+}
+
+function inferFieldedByLabelFromSnapshots(
+  snapshots: WorldSnapshot[],
+  defenseMap: Map<Position, Player>,
+): string | undefined {
+  const findLabel = (
+    match: (event: TickEvent) => string | undefined,
+  ): string | undefined => {
+    for (const snap of snapshots) {
+      for (const event of snap.events) {
+        const label = match(event);
+        if (label) return label;
+      }
+    }
+    return undefined;
+  };
+
+  const directFielding = findLabel((event) => {
+    if (event.type === 'ball-caught' || event.type === 'ball-fielded') {
+      return formatFieldingActorLabel(
+        event.by,
+        { playerId: event.playerId, playerName: event.playerName },
+        defenseMap,
+      );
+    }
+    return undefined;
+  });
+  if (directFielding) return directFielding;
+
+  const throwOrigin = findLabel((event) => {
+    if (event.type === 'throw-released') {
+      return formatFieldingActorLabel(
+        event.from,
+        { playerId: event.fromId, playerName: event.fromName },
+        defenseMap,
+      );
+    }
+    return undefined;
+  });
+  if (throwOrigin) return throwOrigin;
+
+  return findLabel((event) => {
+    if (event.type === 'ball-received') {
+      return formatFieldingActorLabel(
+        event.by,
+        { playerId: event.playerId, playerName: event.playerName },
+        defenseMap,
+      );
+    }
+    return undefined;
+  });
 }

@@ -1,6 +1,7 @@
+// Last touched by agent: 2026-05-05T20:40:54Z
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
+import { getSessionUser } from '@/lib/supabase/session-user';
 import { logout } from '../(auth)/actions';
 import NotificationBell from './notification-bell';
 
@@ -10,7 +11,7 @@ const NAV_LINKS = [
   { href: '/dashboard/lineup', label: 'Lineup' },
   { href: '/dashboard/rotation', label: 'Rotation' },
   { href: '/dashboard/stats', label: 'Stats' },
-  { href: '/dashboard/schedule', label: 'Schedule' },
+  { href: '/dashboard/schedule', label: 'League' },
   { href: '/dashboard/standings', label: 'Standings' },
   { href: '/dashboard/leaders', label: 'Leaders' },
   { href: '/dashboard/finance', label: 'Finance' },
@@ -25,8 +26,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
 
   if (!user) {
     redirect('/login');

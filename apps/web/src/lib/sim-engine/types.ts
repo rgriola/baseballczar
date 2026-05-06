@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T03:12:05Z
 /** Outcome codes from at-bat resolution */
 export enum AtBatOutcome {
   Single = 1,
@@ -147,6 +148,20 @@ export interface ScoreBoardState {
   home: ScoreBoardTeamData;
 }
 
+export interface BallPathWaypoint {
+  label: string;
+  x: number;
+  y: number;
+  z: number;
+  tSec?: number;
+}
+
+export interface BaseOccupancyState {
+  first: number | null;
+  second: number | null;
+  third: number | null;
+}
+
 /** A single game event for play-by-play log */
 export interface GameEvent {
   inning: number;
@@ -167,6 +182,14 @@ export interface GameEvent {
    * landing point and which fielder makes the play.
    */
   hitZone?: HitZone;
+  /** Exact batted-ball telemetry captured from the V2 sim output. */
+  sprayAngleDeg?: number;
+  launchAngleDeg?: number;
+  exitVeloMph?: number;
+  ballPathWaypoints?: BallPathWaypoint[];
+  /** Base occupancy snapshots for replay parity. */
+  baseOccupancyBefore?: BaseOccupancyState;
+  baseOccupancyAfter?: BaseOccupancyState;
 }
 
 /** Final game result */

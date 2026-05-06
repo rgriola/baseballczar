@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T08:02:00Z
 /**
  * Tick-based scene renderer.
  *
@@ -24,6 +25,21 @@ export interface TickSceneOptions {
 }
 
 export type ViewMode = 'full' | 'infield' | 'ball';
+
+export interface EventDispatchMeta {
+  snapIdx: number;
+  playbackTime: number;
+  fielderCount: number;
+  runnerCount: number;
+  ballState: BallEntity['state']['type'];
+}
+
+export interface DebugPlayerLookup {
+  [playerId: number]: {
+    lastName: string;
+    position: string;
+  };
+}
 
 export class TickScene {
   private app: Application;
@@ -58,6 +74,7 @@ export class TickScene {
     body: Graphics;
     hat: Graphics;
     hatOffsetPx: number;
+    debugTag: Text;
   }>();
 
   // Ball sprite
@@ -72,8 +89,12 @@ export class TickScene {
     container: Container;
     hat: Graphics;
     hatOffsetPx: number;
+    debugTag: Text;
   }>();
   private readonly RUNNER_COLOR = 0xd4442a;  // red-orange for runners
+  private readonly DEBUG_TAG_OFFSET_PX = 10;
+  private showDebugPlayerTags = false;
+  private debugPlayerLookup = new Map<number, { lastName: string; position: string }>();
 
   // Playback state
   private snapshots: WorldSnapshot[] = [];
@@ -82,7 +103,7 @@ export class TickScene {
   private playing = false;
 
   // Event callback
-  private onEvent?: (events: WorldSnapshot['events'], time: number) => void;
+  private onEvent?: (events: WorldSnapshot['events'], time: number, meta?: EventDispatchMeta) => void;
   /** Index of the last snapshot whose events we already emitted. */
   private lastEventSnapIdx = -1;
 
@@ -166,7 +187,7 @@ export class TickScene {
   /** Load snapshots for playback. */
   loadSnapshots(
     snapshots: WorldSnapshot[],
-    onEvent?: (events: WorldSnapshot['events'], time: number) => void,
+    onEvent?: (events: WorldSnapshot['events'], time: number, meta?: EventDispatchMeta) => void,
   ): void {
     this.snapshots = snapshots;
     this.playbackTime = 0;
@@ -191,12 +212,27 @@ export class TickScene {
   /** Seek to a specific time (seconds). */
   seek(time: number): void {
     this.playbackTime = Math.max(0, Math.min(time, this.getDuration()));
-    // Reset event tracker so we don't re-fire or skip events
-    this.lastEventSnapIdx = -1;
+    // Align event cursor to the target snapshot so seek doesn't replay history.
+    const { snapIdx } = this.findSnapshots(this.playbackTime);
+    this.lastEventSnapIdx = snapIdx;
   }
 
   setSpeed(speed: number): void {
     this.speed = speed;
+  }
+
+  setDebugPlayerTags(enabled: boolean, lookup: DebugPlayerLookup = {}): void {
+    this.showDebugPlayerTags = enabled;
+    this.debugPlayerLookup.clear();
+
+    for (const [id, info] of Object.entries(lookup)) {
+      const playerId = Number(id);
+      if (!Number.isFinite(playerId) || !info) continue;
+      this.debugPlayerLookup.set(playerId, {
+        lastName: info.lastName,
+        position: info.position,
+      });
+    }
   }
 
   getTime(): number {
@@ -301,12 +337,38 @@ export class TickScene {
 
     for (const f of fielders) {
       const { c, body, hat, hatOffsetPx } = makeFielderSprite(f.position as Position, radiusPx);
+      const debugTag = this.makeDebugTag(radiusPx);
+      c.addChild(debugTag);
       body.tint = f.teamColor;
       const px = ftToPx(f.pos, this.transform);
       c.position.set(px.x, px.y);
       this.entityLayer.addChild(c);
-      this.fielderSprites.set(f.position, { container: c, body, hat, hatOffsetPx });
+      this.fielderSprites.set(f.position, { container: c, body, hat, hatOffsetPx, debugTag });
     }
+  }
+
+  private makeDebugTag(radiusPx: number): Text {
+    const tag = new Text({
+      text: '',
+      style: {
+        fill: 0xffffff,
+        fontSize: 10,
+        fontFamily: 'monospace',
+        fontWeight: '700',
+        stroke: { color: 0x000000, width: 3, join: 'round' },
+      },
+    });
+    tag.anchor.set(0.5, 1);
+    tag.position.set(0, -radiusPx - this.DEBUG_TAG_OFFSET_PX);
+    tag.visible = false;
+    return tag;
+  }
+
+  private displayPosition(pos: string): string {
+    if (pos === 'B1') return '1B';
+    if (pos === 'B2') return '2B';
+    if (pos === 'B3') return '3B';
+    return pos;
   }
 
   private tick(): void {
@@ -366,10 +428,24 @@ export class TickScene {
     // Update runners
     this.updateRunners(snap.runners, nextSnap?.runners, u);
 
-    // Fire events — only once per snapshot
-    if (snap.events.length > 0 && this.playing && snapIdx > this.lastEventSnapIdx) {
-      this.lastEventSnapIdx = snapIdx;
-      this.onEvent?.(snap.events, snap.time);
+    // Fire every event-bearing snapshot crossed this frame.
+    if (this.playing && snapIdx > this.lastEventSnapIdx) {
+      const startIdx = Math.max(0, this.lastEventSnapIdx + 1);
+      const endIdx = Math.min(snapIdx, this.snapshots.length - 1);
+
+      for (let idx = startIdx; idx <= endIdx; idx++) {
+        const evtSnap = this.snapshots[idx];
+        if (evtSnap.events.length === 0) continue;
+        this.onEvent?.(evtSnap.events, evtSnap.time, {
+          snapIdx: idx,
+          playbackTime: this.playbackTime,
+          fielderCount: evtSnap.fielders.length,
+          runnerCount: evtSnap.runners.length,
+          ballState: evtSnap.ball.state.type,
+        });
+      }
+
+      this.lastEventSnapIdx = endIdx;
     }
 
     // Update HUD overlay
@@ -470,23 +546,25 @@ export class TickScene {
       // (handles inning changes, late initialization, or data order issues)
       if (!sp) {
         const { c, body, hat, hatOffsetPx } = makeFielderSprite(f.position as Position, radiusPx);
+        const debugTag = this.makeDebugTag(radiusPx);
+        c.addChild(debugTag);
         body.tint = f.teamColor;
         this.entityLayer.addChild(c);
-        sp = { container: c, body, hat, hatOffsetPx };
+        sp = { container: c, body, hat, hatOffsetPx, debugTag };
         this.fielderSprites.set(f.position, sp);
       }
 
       // Update team color if it changed (inning swap)
-      if (f.teamColor && f.teamColor !== 0) {
+      if (f.teamColor) {
         sp.body.tint = f.teamColor;
       }
 
       let x = f.pos.x;
       let y = f.pos.y;
+      const nf = nextFielders?.find((candidate) => candidate.position === f.position);
 
       // Interpolate with next snapshot
-      if (nextFielders && nextFielders[i]) {
-        const nf = nextFielders[i];
+      if (nf) {
         x += (nf.pos.x - x) * u;
         y += (nf.pos.y - y) * u;
       }
@@ -495,16 +573,27 @@ export class TickScene {
       sp.container.position.set(px.x, px.y);
       sp.container.zIndex = Math.round(px.y);
 
-      // Update hat (facing direction)
-      if (nextFielders && nextFielders[i]) {
-        const nf = nextFielders[i];
+      // Update hat from explicit fielder facing (sim-engine turn model).
+      if (typeof f.facingRad === 'number') {
+        let facing = f.facingRad;
+        if (nf && typeof nf.facingRad === 'number') {
+          facing = this.interpolateAngle(f.facingRad, nf.facingRad, u);
+        }
+        sp.hat.rotation = facing;
+      } else if (nf) {
         const dx = nf.pos.x - f.pos.x;
         const dy = nf.pos.y - f.pos.y;
         if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
-          const angle = Math.atan2(-dy, dx);
-          sp.hat.rotation = angle;
+          sp.hat.rotation = Math.atan2(-dy, dx);
         }
       }
+
+      const rosterInfo = this.debugPlayerLookup.get(f.playerId);
+      const lastName = rosterInfo?.lastName ?? `#${f.playerId}`;
+      const posLabel = this.displayPosition(f.position);
+      sp.debugTag.text = `${posLabel} ${lastName}`;
+      sp.debugTag.position.set(0, -radiusPx - this.DEBUG_TAG_OFFSET_PX);
+      sp.debugTag.visible = this.showDebugPlayerTags;
     }
   }
 
@@ -523,8 +612,10 @@ export class TickScene {
       // Create sprite if it doesn't exist
       if (!this.runnerSprites.has(r.id)) {
         const { c, hat, hatOffsetPx } = makeRunnerSprite(this.RUNNER_COLOR, radiusPx);
+        const debugTag = this.makeDebugTag(radiusPx);
+        c.addChild(debugTag);
         this.entityLayer.addChild(c);
-        this.runnerSprites.set(r.id, { container: c, hat, hatOffsetPx });
+        this.runnerSprites.set(r.id, { container: c, hat, hatOffsetPx, debugTag });
       }
 
       const sp = this.runnerSprites.get(r.id)!;
@@ -550,17 +641,33 @@ export class TickScene {
       if (nextRunners) {
         const nr = nextRunners.find(nr => nr.id === r.id);
         if (nr) {
-          const dx = nr.pos.x - r.pos.x;
-          const dy = nr.pos.y - r.pos.y;
-          if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
-            const angle = Math.atan2(-dy, dx);
-            sp.hat.rotation = angle;
+          if (typeof r.facingRad === 'number' && typeof nr.facingRad === 'number') {
+            sp.hat.rotation = this.interpolateAngle(r.facingRad, nr.facingRad, u);
+          } else {
+            const dx = nr.pos.x - r.pos.x;
+            const dy = nr.pos.y - r.pos.y;
+            if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
+              const angle = Math.atan2(-dy, dx);
+              sp.hat.rotation = angle;
+            }
           }
+        } else if (typeof r.facingRad === 'number') {
+          sp.hat.rotation = r.facingRad;
         }
+      } else if (typeof r.facingRad === 'number') {
+        sp.hat.rotation = r.facingRad;
       }
 
       // Hide scored runners
-      sp.container.visible = r.state.type !== 'scored';
+      const runnerVisible = r.state.type !== 'scored';
+      sp.container.visible = runnerVisible;
+
+      const rosterInfo = this.debugPlayerLookup.get(r.id);
+      const posLabel = rosterInfo?.position ?? 'RUN';
+      const lastName = rosterInfo?.lastName ?? `#${r.id}`;
+      sp.debugTag.text = `${posLabel} ${lastName}`;
+      sp.debugTag.position.set(0, -radiusPx - this.DEBUG_TAG_OFFSET_PX);
+      sp.debugTag.visible = this.showDebugPlayerTags && runnerVisible;
     }
 
     // Remove sprites for runners no longer in the snapshot
@@ -570,6 +677,11 @@ export class TickScene {
         this.runnerSprites.delete(id);
       }
     }
+  }
+
+  private interpolateAngle(from: number, to: number, u: number): number {
+    const delta = ((to - from + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+    return from + delta * u;
   }
 
   // ─── Scoreboard HUD ─────────────────────────────────────────────

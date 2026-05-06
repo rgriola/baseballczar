@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-06T15:02:00Z
 /**
  * Persist the game box score and play-by-play events to Supabase.
  */
@@ -29,11 +30,14 @@ export async function insertGameRecord(
       visitor_runs: result.visitorRuns,
       home_hits: result.homeHits,
       visitor_hits: result.visitorHits,
+      home_errors: result.scoreBoard.home.totalErrors,
+      visitor_errors: result.scoreBoard.visitor.totalErrors,
       innings: result.innings,
       winning_team_id: result.winningTeamId,
       losing_team_id: result.losingTeamId,
-      home_linescore: result.scoreBoard.home.runs.slice(1),
-      visitor_linescore: result.scoreBoard.visitor.runs.slice(1),
+      // Persist only played innings (1..N) to avoid 34-column linescore rendering.
+      home_linescore: result.scoreBoard.home.runs.slice(1, result.innings + 1),
+      visitor_linescore: result.scoreBoard.visitor.runs.slice(1, result.innings + 1),
     })
     .select('id')
     .single();
@@ -61,6 +65,12 @@ export async function insertGameRecord(
       home_hits: e.homeHits,
       runners_scored: e.runnersScored,
       hit_zone: e.hitZone ?? null,
+      spray_angle_deg: e.sprayAngleDeg ?? null,
+      launch_angle_deg: e.launchAngleDeg ?? null,
+      exit_velo_mph: e.exitVeloMph ?? null,
+      ball_path_waypoints: e.ballPathWaypoints ?? null,
+      base_occupancy_before: e.baseOccupancyBefore ?? null,
+      base_occupancy_after: e.baseOccupancyAfter ?? null,
     }));
 
     const BATCH = 200;

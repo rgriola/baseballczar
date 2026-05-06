@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-05T07:22:00Z
 /**
  * Per-tick runner AI — state-machine movement along the base paths.
  *
@@ -8,13 +9,11 @@
  */
 import type { RunnerEntity, Point2D } from './entities';
 import { dist2D, COLLIDERS } from './spatial';
+import { BASE_ANCHORS, getRunnerOnBasePoint, type OccupiedBase } from './fieldGeometry';
 
 // ─── Base coordinates (feet, same as sim-engine) ─────────────────
 export const BASE_POS: Record<string, Point2D> = {
-  home:   { x: 0, y: 0 },
-  first:  { x: 63.6, y: 63.6 },
-  second: { x: 0, y: 127.3 },
-  third:  { x: -63.6, y: 63.6 },
+  ...BASE_ANCHORS,
 };
 
 // Base path order for advancing
@@ -35,11 +34,41 @@ export function prevBase(current: string): string {
 // ─── Runner acceleration model ───────────────────────────────────
 // Matches the sim-engine: linear ramp from 0 to topSpeed over accelTime
 const ACCEL_TIME = 1.2;  // seconds to reach full sprint
+const BACKPEDAL_PENALTY = 0.5;
+const BACKPEDAL_ANGLE_RAD = (120 * Math.PI) / 180;
 
 /** Current speed (ft/s) given time spent accelerating. */
 function currentSpeed(topSpeed: number, timeRunning: number): number {
   if (timeRunning >= ACCEL_TIME) return topSpeed;
   return topSpeed * (timeRunning / ACCEL_TIME);
+}
+
+function angleTo(from: Point2D, to: Point2D): number {
+  return Math.atan2(-(to.y - from.y), to.x - from.x);
+}
+
+function normalizeAngle(rad: number): number {
+  let out = rad;
+  while (out <= -Math.PI) out += Math.PI * 2;
+  while (out > Math.PI) out -= Math.PI * 2;
+  return out;
+}
+
+function angleDelta(current: number, target: number): number {
+  return normalizeAngle(target - current);
+}
+
+function rotateToward(current: number, target: number, maxStep: number): number {
+  const delta = angleDelta(current, target);
+  if (Math.abs(delta) <= maxStep) return target;
+  return normalizeAngle(current + Math.sign(delta) * maxStep);
+}
+
+function setRunnerOnBase(runner: RunnerEntity, base: OccupiedBase): void {
+  const holdPoint = getRunnerOnBasePoint(base);
+  runner.state = { type: 'on-base', base };
+  runner.pos.x = holdPoint.x;
+  runner.pos.y = holdPoint.y;
 }
 
 // ─── State machine ───────────────────────────────────────────────
@@ -59,7 +88,13 @@ export function tickRunner(
 
   switch (runner.state.type) {
     case 'on-base': {
-      // Idle — waiting for a command from the AI Manager
+      // Idle runners should stay oriented toward home plate.
+      const targetFacing = angleTo(runner.pos, BASE_POS.home);
+      runner.facingRad = rotateToward(
+        runner.facingRad,
+        targetFacing,
+        runner.turnRateRad * dt,
+      );
       break;
     }
 
@@ -81,14 +116,25 @@ export function tickRunner(
           runner.state = { type: 'scored' };
           result.scored = true;
         } else {
-          runner.state = { type: 'on-base', base: base as 'first' | 'second' | 'third' };
+          setRunnerOnBase(runner, base as OccupiedBase);
         }
         break;
       }
 
       // Calculate current speed with acceleration
       runner._runTime = (runner._runTime ?? 0) + dt;
-      const speed = currentSpeed(runner.speedFps, runner._runTime);
+      const desiredFacing = angleTo(runner.pos, target);
+      runner.facingRad = rotateToward(
+        runner.facingRad,
+        desiredFacing,
+        runner.turnRateRad * dt,
+      );
+      const facingError = Math.abs(angleDelta(runner.facingRad, desiredFacing));
+
+      const speedBase = currentSpeed(runner.speedFps, runner._runTime);
+      const speed = facingError > BACKPEDAL_ANGLE_RAD
+        ? speedBase * BACKPEDAL_PENALTY
+        : speedBase;
       const move = Math.min(speed * dt, dist);
 
       runner.pos.x += (dx / dist) * move;
@@ -110,6 +156,7 @@ export function tickRunner(
 export function commandRunner(runner: RunnerEntity, cmd: RunnerCommand): void {
   switch (cmd.type) {
     case 'advance': {
+      const wasRunning = runner.state.type === 'running';
       const targetName = cmd.targetBase ?? (
         runner.state.type === 'on-base'
           ? nextBase(runner.state.base)
@@ -122,14 +169,18 @@ export function commandRunner(runner: RunnerEntity, cmd: RunnerCommand): void {
         from: { ...runner.pos },
         to: target,
       };
-      runner._runTime = runner._runTime ?? 0;  // preserve momentum if already running
+      runner._runTime = wasRunning ? runner._runTime ?? 0 : 0;
       break;
     }
     case 'hold': {
       // Stop at current position (stay on base)
       if (runner.state.type === 'running') {
         const base = closestBase(runner.pos);
-        runner.state = { type: 'on-base', base: base as 'first' | 'second' | 'third' };
+        if (base === 'home') {
+          runner.state = { type: 'scored' };
+        } else {
+          setRunnerOnBase(runner, base as OccupiedBase);
+        }
         runner._runTime = 0;
       }
       break;
@@ -155,7 +206,11 @@ export function commandRunner(runner: RunnerEntity, cmd: RunnerCommand): void {
       // The AI Manager will issue 'advance' after the catch
       if (runner.state.type === 'running') {
         const base = closestBase(runner.pos);
-        runner.state = { type: 'on-base', base: base as 'first' | 'second' | 'third' };
+        if (base === 'home') {
+          runner.state = { type: 'scored' };
+        } else {
+          setRunnerOnBase(runner, base as OccupiedBase);
+        }
         runner._runTime = 0;
       }
       break;
