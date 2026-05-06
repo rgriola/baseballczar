@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-05T20:40:54Z
+// Last touched by agent: 2026-05-06T14:06:08Z
 // Purpose: Reusable Sim Lab 2 gameplay module for sim routes and dashboard games pages.
 'use client';
 
@@ -21,7 +21,6 @@ import {
 } from '@baseballczar/sim-engine/boxScore';
 import dynamic from 'next/dynamic';
 import type { EventDispatchMeta, DebugPlayerLookup } from '@/components/sim-v2-tick/tickScene';
-import { runSim } from './sim-runner';
 import type { SimRun } from './sim-run-types';
 import type { SimWorkerRequest, SimWorkerResponse } from './worker-protocol';
 import { SimLabDiagnosticsPanel } from './components/SimLabDiagnosticsPanel';
@@ -61,7 +60,7 @@ export default function SimLab2Module({
   const [homeProfileKey, setHomeProfileKey] = useState<(typeof PROFILE_KEYS)[number]>('balanced');
   const [awayProfileKey, setAwayProfileKey] = useState<(typeof PROFILE_KEYS)[number]>('balanced');
   const simWorkerRef = useRef<Worker | null>(null);
-  const createWorkerRef = useRef<() => Worker | null>(() => null);
+  const fallbackRunnerImportRef = useRef<Promise<typeof import('./sim-runner')> | null>(null);
   const activeRunRef = useRef<{ requestId: number; startedAt: number; mode: 'worker' | 'fallback' } | null>(null);
   const latestRequestIdRef = useRef<number>(0);
   const [timingStats, setTimingStats] = useState({ mode: 'none' as 'none' | 'worker' | 'fallback', lastMs: null as number | null, avgMs: null as number | null, samples: 0, cancelled: 0 });
@@ -87,62 +86,58 @@ export default function SimLab2Module({
     setSeed(Math.floor(Math.random() * 100000));
   }, [initialSeed]);
 
-  useEffect(() => {
-    const createWorker = (): Worker | null => {
-      if (typeof Worker === 'undefined') return null;
+  const getOrCreateWorker = useCallback((): Worker | null => {
+    if (typeof Worker === 'undefined') return null;
+    if (simWorkerRef.current) return simWorkerRef.current;
 
-      let worker: Worker;
-      try {
-        worker = new Worker(new URL('./sim-web.worker.ts', import.meta.url), { type: 'module' });
-      } catch (error) {
-        console.warn('[sim-lab-2] browser worker unavailable; using main-thread fallback', error);
-        return null;
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL('./sim-web.worker.ts', import.meta.url), { type: 'module' });
+    } catch (error) {
+      console.warn('[sim-lab-2] browser worker unavailable; using main-thread fallback', error);
+      return null;
+    }
+
+    const handleMessage = (event: MessageEvent<SimWorkerResponse>) => {
+      const message = event.data;
+      if (!message || message.requestId !== latestRequestIdRef.current) return;
+
+      if (message.type === 'success') {
+        setSim(message.payload);
+        setSimError(null);
+      } else {
+        setSimError(message.error || 'Simulation failed. Try another seed.');
       }
-
-      const handleMessage = (event: MessageEvent<SimWorkerResponse>) => {
-        const message = event.data;
-        if (!message || message.requestId !== latestRequestIdRef.current) return;
-
-        if (message.type === 'success') {
-          setSim(message.payload);
-          setSimError(null);
-        } else {
-          setSimError(message.error || 'Simulation failed. Try another seed.');
-        }
-        finalizeRunTiming(message.requestId);
-        setSimulating(false);
-      };
-
-      const handleError = (event: ErrorEvent) => {
-        console.error('[sim-lab-2] worker execution failed', event.error ?? event.message);
-        if (activeRunRef.current?.mode === 'worker') {
-          activeRunRef.current = null;
-          setTimingStats((prev) => ({ ...prev, cancelled: prev.cancelled + 1 }));
-        }
-        setSimError('Simulation worker crashed. Falling back to in-page simulation.');
-        setSimulating(false);
-        if (simWorkerRef.current === worker) {
-          simWorkerRef.current = null;
-        }
-        worker.terminate();
-      };
-
-      worker.addEventListener('message', handleMessage);
-      worker.addEventListener('error', handleError);
-      simWorkerRef.current = worker;
-      return worker;
+      finalizeRunTiming(message.requestId);
+      setSimulating(false);
     };
 
-    createWorkerRef.current = createWorker; const worker = createWorker();
-
-    return () => {
-      createWorkerRef.current = () => null;
-      worker?.terminate();
+    const handleError = (event: ErrorEvent) => {
+      console.error('[sim-lab-2] worker execution failed', event.error ?? event.message);
+      if (activeRunRef.current?.mode === 'worker') {
+        activeRunRef.current = null;
+        setTimingStats((prev) => ({ ...prev, cancelled: prev.cancelled + 1 }));
+      }
+      setSimError('Simulation worker crashed. Falling back to in-page simulation.');
+      setSimulating(false);
       if (simWorkerRef.current === worker) {
         simWorkerRef.current = null;
       }
+      worker.terminate();
     };
+
+    worker.addEventListener('message', handleMessage);
+    worker.addEventListener('error', handleError);
+    simWorkerRef.current = worker;
+    return worker;
   }, [finalizeRunTiming]);
+
+  useEffect(() => {
+    return () => {
+      simWorkerRef.current?.terminate();
+      simWorkerRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (pinned === 0 || runToken === 0) return;  // Don't run until user clicks Run/Random
@@ -160,11 +155,11 @@ export default function SimLab2Module({
     setSim(null);
     const startedAt = performance.now();
 
-    let worker = simWorkerRef.current;
+    let worker = simWorkerRef.current ?? getOrCreateWorker();
     if (worker && activeRunRef.current?.mode === 'worker' && activeRunRef.current.requestId !== requestId) {
       worker.terminate();
       simWorkerRef.current = null;
-      worker = createWorkerRef.current();
+      worker = getOrCreateWorker();
     }
 
     if (worker) {
@@ -181,26 +176,39 @@ export default function SimLab2Module({
     }
 
     activeRunRef.current = { requestId, startedAt, mode: 'fallback' };
-    const timer = setTimeout(() => {
+    let cancelled = false;
+    const runFallback = async () => {
       try {
+        if (!fallbackRunnerImportRef.current) {
+          fallbackRunnerImportRef.current = import('./sim-runner');
+        }
+        const { runSim } = await fallbackRunnerImportRef.current;
+        if (cancelled || latestRequestIdRef.current !== requestId) return;
+
         const result = runSim(pinned, homeProfileKey, awayProfileKey);
         if (latestRequestIdRef.current !== requestId) return;
         setSim(result);
         setSimError(null);
       } catch (error) {
+        if (cancelled || latestRequestIdRef.current !== requestId) return;
         if (latestRequestIdRef.current !== requestId) return;
         console.error('[sim-lab-2] simulation failed', error);
         setSimError('Simulation failed. Try another seed.');
       } finally {
+        if (cancelled) return;
         if (latestRequestIdRef.current === requestId) {
           finalizeRunTiming(requestId);
           setSimulating(false);
         }
       }
-    }, 30);
+    };
 
-    return () => clearTimeout(timer);
-  }, [pinned, runToken, homeProfileKey, awayProfileKey]);
+    void runFallback();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pinned, runToken, homeProfileKey, awayProfileKey, getOrCreateWorker, finalizeRunTiming]);
 
   const handleEvent = useCallback((evts: TickEvent[], time: number, meta?: EventDispatchMeta) => {
     if (evts.length > 0) {

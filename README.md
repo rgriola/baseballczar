@@ -1,4 +1,4 @@
-> Last touched by agent: 2026-05-06T13:37:53Z
+> Last touched by agent: 2026-05-06T14:15:35Z
 
 # Baseball Czar v2
 
@@ -195,7 +195,15 @@ npm run typecheck    # TypeScript check (packages/sim-engine)
 Use webpack mode for local dev profiling and compare one cold pass plus two warm passes.
 
 ```bash
-npm run dev                              # starts apps/web in webpack mode
+# Profile run: emits per-compiler webpack stats for module timing/fan-out analysis
+NEXT_WEBPACK_STATS_DIR=.next/perf-stats npm run dev -w apps/web
+node apps/web/scripts/benchmark-dev-routes.mjs --baseUrl=http://localhost:3000 --routes=/,/sim-lab-2 --runs=1
+node apps/web/scripts/benchmark-dev-routes.mjs --baseUrl=http://localhost:3000 --routes=/,/dashboard,/sim-lab-2 --runs=5
+node apps/web/scripts/benchmark-dev-routes.mjs --baseUrl=http://localhost:3000 --routes=/,/dashboard,/sim-lab-2 --runs=5
+node apps/web/scripts/analyze-webpack-stats.mjs --dir=apps/web/.next/perf-stats --top=20
+
+# Acceptance run: rerun without profiling overhead for realistic compile timings
+npm run dev -w apps/web
 node apps/web/scripts/benchmark-dev-routes.mjs --baseUrl=http://localhost:3000 --routes=/,/sim-lab-2 --runs=1
 node apps/web/scripts/benchmark-dev-routes.mjs --baseUrl=http://localhost:3000 --routes=/,/dashboard,/sim-lab-2 --runs=5
 node apps/web/scripts/benchmark-dev-routes.mjs --baseUrl=http://localhost:3000 --routes=/,/dashboard,/sim-lab-2 --runs=5
@@ -204,7 +212,8 @@ node apps/web/scripts/benchmark-dev-routes.mjs --baseUrl=http://localhost:3000 -
 Notes:
 
 - Cold compile remains variable across runs; avoid drawing conclusions from a single sample.
-- Ship compile optimizations only when they improve cold metrics or reduce variance without warm regressions.
+- Ship compile optimizations only when they improve median cold metrics or reduce variance without warm regressions.
+- Keep benchmark logs in `apps/web/perf/dev-compile-sim-lab-2.md`.
 
 ## Key Concepts
 

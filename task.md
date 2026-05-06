@@ -1,4 +1,4 @@
-> Last touched by agent: 2026-05-06T13:47:06Z
+> Last touched by agent: 2026-05-06T14:17:28Z
 
 # Tasks
 
@@ -46,10 +46,10 @@
 
 ## P1 — Web Dev Compile Performance
 
-- [ ] **Profile webpack cold compile for `/sim-lab-2`.** Capture trace/stats and identify top modules by compile time and graph fan-out.
-- [ ] **Evaluate worker graph externalization.** Prototype route/worker separation to avoid paying worker compile cost on first route hit.
-- [ ] **Create repeatable benchmark workflow.** Standardize one cold and two warm benchmark passes and store outputs in a small tracking doc.
-- [ ] **Define pass acceptance criteria.** Ship only changes that improve cold compile or reduce variance without warm-path regressions.
+- [x] **Profile webpack cold compile for `/sim-lab-2`.** Captured stats in webpack profile mode and documented top compile-time + fan-out modules.
+- [x] **Evaluate worker graph externalization.** Prototyped lazy worker/dynamic fallback sim import in Sim Lab 2 and measured before/after cold+warmed behavior.
+- [x] **Create repeatable benchmark workflow.** Standardized one cold + two warm passes and logged workflow/results in `apps/web/perf/dev-compile-sim-lab-2.md`.
+- [x] **Define pass acceptance criteria.** Added explicit median cold / warm pass thresholds in the perf tracking doc.
 
 ## P2 — Roster / lineup
 
@@ -81,6 +81,13 @@
 - [ ] **HR visual sanity (R-01/R-02).** Verify HR flights clear wall visually and runner path remains home → 1B → 2B → 3B → home.
 - [ ] **Sim smoke guardrails.** Run `npm run sim -- --games 162 --seed 1` and verify rates stay within expected ranges.
 
+## Manual QA — P1 Web Compile Perf
+
+- [ ] **Stats capture sanity.** Start dev with `NEXT_WEBPACK_STATS_DIR=.next/perf-stats npm run dev -w apps/web` and verify `.stats.json` files are emitted under `.next/perf-stats`.
+- [ ] **Benchmark protocol.** Run one cold pass and two warm passes with `benchmark-dev-routes.mjs` for `/`, `/dashboard`, and `/sim-lab-2`.
+- [ ] **Module analysis report.** Run `analyze-webpack-stats.mjs` and confirm output highlights top compile-time modules and top fan-out modules.
+- [ ] **Acceptance check.** Confirm warm pass 2 for `/sim-lab-2` stays at or below the criteria in `apps/web/perf/dev-compile-sim-lab-2.md`.
+
 ---
 
 ## In-Progress
@@ -91,27 +98,28 @@ _(none — pick from P0 or P1 above when starting a session)_
 
 ## Done
 
-| Date       | Task                                                                                         | Commit          |
-| ---------- | -------------------------------------------------------------------------------------------- | --------------- |
-| 2026-05-06 | P2 L-03 pass: dynamic pitcher roster rules (10-12 total, RP5/RP6 slots, UI+server+scheduler) | _(uncommitted)_ |
-| 2026-05-06 | P1 renderer pass: wall-hit timing from wall bounce speed + full roll-to-rest replay segment  | _(uncommitted)_ |
-| 2026-05-06 | P1 S-12 validation pass: backup/cover responsibilities verified with added unit coverage     | _(uncommitted)_ |
-| 2026-05-06 | P1 S-01 decision pass: keep doubles baseline near ~0.5 per team-game for now                 | _(uncommitted)_ |
-| 2026-05-06 | P1 S-14 pass: PI-gated tag-up model (PI+speed+depth+arm)                                     | _(uncommitted)_ |
-| 2026-05-06 | P1 S-15 pass: spray-aware r1→3rd (RF boost, LF hold; PI+speed gated)                         | _(uncommitted)_ |
-| 2026-05-06 | P1 S-10 pass: target-base decision tree (outs/runners/score-aware paths)                     | `8bb259d`       |
-| 2026-05-06 | P0 calibration pass: expectedRanges rebased + foulPerContact guardrail + HR/FB keep decision | `8f86cdb`       |
-| 2026-05-06 | Persisted replay R/H/E: store game-level error totals and render E from DB                   | _(uncommitted)_ |
-| 2026-05-06 | Replay stability pass: SSR-safe tick scene load + `simAll` direct service execution          | _(uncommitted)_ |
-| 2026-05-06 | Scheduled lineup 1-9/DH normalization + persisted replay innings/RHE + boxscore contrast fix | _(uncommitted)_ |
-| 2026-05-05 | Proxy/auth dev perf pass (matcher scoping, route classification, request user cache)         | _(uncommitted)_ |
-| 2026-05-05 | Sim Lab compile graph pass (engine subpath imports/exports, benchmark + test harness)        | _(uncommitted)_ |
-| 2026-04-29 | OF positions moved to 70 ft off wall, corner-carom penalty added                             | _(uncommitted)_ |
-| 2026-04-29 | Speed skill made dominant in fielder range model                                             | _(uncommitted)_ |
-| 2026-04-29 | Foul rate 0.58 → 0.45, foul push tightened to ±2° past foul line                             | _(uncommitted)_ |
-| 2026-04-29 | Richer PBP output (count+outs, runners, throws, dives, skill snapshot)                       | _(uncommitted)_ |
-| 2026-04-29 | README CONFIG documentation section                                                          | _(uncommitted)_ |
-| (prior)    | Wall ricochet engine math                                                                    | `4f30ed5`       |
-| (prior)    | DP visualization                                                                             | `1af3786`       |
-| (prior)    | Flyball mid-flight teleport fix; ball sprite halved                                          | `3c69d95`       |
-| (prior)    | Grounder pop-back regression                                                                 | `15513b1`       |
+| Date       | Task                                                                                                   | Commit          |
+| ---------- | ------------------------------------------------------------------------------------------------------ | --------------- |
+| 2026-05-06 | P1 web compile perf pass: stats instrumentation, analyzer workflow, and Sim Lab 2 prototype evaluation | _(uncommitted)_ |
+| 2026-05-06 | P2 L-03 pass: dynamic pitcher roster rules (10-12 total, RP5/RP6 slots, UI+server+scheduler)           | _(uncommitted)_ |
+| 2026-05-06 | P1 renderer pass: wall-hit timing from wall bounce speed + full roll-to-rest replay segment            | _(uncommitted)_ |
+| 2026-05-06 | P1 S-12 validation pass: backup/cover responsibilities verified with added unit coverage               | _(uncommitted)_ |
+| 2026-05-06 | P1 S-01 decision pass: keep doubles baseline near ~0.5 per team-game for now                           | _(uncommitted)_ |
+| 2026-05-06 | P1 S-14 pass: PI-gated tag-up model (PI+speed+depth+arm)                                               | _(uncommitted)_ |
+| 2026-05-06 | P1 S-15 pass: spray-aware r1→3rd (RF boost, LF hold; PI+speed gated)                                   | _(uncommitted)_ |
+| 2026-05-06 | P1 S-10 pass: target-base decision tree (outs/runners/score-aware paths)                               | `8bb259d`       |
+| 2026-05-06 | P0 calibration pass: expectedRanges rebased + foulPerContact guardrail + HR/FB keep decision           | `8f86cdb`       |
+| 2026-05-06 | Persisted replay R/H/E: store game-level error totals and render E from DB                             | _(uncommitted)_ |
+| 2026-05-06 | Replay stability pass: SSR-safe tick scene load + `simAll` direct service execution                    | _(uncommitted)_ |
+| 2026-05-06 | Scheduled lineup 1-9/DH normalization + persisted replay innings/RHE + boxscore contrast fix           | _(uncommitted)_ |
+| 2026-05-05 | Proxy/auth dev perf pass (matcher scoping, route classification, request user cache)                   | _(uncommitted)_ |
+| 2026-05-05 | Sim Lab compile graph pass (engine subpath imports/exports, benchmark + test harness)                  | _(uncommitted)_ |
+| 2026-04-29 | OF positions moved to 70 ft off wall, corner-carom penalty added                                       | _(uncommitted)_ |
+| 2026-04-29 | Speed skill made dominant in fielder range model                                                       | _(uncommitted)_ |
+| 2026-04-29 | Foul rate 0.58 → 0.45, foul push tightened to ±2° past foul line                                       | _(uncommitted)_ |
+| 2026-04-29 | Richer PBP output (count+outs, runners, throws, dives, skill snapshot)                                 | _(uncommitted)_ |
+| 2026-04-29 | README CONFIG documentation section                                                                    | _(uncommitted)_ |
+| (prior)    | Wall ricochet engine math                                                                              | `4f30ed5`       |
+| (prior)    | DP visualization                                                                                       | `1af3786`       |
+| (prior)    | Flyball mid-flight teleport fix; ball sprite halved                                                    | `3c69d95`       |
+| (prior)    | Grounder pop-back regression                                                                           | `15513b1`       |
