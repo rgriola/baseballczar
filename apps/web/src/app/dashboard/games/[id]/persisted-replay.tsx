@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-07T19:03:06Z
+// Last touched by agent: 2026-05-07T23:55:00Z
 // Purpose: Replays persisted game events without running a new simulation.
 'use client';
 
@@ -142,6 +142,12 @@ export default function PersistedReplay({
   const inningCols = Array.from({ length: innings }, (_, i) => i + 1);
   const awayErrors = payload ? num(payload.game.visitor_errors, 0) : 0;
   const homeErrors = payload ? num(payload.game.home_errors, 0) : 0;
+  const simVersion = payload?.game.sim_version?.trim() || 'legacy';
+  const simConfigVersion = payload?.game.sim_config_version?.trim() || 'unknown';
+  const simSeed = payload?.game.sim_seed;
+  const simSeedLabel = typeof simSeed === 'number' && Number.isFinite(simSeed)
+    ? String(Math.trunc(simSeed))
+    : 'n/a';
 
   const awayHitting = useMemo(() => {
     if (!payload) return [] as PersistedHittingRow[];
@@ -195,6 +201,7 @@ export default function PersistedReplay({
         <div>
           <p className="text-xs uppercase tracking-wide text-zinc-500">Replay Source</p>
           <p className="text-sm text-zinc-200">Persisted game events and stored box score</p>
+          <p className="mt-1 text-xs text-zinc-500">Sim {simVersion} • Config {simConfigVersion} • Seed {simSeedLabel}</p>
         </div>
         <div className="rounded border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-300">
           Duration {replay.totalDurationSec.toFixed(1)}s • {payload.events.length} events

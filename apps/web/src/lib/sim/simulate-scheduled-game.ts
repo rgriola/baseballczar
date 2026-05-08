@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-06T13:37:53Z
+// Last touched by agent: 2026-05-07T23:35:00Z
 /**
  * Simulate a single scheduled game — loads rosters from Supabase,
  * runs the sim engine, and persists all results.
@@ -30,6 +30,11 @@ import {
   adaptV2ResultToLegacy,
   type ScheduledTeamAdapterInput,
 } from './scheduled-v2-adapter';
+import {
+  buildScheduledGameContract,
+  SIM_VERSION_SCHEDULED_LEGACY,
+  SIM_VERSION_SCHEDULED_V2,
+} from './game-result-contract';
 
 interface SimulateScheduledGameResult {
   gameId: number;
@@ -139,12 +144,15 @@ export async function simulateScheduledGame(
   );
 
   // 4. Run simulation
-  const result = isScheduledEngineV2Enabled()
+  const useV2 = isScheduledEngineV2Enabled();
+  const seed = computeScheduledSeed(sched.id, sched.league_id, sched.season_no);
+
+  const result = useV2
     ? adaptV2ResultToLegacy(
       simulateGameV2(
         homeInput.v2Team,
         visitorInput.v2Team,
-        createRng(computeScheduledSeed(sched.id, sched.league_id, sched.season_no)),
+        createRng(seed),
         {
           homeStarterIndex: homeInput.v2StarterIndex,
           awayStarterIndex: visitorInput.v2StarterIndex,
@@ -155,8 +163,16 @@ export async function simulateScheduledGame(
     )
     : simulateLegacyGame(visitorInput.teamInput, homeInput.teamInput);
 
+  const contract = buildScheduledGameContract(result, {
+    scheduleId: sched.id,
+    leagueId: sched.league_id,
+    seasonNo: sched.season_no,
+    seed,
+    simVersion: useV2 ? SIM_VERSION_SCHEDULED_V2 : SIM_VERSION_SCHEDULED_LEGACY,
+  });
+
   // 5. Persist
-  const gameId = await persistGameResult(supabase, result, {
+  const gameId = await persistGameResult(supabase, contract, {
     scheduleId: sched.id,
     leagueId: sched.league_id,
     seasonNo: sched.season_no,

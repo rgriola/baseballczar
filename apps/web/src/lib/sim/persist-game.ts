@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-07T23:55:00Z
 /**
  * Persist a simulated game result to Supabase.
  *
@@ -9,16 +10,16 @@
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
-import type { GameResult } from '../sim-engine/types';
-import { insertGameRecord } from './persist-game-record';
+import { assertGameResultContract, type ScheduledGameContract } from './game-result-contract';
+import { buildGameEventRows, buildGameInsertRow } from './persist-game-record';
 import {
   buildHitterGameRows,
   buildPitcherGameRows,
-  upsertSeasonHitterStats,
-  upsertSeasonPitcherStats,
+  buildSeasonHitterRows,
+  buildSeasonPitcherRows,
 } from './persist-player-stats';
-import { updateStandings } from './persist-standings';
-import { processRevenue } from './persist-revenue';
+import { buildStandingsDeltas } from './persist-standings';
+import { buildRevenueBundle } from './persist-revenue';
 
 interface PersistOptions {
   scheduleId: number;
@@ -31,51 +32,131 @@ interface PersistOptions {
   visitorPitcherMeta: Map<number, { teamId: number }>;
 }
 
+const PERSIST_BOUNDARY_STEPS = ['persist-sim-game-transaction'] as const;
+
+type PersistBoundaryStep = typeof PERSIST_BOUNDARY_STEPS[number];
+
+async function runBoundaryStep<T>(step: PersistBoundaryStep, task: () => Promise<T>): Promise<T> {
+  try {
+    return await task();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`[persistGameResult:${step}] ${message}`);
+  }
+}
+
 export async function persistGameResult(
   supabase: SupabaseClient,
-  result: GameResult,
+  contract: ScheduledGameContract,
   opts: PersistOptions,
 ): Promise<number> {
-  // 1. Insert game box score + play-by-play events
-  const gameId = await insertGameRecord(supabase, result, opts);
+  const { result, meta } = contract;
+  assertGameResultContract(result);
 
-  // 2. Insert game-by-game hitter stats
-  const hitterRows = [
-    ...buildHitterGameRows(gameId, result.homePlayerStats, opts.homeHitterMeta, result.visitorTeamId, opts.gameType),
-    ...buildHitterGameRows(gameId, result.visitorPlayerStats, opts.visitorHitterMeta, result.homeTeamId, opts.gameType),
+  const gameRow = buildGameInsertRow(result, {
+    scheduleId: opts.scheduleId,
+    leagueId: opts.leagueId,
+    provenance: {
+      simSeed: meta.seed,
+      simVersion: meta.simVersion,
+      simConfigVersion: meta.configVersion,
+    },
+  });
+
+  const eventRows = buildGameEventRows(result);
+
+  const gameHittingRows = [
+    ...buildHitterGameRows(null, result.homePlayerStats, opts.homeHitterMeta, result.visitorTeamId, opts.gameType),
+    ...buildHitterGameRows(null, result.visitorPlayerStats, opts.visitorHitterMeta, result.homeTeamId, opts.gameType),
   ];
-  if (hitterRows.length > 0) {
-    const { error } = await supabase.from('game_stats_hitting').insert(hitterRows);
-    if (error) throw new Error(`Failed to insert hitter game stats: ${error.message}`);
-  }
 
-  // 3. Insert game-by-game pitcher stats
-  const pitcherRows = [
-    ...buildPitcherGameRows(gameId, result.homePitcherStats, opts.homePitcherMeta, result.visitorTeamId, opts.gameType),
-    ...buildPitcherGameRows(gameId, result.visitorPitcherStats, opts.visitorPitcherMeta, result.homeTeamId, opts.gameType),
+  const gamePitchingRows = [
+    ...buildPitcherGameRows(null, result.homePitcherStats, opts.homePitcherMeta, result.visitorTeamId, opts.gameType),
+    ...buildPitcherGameRows(null, result.visitorPitcherStats, opts.visitorPitcherMeta, result.homeTeamId, opts.gameType),
   ];
-  if (pitcherRows.length > 0) {
-    const { error } = await supabase.from('game_stats_pitching').insert(pitcherRows);
-    if (error) throw new Error(`Failed to insert pitcher game stats: ${error.message}`);
-  }
 
-  // 4. Upsert season stats (batch RPC)
-  await upsertSeasonHitterStats(supabase, result.homePlayerStats, opts.homeHitterMeta, opts.seasonNo);
-  await upsertSeasonHitterStats(supabase, result.visitorPlayerStats, opts.visitorHitterMeta, opts.seasonNo);
-  await upsertSeasonPitcherStats(supabase, result.homePitcherStats, opts.homePitcherMeta, opts.seasonNo);
-  await upsertSeasonPitcherStats(supabase, result.visitorPitcherStats, opts.visitorPitcherMeta, opts.seasonNo);
+  const seasonHittingRows = [
+    ...buildSeasonHitterRows(result.homePlayerStats, opts.homeHitterMeta, opts.seasonNo),
+    ...buildSeasonHitterRows(result.visitorPlayerStats, opts.visitorHitterMeta, opts.seasonNo),
+  ];
 
-  // 5. Update standings
-  await updateStandings(supabase, result, opts);
+  const seasonPitchingRows = [
+    ...buildSeasonPitcherRows(result.homePitcherStats, opts.homePitcherMeta, opts.seasonNo),
+    ...buildSeasonPitcherRows(result.visitorPitcherStats, opts.visitorPitcherMeta, opts.seasonNo),
+  ];
 
-  // 6. Mark schedule as played
-  await supabase
-    .from('schedules')
-    .update({ played: true })
-    .eq('id', opts.scheduleId);
+  const standings = buildStandingsDeltas(result, {
+    leagueId: opts.leagueId,
+    seasonNo: opts.seasonNo,
+  });
 
-  // 7. Process gate receipts
-  await processRevenue(supabase, gameId, result, opts);
+  const homeStandingDelta = {
+    league_id: standings.home.leagueId,
+    team_id: standings.home.teamId,
+    season_no: standings.home.seasonNo,
+    w: standings.home.w,
+    l: standings.home.l,
+    ab: standings.home.ab,
+    r: standings.home.r,
+    h: standings.home.h,
+    b2: standings.home.b2,
+    b3: standings.home.b3,
+    hr: standings.home.hr,
+    rbi: standings.home.rbi,
+    bb: standings.home.bb,
+    so: standings.home.so,
+    era_runs: standings.home.eraRuns,
+    era_outs: standings.home.eraOuts,
+  };
+
+  const visitorStandingDelta = {
+    league_id: standings.visitor.leagueId,
+    team_id: standings.visitor.teamId,
+    season_no: standings.visitor.seasonNo,
+    w: standings.visitor.w,
+    l: standings.visitor.l,
+    ab: standings.visitor.ab,
+    r: standings.visitor.r,
+    h: standings.visitor.h,
+    b2: standings.visitor.b2,
+    b3: standings.visitor.b3,
+    hr: standings.visitor.hr,
+    rbi: standings.visitor.rbi,
+    bb: standings.visitor.bb,
+    so: standings.visitor.so,
+    era_runs: standings.visitor.eraRuns,
+    era_outs: standings.visitor.eraOuts,
+  };
+
+  const revenue = buildRevenueBundle(result, opts.gameType);
+
+  const gameId = await runBoundaryStep('persist-sim-game-transaction', async () => {
+    const { data, error } = await supabase.rpc('persist_sim_game_transaction', {
+      p_schedule_id: opts.scheduleId,
+      p_game_row: gameRow,
+      p_event_rows: eventRows,
+      p_game_hitting_rows: gameHittingRows,
+      p_game_pitching_rows: gamePitchingRows,
+      p_season_hitting_rows: seasonHittingRows,
+      p_season_pitching_rows: seasonPitchingRows,
+      p_home_standing_delta: homeStandingDelta,
+      p_visitor_standing_delta: visitorStandingDelta,
+      p_financial_rows: revenue.transactions,
+      p_home_credit_amount: revenue.homeCreditAmount,
+      p_visitor_credit_amount: revenue.visitorCreditAmount,
+    });
+
+    if (error) {
+      throw new Error(`persist_sim_game_transaction failed: ${error.message}`);
+    }
+
+    const parsed = Number(data);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(`persist_sim_game_transaction returned invalid game id: ${String(data)}`);
+    }
+
+    return parsed;
+  });
 
   return gameId;
 }

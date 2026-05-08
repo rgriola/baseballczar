@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-07T23:55:00Z
 /**
  * Persist per-game and per-season player stats to Supabase.
  */
@@ -11,7 +12,7 @@ export function outsToIp(outs: number): number {
 }
 
 export function buildHitterGameRows(
-  gameId: number,
+  gameId: number | null,
   statsMap: Map<number, GameStats>,
   meta: Map<number, { teamId: number; position: string; batOrder: number }>,
   oppTeamId: number,
@@ -22,7 +23,7 @@ export function buildHitterGameRows(
     const m = meta.get(playerId);
     if (!m) continue;
     rows.push({
-      game_id: gameId,
+      ...(gameId != null ? { game_id: gameId } : {}),
       player_id: playerId,
       team_id: m.teamId,
       opp_team_id: oppTeamId,
@@ -49,7 +50,7 @@ export function buildHitterGameRows(
 }
 
 export function buildPitcherGameRows(
-  gameId: number,
+  gameId: number | null,
   statsMap: Map<number, PitcherBoxLine>,
   meta: Map<number, { teamId: number }>,
   oppTeamId: number,
@@ -61,7 +62,7 @@ export function buildPitcherGameRows(
     const m = meta.get(playerId);
     if (!m) continue;
     rows.push({
-      game_id: gameId,
+      ...(gameId != null ? { game_id: gameId } : {}),
       player_id: playerId,
       team_id: m.teamId,
       opp_team_id: oppTeamId,
@@ -90,8 +91,7 @@ export function buildPitcherGameRows(
   return rows;
 }
 
-export async function upsertSeasonHitterStats(
-  supabase: SupabaseClient,
+export function buildSeasonHitterRows(
   statsMap: Map<number, GameStats>,
   meta: Map<number, { teamId: number; position: string; batOrder: number }>,
   seasonNo: number,
@@ -116,16 +116,10 @@ export async function upsertSeasonHitterStats(
       so: stats.so,
     });
   }
-  if (rows.length === 0) return;
-
-  const { error } = await supabase.rpc('batch_upsert_season_hitting', {
-    p_stats: rows,
-  });
-  if (error) throw new Error(`batch_upsert_season_hitting failed: ${error.message}`);
+  return rows;
 }
 
-export async function upsertSeasonPitcherStats(
-  supabase: SupabaseClient,
+export function buildSeasonPitcherRows(
   statsMap: Map<number, PitcherBoxLine>,
   meta: Map<number, { teamId: number }>,
   seasonNo: number,
@@ -156,6 +150,31 @@ export async function upsertSeasonPitcherStats(
       hr: stats.hr,
     });
   }
+  return rows;
+}
+
+export async function upsertSeasonHitterStats(
+  supabase: SupabaseClient,
+  statsMap: Map<number, GameStats>,
+  meta: Map<number, { teamId: number; position: string; batOrder: number }>,
+  seasonNo: number,
+) {
+  const rows = buildSeasonHitterRows(statsMap, meta, seasonNo);
+  if (rows.length === 0) return;
+
+  const { error } = await supabase.rpc('batch_upsert_season_hitting', {
+    p_stats: rows,
+  });
+  if (error) throw new Error(`batch_upsert_season_hitting failed: ${error.message}`);
+}
+
+export async function upsertSeasonPitcherStats(
+  supabase: SupabaseClient,
+  statsMap: Map<number, PitcherBoxLine>,
+  meta: Map<number, { teamId: number }>,
+  seasonNo: number,
+) {
+  const rows = buildSeasonPitcherRows(statsMap, meta, seasonNo);
   if (rows.length === 0) return;
 
   const { error } = await supabase.rpc('batch_upsert_season_pitching', {

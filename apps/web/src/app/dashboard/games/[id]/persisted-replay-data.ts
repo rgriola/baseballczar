@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-07T22:40:33Z
+// Last touched by agent: 2026-05-07T23:55:00Z
 // Purpose: Builds persisted replay snapshots directly from stored game telemetry.
 
 import { type Position } from '@baseballczar/sim-engine';
@@ -67,6 +67,9 @@ export type PersistedGameRow = {
   innings: number;
   home_linescore: number[] | null;
   visitor_linescore: number[] | null;
+  sim_seed?: number | null;
+  sim_version?: string | null;
+  sim_config_version?: string | null;
 };
 
 export type PersistedPlayerName = {
