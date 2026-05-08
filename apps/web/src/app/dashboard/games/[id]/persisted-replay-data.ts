@@ -1,7 +1,6 @@
-// Last touched by agent: 2026-05-07T23:55:00Z
+// Last touched by agent: 2026-05-07T22:45:00Z
 // Purpose: Builds persisted replay snapshots directly from stored game telemetry.
 
-import { type Position } from '@baseballczar/sim-engine';
 import type {
   TickEvent,
   WorldSnapshot,
@@ -18,16 +17,18 @@ import {
   lerp,
   type PersistedBaseOccupancyShape,
   type PersistedBallWaypointShape,
+  type ZoneFielderResolver,
 } from './persisted-replay-motion';
 import { buildGroundOutThrowSequence } from './persisted-replay-defense';
 import {
   isBattedBallOutcome,
-  isCatchOutOutcome,
   mapPersistedOutcomeCode,
   normalizeOutcomeFromDescription,
 } from './persisted-replay-outcome';
 import { withCatchOutWaypoints } from './persisted-replay-waypoint-transforms';
 import { buildDefenseFieldersFromRows, buildPlayerNameSummaryResolver, buildRunnerNameResolver, buildRunnerSkillResolver, type ReplayPlayerSummary } from './persisted-replay-defense-roster';
+import { resolvePersistedZoneFielder } from './persisted-replay-fielder-selection';
+import { eventForWaypoint } from './persisted-replay-ball-events';
 
 export type PersistedBallPathWaypoint = PersistedBallWaypointShape;
 
@@ -150,17 +151,6 @@ const ZONE_TO_POINT_FT: Record<string, { x: number; y: number }> = {
   RF: { x: 130, y: 240 },
   RF_LINE: { x: 165, y: 215 },
   INFIELD: { x: -10, y: 95 },
-};
-
-const ZONE_TO_FIELDER: Record<string, Position> = {
-  LF_LINE: 'LF',
-  LF: 'LF',
-  LCF: 'CF',
-  CF: 'CF',
-  RCF: 'CF',
-  RF: 'RF',
-  RF_LINE: 'RF',
-  INFIELD: 'SS',
 };
 
 const CONTACT_PROFILE: Record<string, { ev: number; la: number }> = {
@@ -314,11 +304,6 @@ function zonePointFt(zoneRaw: string | null): { x: number; y: number } {
   return ZONE_TO_POINT_FT[zone] ?? ZONE_TO_POINT_FT.CF;
 }
 
-function zoneFielder(zoneRaw: string | null): Position {
-  const zone = (zoneRaw ?? 'CF').toUpperCase();
-  return ZONE_TO_FIELDER[zone] ?? 'CF';
-}
-
 function normalizeBaseOccupancy(raw: unknown): PersistedBaseOccupancy | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
@@ -431,39 +416,6 @@ function withFallbackWaypoints(row: PersistedGameEventRow, outcome: string): Per
     fallback.push({ label: 'fielded', x: landing.x, y: landing.y, z: 0, tSec: 2.8 });
   }
   return withCatchOutWaypoints(outcome, withSynthesizedApex(row, outcome, fallback));
-}
-
-function eventForWaypoint(
-  waypoint: PersistedBallPathWaypoint,
-  outcome: string,
-  row: PersistedGameEventRow,
-  previousWaypoint?: PersistedBallPathWaypoint,
-): TickEvent[] {
-  if (waypoint.label === 'landing') {
-    if (isCatchOutOutcome(outcome)) return [];
-    const previousWasGrounded = previousWaypoint?.label === 'landing' || previousWaypoint?.label === 'rest';
-    const sameSpotAsPrevious = previousWaypoint
-      ? Math.hypot(waypoint.x - previousWaypoint.x, waypoint.y - previousWaypoint.y) < 1
-      : false;
-    if (previousWasGrounded && sameSpotAsPrevious) return [];
-    return [{ type: 'ball-landed', at: { x: waypoint.x, y: waypoint.y } }];
-  }
-  if (waypoint.label === 'wall-hit') {
-    if (outcome === 'home-run') {
-      return [{ type: 'wall-cleared', at: { x: waypoint.x, y: waypoint.y }, heightFt: waypoint.z }];
-    }
-    return [{ type: 'wall-bounce', at: { x: waypoint.x, y: waypoint.y } }];
-  }
-  if (waypoint.label === 'fielded') {
-    if (isCatchOutOutcome(outcome)) {
-      return [{ type: 'ball-caught', by: zoneFielder(row.hit_zone), at: { x: waypoint.x, y: waypoint.y } }];
-    }
-    return [{ type: 'ball-fielded', by: zoneFielder(row.hit_zone), at: { x: waypoint.x, y: waypoint.y } }];
-  }
-  if (waypoint.label === 'rest') {
-    return [];
-  }
-  return [];
 }
 
 function emptyGameState(
@@ -620,9 +572,15 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
       t += 0.2;
     }
 
+    let fieldedBy: ReturnType<ZoneFielderResolver> | undefined;
+
     if (isBattedBallOutcome(outcome)) {
       const waypoints = withFallbackWaypoints(row, outcome);
       const contact = waypoints.find((w) => w.label === 'contact') ?? { label: 'contact', x: 0, y: 0, z: 3, tSec: 0 };
+      const fieldedWaypoint = [...waypoints].reverse().find((waypoint) => waypoint.label === 'fielded')
+        ?? [...waypoints].reverse().find((waypoint) => waypoint.label === 'landing')
+        ?? contact;
+      const resolveZoneFielder: ZoneFielderResolver = resolvePersistedZoneFielder;
       const landing = waypoints.find((w) => w.label === 'landing') ?? waypoints[waypoints.length - 1];
       const sprayAngle = row.spray_angle_deg != null ? num(row.spray_angle_deg) : 0;
       const launchAngle = row.launch_angle_deg != null
@@ -640,7 +598,15 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
           : outcome === 'ground-out' ? 2.2 : 3.2,
       );
       let elapsedPlaySec = 0;
-      let defenseFrame = buildDefenseFrameForBall(defense, row.hit_zone, { x: contact.x, y: contact.y }, false, zoneFielder, undefined, 0);
+      let defenseFrame = buildDefenseFrameForBall(
+        defense,
+        row.hit_zone,
+        { x: contact.x, y: contact.y },
+        false,
+        resolveZoneFielder,
+        undefined,
+        0,
+      );
 
       snapshots.push({
         time: t,
@@ -682,17 +648,35 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
           const playU = clamp01(elapsedPlaySec / totalPlaySec);
           const lastStep = step === steps;
           const heldByBall = waypoint.label === 'fielded' && lastStep;
-          defenseFrame = buildDefenseFrameForBall(defense, row.hit_zone, { x, y }, heldByBall, zoneFielder, defenseFrame, stepDuration);
+          defenseFrame = buildDefenseFrameForBall(
+            defense,
+            row.hit_zone,
+            { x, y },
+            heldByBall,
+            resolveZoneFielder,
+            defenseFrame,
+            stepDuration,
+          );
 
           snapshots.push({
             time: t,
             ball: {
               pos: { x, y, z },
-              state: buildBallState(prevWaypoint, waypoint, segmentDuration, segU, row.hit_zone, zoneFielder),
+              state: buildBallState(
+                prevWaypoint,
+                waypoint,
+                segmentDuration,
+                segU,
+                row.hit_zone,
+                resolveZoneFielder,
+                defenseFrame,
+              ),
             },
             fielders: defenseFrame,
             runners: buildPlayRunners(beforeBase, afterBase, outcome, playU, runsScored, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
-            events: lastStep ? eventForWaypoint(waypoint, outcome, row, prevWaypoint) : [],
+            events: lastStep
+              ? eventForWaypoint(waypoint, outcome, row.hit_zone, resolveZoneFielder, defenseFrame, prevWaypoint)
+              : [],
             gameState: emptyGameState(row, batterName, pitcherName, previousHomeRuns, previousVisitorRuns, i, beforeBase),
           });
           t += stepDuration;
@@ -705,7 +689,11 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
       if (outcome === 'ground-out') {
         const throwFrames = buildGroundOutThrowSequence({
           defense,
-          throwerPos: zoneFielder(row.hit_zone),
+          throwerPos: resolveZoneFielder(
+            row.hit_zone,
+            { x: fieldedWaypoint.x, y: fieldedWaypoint.y },
+            defenseFrame,
+          ),
           waypoints,
           fallbackStart: contact,
           beforeBase,
@@ -733,6 +721,14 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
         });
         t += 0.35;
       }
+
+      if (outcome !== 'home-run') {
+        fieldedBy = resolveZoneFielder(
+          row.hit_zone,
+          { x: fieldedWaypoint.x, y: fieldedWaypoint.y },
+          defenseFrame,
+        );
+      }
     }
     const resultEvents: TickEvent[] = [];
     if (runsScored > 0) {
@@ -751,7 +747,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
       result: outcome,
       batterName,
       rbis: runsScored,
-      fieldedBy: isBattedBallOutcome(outcome) && outcome !== 'home-run' ? zoneFielder(row.hit_zone) : undefined,
+      fieldedBy,
     });
 
     if (row.description) {

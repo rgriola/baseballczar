@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-07T22:25:30Z
+// Last touched by agent: 2026-05-07T22:45:00Z
 // Purpose: Motion helpers for persisted replay runner, fielder, and ball snapshots.
 
 import { sprintFtPerSec, type Position } from '@baseballczar/sim-engine';
@@ -47,7 +47,11 @@ export type RunnerMotionProfile = {
 
 export type RunnerProfileResolver = (runnerId: number) => RunnerMotionProfile | undefined;
 
-export type ZoneFielderResolver = (zoneRaw: string | null) => Position;
+export type ZoneFielderResolver = (
+  zoneRaw: string | null,
+  ballPos: Point2D,
+  defenseFrame: FielderEntity[],
+) => Position;
 
 export function clamp01(value: number): number {
   if (value <= 0) return 0;
@@ -439,7 +443,7 @@ export function buildDefenseFrameForBall(
     fielder.facingRad = facingToPoint(fielder.pos, homeAnchor);
   }
 
-  const primaryPos = resolveZoneFielder(hitZone);
+  const primaryPos = resolveZoneFielder(hitZone, ballPos, frame);
   const primary = frame.find((f) => f.position === primaryPos);
   const safeDt = Math.max(0, deltaSec);
 
@@ -470,9 +474,13 @@ export function buildBallState(
   progress: number,
   hitZone: string | null,
   resolveZoneFielder: ZoneFielderResolver,
+  defenseFrame: FielderEntity[],
 ): WorldSnapshot['ball']['state'] {
   if (to.label === 'fielded' && progress >= 0.999) {
-    return { type: 'held', by: resolveZoneFielder(hitZone) };
+    return {
+      type: 'held',
+      by: resolveZoneFielder(hitZone, { x: to.x, y: to.y }, defenseFrame),
+    };
   }
 
   const safeDt = Math.max(segmentDurationSec, 0.01);

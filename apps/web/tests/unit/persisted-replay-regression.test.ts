@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-07T22:51:54Z
+// Last touched by agent: 2026-05-07T22:45:00Z
 // Purpose: Prevent persisted replay regressions for skills, speed caps, and throw timing.
 
 import { describe, expect, it } from 'vitest';
@@ -271,5 +271,39 @@ describe('persisted replay regression guardrails', () => {
 
     expect(slow.endTimeSec).toBeGreaterThan(fast.endTimeSec);
     expect(slow.snapshots.length).toBeGreaterThan(fast.snapshots.length);
+  });
+
+  it('assigns right-side infield balls to 2B in replay attribution', () => {
+    const payload = makeReplayPayload();
+    payload.events[0] = {
+      ...payload.events[0],
+      description: 'Jane Doe grounds out to 2B',
+      spray_angle_deg: 14,
+      ball_path_waypoints: [
+        { label: 'contact', x: 0, y: 0, z: 3, tSec: 0 },
+        { label: 'landing', x: 46, y: 94, z: 0, tSec: 1.05 },
+        { label: 'fielded', x: 46, y: 94, z: 0, tSec: 1.35 },
+      ],
+    };
+
+    const replay = buildPersistedSnapshots(payload);
+    const fielded = replay.snapshots
+      .flatMap((snapshot) => snapshot.events)
+      .find((event) => event.type === 'ball-fielded');
+
+    if (!fielded || fielded.type !== 'ball-fielded') {
+      throw new Error('Expected ball-fielded event in replay snapshots');
+    }
+
+    const atBatEnd = replay.snapshots
+      .flatMap((snapshot) => snapshot.events)
+      .find((event) => event.type === 'at-bat-end');
+
+    if (!atBatEnd || atBatEnd.type !== 'at-bat-end') {
+      throw new Error('Expected at-bat-end event in replay snapshots');
+    }
+
+    expect(fielded.by).toBe('B2');
+    expect(atBatEnd.fieldedBy).toBe('B2');
   });
 });

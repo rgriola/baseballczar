@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-08T01:40:56Z
+// Last touched by agent: 2026-05-07T22:45:00Z
 // Purpose: Golden replay fixture test to lock event order and timing for persisted playback.
 
 import { describe, expect, it } from 'vitest';
@@ -90,7 +90,7 @@ describe('persisted replay golden fixture', () => {
 
     expect(fingerprint).toEqual({
       snapshotCount: 33,
-      totalDurationSec: 4.5488,
+      totalDurationSec: 4.5338,
       eventTypes: [
         'inning-change',
         'at-bat-start',
@@ -138,8 +138,8 @@ describe('persisted replay golden fixture', () => {
       timeline: {
         contactAt: 1.57,
         throwReleasedAt: 3.22,
-        runnerOutAt: 3.9202,
-        playCompleteAt: 4.5488,
+        runnerOutAt: 3.9071,
+        playCompleteAt: 4.5338,
       },
     });
   });

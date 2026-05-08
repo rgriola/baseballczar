@@ -1,10 +1,18 @@
-// Last touched by agent: 2026-05-06T17:08:21Z
+// Last touched by agent: 2026-05-07T22:25:00Z
 import fs from 'node:fs';
 import { Worker, Job } from 'bullmq';
 import type { SimJobData } from '@/lib/queues/sim-queue';
 import { createServiceClient } from '@/lib/supabase/service';
 import { simulateScheduledGame } from '@/lib/sim/simulate-scheduled-game';
 import { logger } from '@/lib/logger';
+
+type QueueConnection = {
+  ping: () => Promise<unknown>;
+  quit: () => Promise<unknown>;
+  disconnect: () => void;
+};
+
+let shuttingDown = false;
 
 /**
  * Sim-game worker — processes queued game simulations one at a time.
@@ -64,6 +72,48 @@ function ensureRedisEnvLoaded(): void {
   hydrateWorkerEnvFromFile('apps/web/.env');
 }
 
+async function shutdownWorker(
+  signal: NodeJS.Signals,
+  worker: Worker<SimJobData>,
+  connection: QueueConnection,
+): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  logger.info({ signal }, 'sim-worker shutdown requested');
+
+  const forceExitTimer = setTimeout(() => {
+    logger.warn({ signal }, 'sim-worker graceful shutdown timed out; forcing exit');
+    connection.disconnect();
+    process.exit(0);
+  }, 8000);
+  forceExitTimer.unref();
+
+  try {
+    await worker.close();
+    await connection.quit();
+    clearTimeout(forceExitTimer);
+    logger.info({ signal }, 'sim-worker shutdown complete');
+    process.exit(0);
+  } catch (err) {
+    clearTimeout(forceExitTimer);
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ signal, err: message }, 'sim-worker shutdown failed; forcing exit');
+    connection.disconnect();
+    process.exit(0);
+  }
+}
+
+function registerShutdownHandlers(worker: Worker<SimJobData>, connection: QueueConnection): void {
+  process.once('SIGINT', () => {
+    void shutdownWorker('SIGINT', worker, connection);
+  });
+
+  process.once('SIGTERM', () => {
+    void shutdownWorker('SIGTERM', worker, connection);
+  });
+}
+
 async function bootstrapWorker(): Promise<void> {
   ensureRedisEnvLoaded();
 
@@ -104,7 +154,13 @@ async function bootstrapWorker(): Promise<void> {
     logger.error({ err: err.message }, 'sim-worker runtime error');
   });
 
+  registerShutdownHandlers(worker, connection);
+
   logger.info('sim-worker listening for jobs');
 }
 
-void bootstrapWorker();
+void bootstrapWorker().catch((err) => {
+  const message = err instanceof Error ? err.message : String(err);
+  logger.error({ err: message }, 'sim-worker failed to start');
+  process.exit(1);
+});
