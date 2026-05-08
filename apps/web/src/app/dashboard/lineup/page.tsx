@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-07T01:58:51Z
 import { createClient } from '@/lib/supabase/server';
 import { requireMyTeam } from '@/lib/queries/team';
 import LineupEditor from './lineup-editor';
@@ -16,10 +17,7 @@ export default async function LineupPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">{team.team_name} — Batting Lineup</h1>
-      <p className="text-sm text-gray-400">
-        Drag players to reorder your 9-man batting lineup. Click a bench player to swap them in.
-      </p>
+      <h1 className="text-2xl font-bold text-white">{team.team_name} — Lineup</h1>
       <LineupEditor hitters={hitters ?? []} />
     </div>
   );

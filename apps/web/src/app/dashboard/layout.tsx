@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-05T20:40:54Z
+// Last touched by agent: 2026-05-07T17:03:14Z
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { getSessionUser } from '@/lib/supabase/session-user';
@@ -9,7 +9,7 @@ const NAV_LINKS = [
   { href: '/dashboard', label: 'Front Office' },
   { href: '/dashboard/roster', label: 'Roster' },
   { href: '/dashboard/lineup', label: 'Lineup' },
-  { href: '/dashboard/rotation', label: 'Rotation' },
+  { href: '/dashboard/pitching-staff', label: 'Pitching Staff' },
   { href: '/dashboard/stats', label: 'Stats' },
   { href: '/dashboard/schedule', label: 'League' },
   { href: '/dashboard/standings', label: 'Standings' },

@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-06T13:21:29Z
+// Last touched by agent: 2026-05-07T21:54:13Z
 /**
  * ═══════════════════════════════════════════════════════════════════
  * SIM-LAB CONFIG — All tunable knobs in one place
@@ -112,6 +112,12 @@ export const CONFIG = {
     routeBase: 1.0,
     routeLeverage: -0.02,
     catchRadiusFt: 12,           // ball within this of fielder = caught (line-drive)
+    /** Catch tolerance for in-air balls: fielder may arrive slightly
+     *  after landing and still convert a running/diving catch.
+     *  Tightened from prior baseline to reduce overly generous catches.
+     *  Skill 5 = 0.65s, Skill 10 = 0.85s, Skill 1 = 0.49s. */
+    catchSlackBaseSec: 0.65,
+    catchSlackDefenseLeverageSec: 0.04,
   },
 
   // ─── Fielding physics & territory ────────────────────────────

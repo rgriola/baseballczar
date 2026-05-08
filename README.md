@@ -1,4 +1,4 @@
-> Last touched by agent: 2026-05-06T14:15:35Z
+> Last touched by agent: 2026-05-06T17:28:17Z
 
 # Baseball Czar v2
 
@@ -182,13 +182,86 @@ npm run test         # Vitest unit tests (apps/web)
 npm run test:e2e     # Playwright E2E tests (apps/web)
 npm run sim          # Sim-engine CLI — 162-game season
 npm run sim2         # Sim2 CLI — season/game modes with explicit params output
+npm run sim:reset    # POST /api/sim/reset (optionally -- --leagueId <id>)
 npm run sim:due      # Call POST /api/sim/run-due with service-role auth
-npm run sim:all      # Call POST /api/sim/sim-all with service-role auth
+npm run sim:all      # Call POST /api/sim/sim-all in bounded batches (default 25)
+npm run sim:league   # Reset + loop sim-all until a league has no unplayed games
 npm run sim:run      # Call POST /api/sim/run with --scheduleId
+npm run sim:summary  # Call POST /api/sim/summary for smoke summary output only
+npm run sim:worker   # Start BullMQ simulation worker (queue consumer)
 npm run due          # Alias for sim:due
 npm run skill-test   # Skill sensitivity harness
 npm run typecheck    # TypeScript check (packages/sim-engine)
 ```
+
+Queue-first simulation workflow (recommended for long seasons):
+
+```bash
+# Terminal 1: web server
+npm run dev -w apps/web
+
+# Terminal 2: queue worker
+npm run sim:worker
+
+# Terminal 3: reset + enqueue in batches + wait for completion + print summary
+npm run sim:league -- --leagueId 2 --reset --batchSize 20
+```
+
+Worker Redis requirement:
+
+- `npm run sim:worker` needs a Redis TCP endpoint (`REDIS_URL` or `BULLMQ_REDIS_URL`).
+- `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` are REST-only and do not satisfy BullMQ worker connectivity.
+- Quick local Redis option:
+
+```bash
+docker run --name bbczar-redis -p 6379:6379 -d redis:7
+```
+
+League-schedule smoke examples:
+
+```bash
+# Reset one league only
+npm run sim:reset -- --leagueId 1
+
+# Simulate all remaining unplayed schedule entries in one league
+npm run sim:all -- --leagueId 1
+
+# Queue one batch quickly (returns immediately)
+npm run sim:all -- --leagueId 1 --queue --batchSize 25
+
+# Queue one batch and wait for completion before returning
+npm run sim:all -- --leagueId 1 --queue --batchSize 25 --wait
+
+# Simulate all remaining unplayed schedule entries across all leagues in loop mode
+npm run sim:all -- --loop --batchSize 25
+
+# One-shot flow: reset league then simulate that league schedule
+npm run sim:league -- --leagueId 2 --reset
+
+# Optional: tune batch size (smaller batches reduce HTTP timeout risk)
+npm run sim:league -- --leagueId 2 --reset --batchSize 20
+```
+
+## Queue-First Sim Rollout Notes (May 2026)
+
+What shipped:
+
+- `POST /api/sim/sim-all` now supports `mode: inline|queue`, bounded `maxGames`, optional scope (`leagueId`, `seasonNo`), and optional summary payload.
+- New status endpoint `POST /api/sim/status/batch` supports bulk polling for queued jobs.
+- New summary endpoint `POST /api/sim/summary` returns rates/per-team-game/spray-angle/launch-angle smoke metrics.
+- Root CLI now supports queue-oriented loops and composite workflows via `sim:league`, `--queue`, `--wait`, and `--batchSize`.
+- Daily cron now enqueues due games to BullMQ instead of simulating all due games inline inside one request.
+
+Pitfalls we hit (and fixes):
+
+- **BullMQ custom job IDs cannot contain `:`**. We initially used `schedule:${id}` and hit `Custom Id cannot contain :` at runtime.
+  Fix: switched to `schedule-${id}` in both sim-all and daily cron enqueue paths.
+- **Worker Redis env mismatch in standalone process**. Worker startup fell back to localhost and failed with `ECONNREFUSED`.
+  Fix: worker bootstrap hydrates env from `.env.local` candidates and does a Redis preflight ping with actionable startup guidance.
+- **REST Redis env vars are not queue transport**. `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` are not sufficient for BullMQ/ioredis.
+  Fix: require `REDIS_URL` (or `BULLMQ_REDIS_URL`) using a TCP/`rediss://` connection string.
+- **Long inline league sims are request-fragile**. 150-game runs can exceed practical request lifetimes.
+  Fix: prefer queue mode + worker process + batched enqueue/poll loops.
 
 ## Dev Performance Workflow
 

@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-06T15:02:00Z
+// Last touched by agent: 2026-05-07T19:03:06Z
 // Purpose: Replays persisted game events without running a new simulation.
 'use client';
 
@@ -104,7 +104,22 @@ export default function PersistedReplay({
     if (!events.length) return;
     const formatted = formatTickEvents(events, time);
     if (!formatted.length) return;
-    setPbpEntries((prev) => [...prev, ...formatted].slice(-500));
+    setPbpEntries((prev) => {
+      const next = [...prev];
+      for (const entry of formatted) {
+        const last = next[next.length - 1];
+        const repeatedLanding = Boolean(
+          last
+          && last.text === entry.text
+          && last.text.includes('Ball lands at')
+          && entry.text.includes('Ball lands at'),
+        );
+        if (!repeatedLanding) {
+          next.push(entry);
+        }
+      }
+      return next.slice(-500);
+    });
   }, []);
 
   useEffect(() => {

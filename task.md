@@ -1,4 +1,4 @@
-> Last touched by agent: 2026-05-06T14:17:28Z
+> Last touched by agent: 2026-05-06T16:04:24Z
 
 # Tasks
 
@@ -72,23 +72,43 @@
 ## Manual QA — Pre P1 Web Perf
 
 - [ ] **Rotation page dynamic limits (L-03).** In dashboard rotation, verify save is blocked below 10 and above 12 assigned pitchers; confirm valid save at 10, 11, and 12.
+
+  > > > We need a new UI which checks total roster size and batter/hitter v pitcher balence <<
+  > > > I like the drag and drop I used to have with a field to make it easier to visualize.
+  > > > Sever Roster balence check + auto assign if players are missing.
+
 - [ ] **Role constraints.** Confirm exactly 5 SP required, bullpen accepts 4-6 RP, and exactly 1 CL is required.
+
 - [ ] **Roster page messaging.** Validate pitcher active-count banner shows valid range 10-12 and correctly warns on under/over states.
+
 - [ ] **Slot mapping.** Confirm RP5/RP6 display labels for rotation slots 11 and 12 in roster and remain intact after save/reload.
+
 - [ ] **Scheduled sim ingestion.** Run due/single scheduled game and verify no slot-11/12 pitchers are dropped from available bullpen.
+
 - [ ] **Replay wall ricochet (R-04).** Load a persisted replay with wall contact and verify visible wall-hit segment followed by bounce-back travel.
 - [ ] **Replay roll-to-stop (R-03).** On non-fielded balls, ensure animation continues to `restPoint` instead of stopping at `landingPoint`.
 - [ ] **HR visual sanity (R-01/R-02).** Verify HR flights clear wall visually and runner path remains home → 1B → 2B → 3B → home.
-- [ ] **Sim smoke guardrails.** Run `npm run sim -- --games 162 --seed 1` and verify rates stay within expected ranges.
+
+- [ ] **Sim smoke guardrails.** Run `npm run sim -- --games 162 --seed 1` for pure engine guardrails, then run `npm run sim:league -- --leagueId <id> --reset` to reset and replay one league schedule from DB-backed fixtures.
 
 ## Manual QA — P1 Web Compile Perf
 
 - [ ] **Stats capture sanity.** Start dev with `NEXT_WEBPACK_STATS_DIR=.next/perf-stats npm run dev -w apps/web` and verify `.stats.json` files are emitted under `.next/perf-stats`.
+
 - [ ] **Benchmark protocol.** Run one cold pass and two warm passes with `benchmark-dev-routes.mjs` for `/`, `/dashboard`, and `/sim-lab-2`.
 - [ ] **Module analysis report.** Run `analyze-webpack-stats.mjs` and confirm output highlights top compile-time modules and top fan-out modules.
 - [ ] **Acceptance check.** Confirm warm pass 2 for `/sim-lab-2` stays at or below the criteria in `apps/web/perf/dev-compile-sim-lab-2.md`.
 
 ---
+
+# Stat Issues
+
+- [ ] Pitching Saves not being recorded - May 6 2026
+- [ ] Redefine Groundballs, Flyballs, Line drives, and IFFB LA.
+- [ ] Create Pure Box Score Page - Traditional Box Score
+- [ ] Create Player Baseball Card
+- [ ] Create LA, Spray, Exit Data for individual players + mapping for Baseball Card.
+- [ ] Historical db for player cards.
 
 ## In-Progress
 

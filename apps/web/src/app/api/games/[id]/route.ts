@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-06T04:38:04Z
+// Last touched by agent: 2026-05-07T22:40:33Z
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
@@ -8,6 +8,18 @@ type PlayerSummary = {
   last_name: string | null;
   jersey_no: number | null;
   position: string | null;
+  hand_batting: number | null;
+  hand_throw: number | null;
+  speed: number | null;
+  stamina: number | null;
+  ag: number | null;
+  eye: number | null;
+  avg: number | null;
+  strength: number | null;
+  play_intel: number | null;
+  bunting: number | null;
+  fielding: number | null;
+  throw: number | null;
 };
 
 type BoxRow = {
@@ -65,12 +77,12 @@ export async function GET(
       .order('seq'),
     supabase
       .from('game_stats_hitting')
-      .select('*, players(first_name, last_name, jersey_no, position)')
+        .select('*, players(first_name, last_name, jersey_no, position, hand_batting, hand_throw, speed, stamina, ag, eye, avg, strength, play_intel, bunting, fielding, throw)')
       .eq('game_id', gameId)
       .order('bat_order'),
     supabase
       .from('game_stats_pitching')
-      .select('*, players(first_name, last_name, jersey_no, position)')
+        .select('*, players(first_name, last_name, jersey_no, position, hand_batting, hand_throw, speed, stamina, ag, eye, avg, strength, play_intel, bunting, fielding, throw)')
       .eq('game_id', gameId)
       .order('pitch_app'),
   ]);
@@ -109,7 +121,7 @@ export async function GET(
     if (playerIds.size > 0) {
       const { data: players } = await supabase
         .from('players')
-        .select('id, first_name, last_name, jersey_no, position')
+          .select('id, first_name, last_name, jersey_no, position, hand_batting, hand_throw, speed, stamina, ag, eye, avg, strength, play_intel, bunting, fielding, throw')
         .in('id', Array.from(playerIds));
 
       const playerMap = new Map<number, PlayerSummary>();
@@ -122,6 +134,18 @@ export async function GET(
           last_name: player.last_name,
           jersey_no: player.jersey_no,
           position: player.position,
+          hand_batting: player.hand_batting,
+          hand_throw: player.hand_throw,
+          speed: player.speed,
+          stamina: player.stamina,
+          ag: player.ag,
+          eye: player.eye,
+          avg: player.avg,
+          strength: player.strength,
+          play_intel: player.play_intel,
+          bunting: player.bunting,
+          fielding: player.fielding,
+          throw: player.throw,
         });
       }
 

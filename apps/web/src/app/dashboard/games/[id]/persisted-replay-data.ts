@@ -1,29 +1,37 @@
-// Last touched by agent: 2026-05-06T15:02:00Z
+// Last touched by agent: 2026-05-07T22:40:33Z
 // Purpose: Builds persisted replay snapshots directly from stored game telemetry.
 
-import {
-  FIELDER_POSITIONS_FT,
-  type Position,
-} from '@baseballczar/sim-engine';
+import { type Position } from '@baseballczar/sim-engine';
 import type {
-  FielderEntity,
   TickEvent,
   WorldSnapshot,
 } from '@baseballczar/tick-engine';
+import {
+  SEGMENT_DT_SEC,
+  buildAtBatStartRunners,
+  buildBallState,
+  buildBaseRunners,
+  buildDefenseFrameForBall,
+  buildPlayRunners,
+  clamp01,
+  cloneFielders,
+  lerp,
+  type PersistedBaseOccupancyShape,
+  type PersistedBallWaypointShape,
+} from './persisted-replay-motion';
+import { buildGroundOutThrowSequence } from './persisted-replay-defense';
+import {
+  isBattedBallOutcome,
+  isCatchOutOutcome,
+  mapPersistedOutcomeCode,
+  normalizeOutcomeFromDescription,
+} from './persisted-replay-outcome';
+import { withCatchOutWaypoints } from './persisted-replay-waypoint-transforms';
+import { buildDefenseFieldersFromRows, buildPlayerNameSummaryResolver, buildRunnerNameResolver, buildRunnerSkillResolver, type ReplayPlayerSummary } from './persisted-replay-defense-roster';
 
-export type PersistedBallPathWaypoint = {
-  label: string;
-  x: number;
-  y: number;
-  z: number;
-  tSec?: number;
-};
+export type PersistedBallPathWaypoint = PersistedBallWaypointShape;
 
-export type PersistedBaseOccupancy = {
-  first: number | null;
-  second: number | null;
-  third: number | null;
-};
+export type PersistedBaseOccupancy = PersistedBaseOccupancyShape;
 
 export type PersistedGameEventRow = {
   seq: number;
@@ -66,6 +74,18 @@ export type PersistedPlayerName = {
   last_name?: string | null;
   jersey_no?: number | null;
   position?: string | null;
+  hand_batting?: number | null;
+  hand_throw?: number | null;
+  speed?: number | null;
+  stamina?: number | null;
+  ag?: number | null;
+  eye?: number | null;
+  avg?: number | null;
+  strength?: number | null;
+  play_intel?: number | null;
+  bunting?: number | null;
+  fielding?: number | null;
+  throw?: number | null;
 };
 
 export type PersistedHittingRow = {
@@ -113,22 +133,10 @@ export type ReplayBuild = {
   totalDurationSec: number;
 };
 
-const OUTCOME = {
-  single: 1,
-  double: 2,
-  triple: 3,
-  homeRun: 4,
-  walk: 5,
-  groundOut: 6,
-  strikeout: 7,
-} as const;
-
 const TEAM_COLOR = {
   homeDefense: 0x1e5631,
   awayDefense: 0x2a3a6e,
 } as const;
-
-const DEFENSE_POSITIONS: Position[] = ['P', 'C', 'B1', 'B2', 'SS', 'B3', 'LF', 'CF', 'RF'];
 
 const ZONE_TO_POINT_FT: Record<string, { x: number; y: number }> = {
   LF_LINE: { x: -165, y: 215 },
@@ -160,6 +168,16 @@ const CONTACT_PROFILE: Record<string, { ev: number; la: number }> = {
   'ground-out': { ev: 84, la: -4 },
 };
 
+const PITCH_TYPES = ['Four-seam', 'Sinker', 'Slider', 'Changeup', 'Curveball'] as const;
+
+type SyntheticPitchOutcome = 'ball' | 'called-strike' | 'swinging-strike' | 'foul' | 'in-play';
+type SyntheticPitchStep = {
+  outcome: SyntheticPitchOutcome;
+  zone: 'in' | 'edge' | 'off';
+  actualInZone: boolean;
+  swung: boolean;
+};
+
 export function num(v: unknown, fallback = 0): number {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   if (typeof v === 'string') {
@@ -169,22 +187,113 @@ export function num(v: unknown, fallback = 0): number {
   return fallback;
 }
 
-function mapOutcomeCode(outcomeCode: number): string {
-  if (outcomeCode === OUTCOME.single) return 'single';
-  if (outcomeCode === OUTCOME.double) return 'double';
-  if (outcomeCode === OUTCOME.triple) return 'triple';
-  if (outcomeCode === OUTCOME.homeRun) return 'home-run';
-  if (outcomeCode === OUTCOME.walk) return 'walk';
-  if (outcomeCode === OUTCOME.strikeout) return 'strikeout';
-  return 'ground-out';
+function clampSkill(value: number | null | undefined, fallback = 5): number {
+  return Math.max(1, Math.min(10, Math.round(typeof value === 'number' && Number.isFinite(value) ? value : fallback)));
 }
 
-function isBattedBallOutcome(outcome: string): boolean {
-  return outcome === 'single'
-    || outcome === 'double'
-    || outcome === 'triple'
-    || outcome === 'home-run'
-    || outcome === 'ground-out';
+function handLabel(handCode: number | null | undefined): 'R' | 'L' | 'S' { return handCode === 2 ? 'L' : handCode === 3 ? 'S' : 'R'; }
+
+function buildSyntheticPitchPlan(seq: number, outcome: string): SyntheticPitchStep[] {
+  if (outcome === 'walk') {
+    return [
+      { outcome: 'ball', zone: 'off', actualInZone: false, swung: false },
+      { outcome: 'called-strike', zone: 'edge', actualInZone: true, swung: false },
+      { outcome: 'ball', zone: 'off', actualInZone: false, swung: false },
+      { outcome: 'ball', zone: 'off', actualInZone: false, swung: false },
+      { outcome: 'ball', zone: 'off', actualInZone: false, swung: false },
+    ];
+  }
+
+  if (outcome === 'strikeout') {
+    if (seq % 2 === 0) {
+      return [
+        { outcome: 'called-strike', zone: 'edge', actualInZone: true, swung: false },
+        { outcome: 'foul', zone: 'in', actualInZone: true, swung: true },
+        { outcome: 'swinging-strike', zone: 'off', actualInZone: false, swung: true },
+      ];
+    }
+
+    return [
+      { outcome: 'ball', zone: 'off', actualInZone: false, swung: false },
+      { outcome: 'called-strike', zone: 'in', actualInZone: true, swung: false },
+      { outcome: 'swinging-strike', zone: 'edge', actualInZone: true, swung: true },
+      { outcome: 'swinging-strike', zone: 'off', actualInZone: false, swung: true },
+    ];
+  }
+
+  if (isBattedBallOutcome(outcome)) {
+    if (seq % 2 === 0) {
+      return [
+        { outcome: 'called-strike', zone: 'in', actualInZone: true, swung: false },
+        { outcome: 'ball', zone: 'off', actualInZone: false, swung: false },
+        { outcome: 'in-play', zone: 'edge', actualInZone: true, swung: true },
+      ];
+    }
+
+    return [
+      { outcome: 'ball', zone: 'off', actualInZone: false, swung: false },
+      { outcome: 'called-strike', zone: 'edge', actualInZone: true, swung: false },
+      { outcome: 'foul', zone: 'in', actualInZone: true, swung: true },
+      { outcome: 'in-play', zone: 'in', actualInZone: true, swung: true },
+    ];
+  }
+
+  return [
+    { outcome: 'called-strike', zone: 'edge', actualInZone: true, swung: false },
+    { outcome: 'in-play', zone: 'in', actualInZone: true, swung: true },
+  ];
+}
+
+function syntheticPitchMph(seq: number, pitchIndex: number, zone: 'in' | 'edge' | 'off'): number {
+  const seed = (seq * 7 + pitchIndex * 5) % 8;
+  const base = 88 + seed;
+  if (zone === 'off') return base - 2;
+  if (zone === 'edge') return base - 1;
+  return base;
+}
+
+function buildSyntheticPitchEvents(
+  row: PersistedGameEventRow,
+  outcome: string,
+  batterName: string,
+  pitcherName: string,
+): TickEvent[][] {
+  const plan = buildSyntheticPitchPlan(num(row.seq), outcome);
+  let balls = 0;
+  let strikes = 0;
+
+  return plan.map((step, index) => {
+    if (step.outcome === 'ball') {
+      balls = Math.min(4, balls + 1);
+    } else if (step.outcome === 'called-strike' || step.outcome === 'swinging-strike') {
+      strikes = Math.min(3, strikes + 1);
+    } else if (step.outcome === 'foul') {
+      strikes = Math.min(2, strikes + 1);
+    }
+
+    const pitch: TickEvent = {
+      type: 'pitch',
+      pitchNum: index + 1,
+      batterName,
+      pitcherName,
+      zone: step.zone,
+      actualInZone: step.actualInZone,
+      speed: PITCH_TYPES[(num(row.seq) + index) % PITCH_TYPES.length],
+      mph: syntheticPitchMph(num(row.seq), index, step.zone),
+      swung: step.swung,
+    };
+
+    const pitchResult: TickEvent = {
+      type: 'pitch-result',
+      outcome: step.outcome,
+      balls,
+      strikes,
+      batterName,
+      pitcherName,
+    };
+
+    return [pitch, pitchResult];
+  });
 }
 
 function sprayToDirection(sprayDeg: number): string {
@@ -249,9 +358,65 @@ function normalizeWaypoints(raw: unknown): PersistedBallPathWaypoint[] {
   return out;
 }
 
+function estimateApexHeightFt(launchAngleDeg: number, exitVeloMph: number, contactHeightFt: number): number {
+  const gFps2 = 32.174;
+  const clampedLa = Math.max(-25, Math.min(60, launchAngleDeg));
+  if (clampedLa <= 0) return Math.max(0, contactHeightFt);
+  const launchRad = (clampedLa * Math.PI) / 180;
+  const veloFps = Math.max(40, exitVeloMph * 1.46667);
+  const verticalVelo = veloFps * Math.sin(launchRad);
+  const ballisticRise = (verticalVelo * verticalVelo) / (2 * gFps2);
+  return Math.max(contactHeightFt, Math.min(110, contactHeightFt + ballisticRise));
+}
+
+function withSynthesizedApex(
+  row: PersistedGameEventRow,
+  outcome: string,
+  waypoints: PersistedBallPathWaypoint[],
+): PersistedBallPathWaypoint[] {
+  if (!isBattedBallOutcome(outcome)) return waypoints;
+  if (waypoints.some((w) => w.label === 'apex' || w.label === 'wall-hit')) return waypoints;
+  const contact = waypoints.find((w) => w.label === 'contact');
+  const landing = waypoints.find((w) => w.label === 'landing');
+  if (!contact || !landing) return waypoints;
+  const maxZ = waypoints.reduce((currentMax, waypoint) => Math.max(currentMax, waypoint.z), Number.NEGATIVE_INFINITY);
+  const launchAngle = row.launch_angle_deg != null
+    ? num(row.launch_angle_deg)
+    : (CONTACT_PROFILE[outcome]?.la ?? CONTACT_PROFILE['ground-out'].la);
+  const exitVelo = row.exit_velo_mph != null
+    ? num(row.exit_velo_mph)
+    : (CONTACT_PROFILE[outcome]?.ev ?? CONTACT_PROFILE['ground-out'].ev);
+  const apexZ = estimateApexHeightFt(launchAngle, exitVelo, contact.z);
+  if (!Number.isFinite(maxZ) || apexZ <= maxZ + 0.75) {
+    return waypoints;
+  }
+  const contactTime = typeof contact.tSec === 'number' ? contact.tSec : 0;
+  const landingTime = typeof landing.tSec === 'number' ? landing.tSec : undefined;
+  const apexTime = typeof landingTime === 'number'
+    ? contactTime + Math.max(0.18, (landingTime - contactTime) * 0.45)
+    : undefined;
+
+  const apexWaypoint: PersistedBallPathWaypoint = {
+    label: 'apex',
+    x: lerp(contact.x, landing.x, 0.42),
+    y: lerp(contact.y, landing.y, 0.42),
+    z: apexZ,
+    ...(typeof apexTime === 'number' ? { tSec: apexTime } : {}),
+  };
+
+  const landingIdx = waypoints.findIndex((w) => w.label === 'landing');
+  if (landingIdx < 0) return waypoints;
+
+  const enriched = [...waypoints];
+  enriched.splice(landingIdx, 0, apexWaypoint);
+  return enriched;
+}
+
 function withFallbackWaypoints(row: PersistedGameEventRow, outcome: string): PersistedBallPathWaypoint[] {
   const existing = normalizeWaypoints(row.ball_path_waypoints);
-  if (existing.length > 0) return existing;
+  if (existing.length > 0) {
+    return withCatchOutWaypoints(outcome, withSynthesizedApex(row, outcome, existing));
+  }
 
   const landing = zonePointFt(row.hit_zone);
   const fallback: PersistedBallPathWaypoint[] = [
@@ -262,39 +427,22 @@ function withFallbackWaypoints(row: PersistedGameEventRow, outcome: string): Per
   if (outcome !== 'home-run') {
     fallback.push({ label: 'fielded', x: landing.x, y: landing.y, z: 0, tSec: 2.8 });
   }
-  return fallback;
-}
-
-function facingToHome(pos: { x: number; y: number }): number {
-  return Math.atan2(-pos.y, -pos.x);
-}
-
-function buildDefenseFielders(teamColor: number): FielderEntity[] {
-  return DEFENSE_POSITIONS.map((position, idx) => {
-    const homePos = FIELDER_POSITIONS_FT[position];
-    return {
-      position,
-      pos: { ...homePos },
-      homePos: { ...homePos },
-      state: { type: 'idle' },
-      speedFps: 25,
-      agility: 6,
-      facingRad: facingToHome(homePos),
-      turnRateRad: 6,
-      throwVeloFps: 120,
-      defense: 6,
-      playerId: idx + 1,
-      teamColor,
-    };
-  });
+  return withCatchOutWaypoints(outcome, withSynthesizedApex(row, outcome, fallback));
 }
 
 function eventForWaypoint(
   waypoint: PersistedBallPathWaypoint,
   outcome: string,
   row: PersistedGameEventRow,
+  previousWaypoint?: PersistedBallPathWaypoint,
 ): TickEvent[] {
   if (waypoint.label === 'landing') {
+    if (isCatchOutOutcome(outcome)) return [];
+    const previousWasGrounded = previousWaypoint?.label === 'landing' || previousWaypoint?.label === 'rest';
+    const sameSpotAsPrevious = previousWaypoint
+      ? Math.hypot(waypoint.x - previousWaypoint.x, waypoint.y - previousWaypoint.y) < 1
+      : false;
+    if (previousWasGrounded && sameSpotAsPrevious) return [];
     return [{ type: 'ball-landed', at: { x: waypoint.x, y: waypoint.y } }];
   }
   if (waypoint.label === 'wall-hit') {
@@ -304,10 +452,13 @@ function eventForWaypoint(
     return [{ type: 'wall-bounce', at: { x: waypoint.x, y: waypoint.y } }];
   }
   if (waypoint.label === 'fielded') {
+    if (isCatchOutOutcome(outcome)) {
+      return [{ type: 'ball-caught', by: zoneFielder(row.hit_zone), at: { x: waypoint.x, y: waypoint.y } }];
+    }
     return [{ type: 'ball-fielded', by: zoneFielder(row.hit_zone), at: { x: waypoint.x, y: waypoint.y } }];
   }
   if (waypoint.label === 'rest') {
-    return [{ type: 'ball-landed', at: { x: waypoint.x, y: waypoint.y } }];
+    return [];
   }
   return [];
 }
@@ -343,15 +494,28 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
   const homeName = payload.teamMap[String(payload.game.home_team_id)] ?? 'Home';
   const awayName = payload.teamMap[String(payload.game.visitor_team_id)] ?? 'Visitor';
 
-  const homeDefense = buildDefenseFielders(TEAM_COLOR.homeDefense);
-  const awayDefense = buildDefenseFielders(TEAM_COLOR.awayDefense);
+  const homeDefense = buildDefenseFieldersFromRows(
+    TEAM_COLOR.homeDefense,
+    payload.game.home_team_id,
+    payload.hitting ?? [],
+    payload.pitching ?? [],
+  );
+  const awayDefense = buildDefenseFieldersFromRows(
+    TEAM_COLOR.awayDefense,
+    payload.game.visitor_team_id,
+    payload.hitting ?? [],
+    payload.pitching ?? [],
+  );
+  const resolveRunnerProfile = buildRunnerSkillResolver(payload.hitting ?? [], payload.pitching ?? []);
+  const resolveRunnerProfileByName = buildRunnerNameResolver(payload.hitting ?? [], payload.pitching ?? []);
+  const resolvePlayerSummaryByName = buildPlayerNameSummaryResolver(payload.hitting ?? [], payload.pitching ?? []);
 
   if (events.length === 0) {
     return {
       snapshots: [{
         time: 0,
         ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
-        fielders: homeDefense,
+        fielders: cloneFielders(homeDefense),
         runners: [],
         events: [],
       }],
@@ -365,11 +529,13 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
   let previousVisitorRuns = 0;
   let previousInning = 0;
   let previousHalf: 'top' | 'bottom' | null = null;
+  let previousOuts = 0;
   let previousAfter: PersistedBaseOccupancy = { first: null, second: null, third: null };
 
   for (let i = 0; i < events.length; i++) {
     const row = events[i];
-    const outcome = mapOutcomeCode(num(row.outcome));
+    const mappedOutcome = mapPersistedOutcomeCode(num(row.outcome));
+    const outcome = normalizeOutcomeFromDescription(mappedOutcome, row.description);
     const defense = row.half === 'top' ? homeDefense : awayDefense;
     const beforeBase = normalizeBaseOccupancy(row.base_occupancy_before) ?? previousAfter;
     const afterBase = normalizeBaseOccupancy(row.base_occupancy_after) ?? {
@@ -379,13 +545,19 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
     };
     const batterName = row.batter_name || 'Batter';
     const pitcherName = row.pitcher_name || 'Pitcher';
+    const batterSummary: ReplayPlayerSummary | undefined = resolvePlayerSummaryByName(batterName);
+    const pitcherSummary: ReplayPlayerSummary | undefined = resolvePlayerSummaryByName(pitcherName);
+    const batterRunnerId = 9_000_000 + num(row.seq, i + 1);
+    const batterRunnerProfile = resolveRunnerProfileByName(batterName);
+    const runsScored = Math.max(0, num(row.home_runs) - previousHomeRuns)
+      + Math.max(0, num(row.visitor_runs) - previousVisitorRuns);
 
     if (row.inning !== previousInning || row.half !== previousHalf) {
       snapshots.push({
         time: t,
         ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
-        fielders: defense,
-        runners: [],
+        fielders: cloneFielders(defense),
+        runners: buildBaseRunners(beforeBase, resolveRunnerProfile),
         events: [{ type: 'inning-change', inning: row.inning, half: row.half }],
         gameState: emptyGameState(
           row,
@@ -400,17 +572,19 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
       t += 0.55;
     }
 
-    const outsBefore = Math.max(0, num(row.outs) - (outcome === 'ground-out' || outcome === 'strikeout' ? 1 : 0));
+    const outsBefore = row.inning === previousInning && row.half === previousHalf
+      ? Math.max(0, Math.min(2, previousOuts))
+      : 0;
 
     snapshots.push({
       time: t,
       ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
-      fielders: defense,
-      runners: [],
+      fielders: cloneFielders(defense),
+      runners: buildAtBatStartRunners(beforeBase, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
       events: [{
         type: 'at-bat-start',
-        batter: { name: batterName, hand: 'R', avg: 5, power: 5, eye: 5, speed: 5 },
-        pitcher: { name: pitcherName, hand: 'R', ctrl: 5, stam: 5, throwing: 5 },
+        batter: { name: batterName, hand: handLabel(batterSummary?.hand_batting), avg: clampSkill(batterSummary?.avg, 5), power: clampSkill(batterSummary?.strength, 5), eye: clampSkill(batterSummary?.eye, 5), speed: clampSkill(batterSummary?.speed, 5) },
+        pitcher: { name: pitcherName, hand: handLabel(pitcherSummary?.hand_throw), ctrl: clampSkill(pitcherSummary?.eye, 5), stam: clampSkill(pitcherSummary?.stamina, 5), throwing: clampSkill(pitcherSummary?.throw, 5) },
         inning: row.inning,
         half: row.half,
         outs: outsBefore,
@@ -425,7 +599,23 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
         outs: outsBefore,
       },
     });
-    t += 0.7;
+    t += 0.22;
+
+    const syntheticPitchFrames = buildSyntheticPitchEvents(row, outcome, batterName, pitcherName);
+    for (const pitchEvents of syntheticPitchFrames) {
+      snapshots.push({
+        time: t,
+        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
+        fielders: cloneFielders(defense),
+        runners: buildAtBatStartRunners(beforeBase, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
+        events: pitchEvents,
+        gameState: {
+          ...emptyGameState(row, batterName, pitcherName, previousHomeRuns, previousVisitorRuns, i, beforeBase),
+          outs: outsBefore,
+        },
+      });
+      t += 0.2;
+    }
 
     if (isBattedBallOutcome(outcome)) {
       const waypoints = withFallbackWaypoints(row, outcome);
@@ -440,12 +630,20 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
         : (CONTACT_PROFILE[outcome]?.ev ?? CONTACT_PROFILE['ground-out'].ev);
       const hang = typeof landing?.tSec === 'number' ? Math.max(0.2, landing.tSec) : (launchAngle > 10 ? 3.2 : 1.2);
       const distanceFt = Math.round(Math.hypot(landing?.x ?? 0, landing?.y ?? 0));
+      const totalPlaySec = Math.max(
+        0.8,
+        typeof waypoints[waypoints.length - 1]?.tSec === 'number'
+          ? num(waypoints[waypoints.length - 1]?.tSec, 0.8)
+          : outcome === 'ground-out' ? 2.2 : 3.2,
+      );
+      let elapsedPlaySec = 0;
+      let defenseFrame = buildDefenseFrameForBall(defense, row.hit_zone, { x: contact.x, y: contact.y }, false, zoneFielder, undefined, 0);
 
       snapshots.push({
         time: t,
         ball: { pos: { x: contact.x, y: contact.y, z: contact.z }, state: { type: 'in-flight', vel: { x: 0, y: 0, z: 0 } } },
-        fielders: defense,
-        runners: [],
+        fielders: defenseFrame,
+        runners: buildPlayRunners(beforeBase, afterBase, outcome, 0, runsScored, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
         events: [{
           type: 'contact',
           batterName,
@@ -454,7 +652,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
           sprayAngleDeg: sprayAngle,
           sprayDirection: sprayToDirection(sprayAngle),
           distanceFt,
-          peakHeightFt: waypoints.find((w) => w.label === 'apex')?.z ?? (launchAngle > 10 ? 45 : 12),
+          peakHeightFt: waypoints.find((w) => w.label === 'apex')?.z ?? estimateApexHeightFt(launchAngle, exitVelo, contact.z),
           hangTimeSec: hang,
           isHomeRun: outcome === 'home-run',
         }],
@@ -463,44 +661,76 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
       t += 0.4;
 
       let prevT = contact.tSec ?? 0;
+      let prevWaypoint = contact;
       for (const waypoint of waypoints) {
         if (waypoint.label === 'contact') continue;
-        const dt = typeof waypoint.tSec === 'number' && waypoint.tSec >= prevT
+        const segmentDuration = typeof waypoint.tSec === 'number' && waypoint.tSec >= prevT
           ? Math.max(0.2, waypoint.tSec - prevT)
           : 0.35;
-        prevT = typeof waypoint.tSec === 'number' ? waypoint.tSec : prevT + dt;
-        const isHeld = waypoint.label === 'fielded';
-        snapshots.push({
-          time: t,
-          ball: {
-            pos: { x: waypoint.x, y: waypoint.y, z: waypoint.z },
-            state: isHeld
-              ? { type: 'held', by: zoneFielder(row.hit_zone) }
-              : { type: 'in-flight', vel: { x: 0, y: 0, z: 0 } },
-          },
-          fielders: defense,
-          runners: [],
-          events: eventForWaypoint(waypoint, outcome, row),
+        const steps = Math.max(1, Math.ceil(segmentDuration / SEGMENT_DT_SEC));
+        const stepDuration = segmentDuration / steps;
+
+        for (let step = 1; step <= steps; step++) {
+          const segU = step / steps;
+          const x = lerp(prevWaypoint.x, waypoint.x, segU);
+          const y = lerp(prevWaypoint.y, waypoint.y, segU);
+          const z = lerp(prevWaypoint.z, waypoint.z, segU);
+          elapsedPlaySec += stepDuration;
+          const playU = clamp01(elapsedPlaySec / totalPlaySec);
+          const lastStep = step === steps;
+          const heldByBall = waypoint.label === 'fielded' && lastStep;
+          defenseFrame = buildDefenseFrameForBall(defense, row.hit_zone, { x, y }, heldByBall, zoneFielder, defenseFrame, stepDuration);
+
+          snapshots.push({
+            time: t,
+            ball: {
+              pos: { x, y, z },
+              state: buildBallState(prevWaypoint, waypoint, segmentDuration, segU, row.hit_zone, zoneFielder),
+            },
+            fielders: defenseFrame,
+            runners: buildPlayRunners(beforeBase, afterBase, outcome, playU, runsScored, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
+            events: lastStep ? eventForWaypoint(waypoint, outcome, row, prevWaypoint) : [],
+            gameState: emptyGameState(row, batterName, pitcherName, previousHomeRuns, previousVisitorRuns, i, beforeBase),
+          });
+          t += stepDuration;
+        }
+
+        prevWaypoint = waypoint;
+        prevT = typeof waypoint.tSec === 'number' ? waypoint.tSec : prevT + segmentDuration;
+      }
+
+      if (outcome === 'ground-out') {
+        const throwFrames = buildGroundOutThrowSequence({
+          defense,
+          throwerPos: zoneFielder(row.hit_zone),
+          waypoints,
+          fallbackStart: contact,
+          beforeBase,
+          afterBase,
+          runsScored,
+          batterRunnerId,
+          batterName,
+          resolveRunnerProfile,
+          batterRunnerProfile,
+          startTimeSec: t,
           gameState: emptyGameState(row, batterName, pitcherName, previousHomeRuns, previousVisitorRuns, i, beforeBase),
         });
-        t += dt;
+        snapshots.push(...throwFrames.snapshots);
+        t = throwFrames.endTimeSec;
       }
 
       if (outcome === 'home-run') {
         snapshots.push({
           time: t,
           ball: { pos: { x: 0, y: 61, z: 8 }, state: { type: 'idle' } },
-          fielders: defense,
-          runners: [],
+          fielders: cloneFielders(defense),
+          runners: buildPlayRunners(beforeBase, afterBase, outcome, 1, runsScored, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
           events: [{ type: 'home-run', distanceFt }],
           gameState: emptyGameState(row, batterName, pitcherName, previousHomeRuns, previousVisitorRuns, i, beforeBase),
         });
         t += 0.35;
       }
     }
-
-    const runsScored = Math.max(0, num(row.home_runs) - previousHomeRuns)
-      + Math.max(0, num(row.visitor_runs) - previousVisitorRuns);
     const resultEvents: TickEvent[] = [];
     if (runsScored > 0) {
       for (let r = 0; r < runsScored; r++) {
@@ -532,8 +762,8 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
     snapshots.push({
       time: t,
       ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
-      fielders: defense,
-      runners: [],
+      fielders: cloneFielders(defense),
+      runners: buildBaseRunners(afterBase, resolveRunnerProfile),
       events: resultEvents,
       gameState: emptyGameState(row, batterName, pitcherName, num(row.home_runs), num(row.visitor_runs), i, afterBase),
     });
@@ -542,8 +772,8 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
     snapshots.push({
       time: t,
       ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
-      fielders: defense,
-      runners: [],
+      fielders: cloneFielders(defense),
+      runners: buildBaseRunners(afterBase, resolveRunnerProfile),
       events: [{ type: 'play-complete' }],
       gameState: emptyGameState(row, batterName, pitcherName, num(row.home_runs), num(row.visitor_runs), i, afterBase),
     });
@@ -552,6 +782,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
     previousAfter = afterBase;
     previousInning = row.inning;
     previousHalf = row.half;
+    previousOuts = Math.max(0, num(row.outs));
     previousHomeRuns = num(row.home_runs);
     previousVisitorRuns = num(row.visitor_runs);
   }

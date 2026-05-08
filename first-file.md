@@ -213,3 +213,30 @@ Also the ball should bounce off the wall or players. Eventually we will add more
 - Sim-Lab-2 needs a couple modes, maybe this means separate UI depending on use. But lets work through Sim-Lab-2's purpose:
 - 1. This shows replays of simulated games in Baseballzar Web App. It is the Replay module for the Team Owner. When game is scheduled, any game in any league, and simulated the results should create a) player, team, league stats b) a box score of the game c) a Game Event Object containing ticks that are Rendered in Sim-Lab-2 so the game can be watched. This is the primary purpose of Sim-Lab-2. the work we have been doing was to develop the sim strategy off line using seeded games.
 - 2. Replaying games or matchups to create a result with the ab
+
+**_ Task _**
+
+- Change to /dashboard/rotation UI
+- Show Every Pitcher on team roster reguardless of status
+- Create 12 slots that are drag and drop
+
+- on Rotation & Bullpen list
+- Create labeled slots SP1, SP2 > CL that are static - do not move. Place the Player Number + Last Name Throwing Arm and Recovery Status (future feature for now Green Rectangle) in these static slots. The bullpen adjusts dynamically. Change "Remove" to deactivate. In bullpen list add a toggle to designate the CL. (this is the preferred closer but the manager may call someone else for the situation - future feate), Dynamically move this pitcher to the bottom of the bullpen. Highlight Pitcher who is the Next Game Starter, Last Starter.
+  Check rotation and bullpen for 5 starter 5 bullpen pitchers, alert if the numbers are off. Do not allow Rotation or Bullpen to drop below 5 and 5.
+- Pitcher Roster; Add all player skills and throwing arm + tot
+  ...
+
+**_ Task _**
+
+- Sim-Lab-2 Review
+- We have done a significant amount of work to the sim but there have been some regressions we need to solve.
+- Players are not animating correctly; fielders are not moving, there are no runners or batters. This is probably a result of how the game resolves hits and outs.
+- The baseball does a very very hard bounce every time it hits something at least in the tick animation.
+- Review and formulate a plan to address the tick animation issues, the baseball bounce math.
+- Lets get the game play tick animation down and locked in.
+
+- Also consider we need to add tick animations for the start of the game, players running out to the field, batter walking to the plate, players switching sides, Players who are out jogging off the field, a round the horn after strikeouts with no runners on base ( the catcher throws to 3bman > 2ndman > ss who throws to the pitcher), also batter/runner sprinting through first base reguardless of the out status.
+
+...
+
+We centralized the base locations in the last batch of work. This is so Runners and Fielders have a centralized knowledge of where the bases are on the grid, then we used an offset in feet for the runners and fielders to throw to or stand on the base. This should of been noted in the Sim but we may have missed it. I think maybe that logic got lost in this recent iteration, but it is getting better. The screen shot shows a runner at 2nd base between plays about 15 feet from the base. and there are multiple runners and batters. Also the field grid starts at 0,0 the apex corner of home base.

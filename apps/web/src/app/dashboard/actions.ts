@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-06T13:37:53Z
+// Last touched by agent: 2026-05-07T17:01:03Z
 'use server';
 
 import { z } from 'zod';
@@ -99,8 +99,8 @@ export async function updateLineup(formData: FormData) {
 const rotationSchema = z.object({
   /** Array of pitcher IDs for rotation slots 1-5 */
   pitcherIds: z.array(z.number().int().positive()).length(5),
-  /** Array of pitcher IDs for bullpen RP1-RP6 (slots 6-9, 11-12) */
-  bullpenIds: z.array(z.number().int().positive()).min(4).max(6),
+  /** Array of pitcher IDs for bullpen RP1-RP4 (slots 6-9) */
+  bullpenIds: z.array(z.number().int().positive()).length(4),
   /** Pitcher ID for the closer CL (slot 10) */
   closerId: z.number().int().positive(),
 });
@@ -122,9 +122,9 @@ export async function updateRotation(formData: FormData) {
 
   const closerId = parsed.data.closerId;
   const totalAssigned = parsed.data.pitcherIds.length + parsed.data.bullpenIds.length + 1;
-  if (totalAssigned < 10 || totalAssigned > 12) {
+  if (totalAssigned !== 10) {
     return {
-      error: `Rotation must include 10-12 pitchers (5 SP + 4-6 RP + 1 CL). Currently ${totalAssigned}.`,
+      error: `Rotation must include exactly 10 pitchers (5 SP + 4 RP + 1 CL). Currently ${totalAssigned}.`,
     };
   }
 
@@ -164,9 +164,9 @@ export async function updateRotation(formData: FormData) {
       .eq('id', parsed.data.pitcherIds[i]);
   }
 
-  // Update bullpen slots (6-9 primary, then 11-12 extra)
+  // Update bullpen slots (6-9)
   for (let i = 0; i < parsed.data.bullpenIds.length; i++) {
-    const slot = i < 4 ? 6 + i : 11 + (i - 4);
+    const slot = 6 + i;
     await supabase
       .from('players')
       .update({ rotation_slot: slot })

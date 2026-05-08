@@ -1,8 +1,8 @@
-> Last touched by agent: 2026-05-06T12:19:00Z
+> Last touched by agent: 2026-05-08T01:40:56Z
 
 # Sim Lab 2 — Status & TODO
 
-> Last updated: 2026-05-06 (replay stability + box score pass)
+> Last updated: 2026-05-08 (replay lock-in checks + golden fixture)
 
 ---
 
@@ -158,6 +158,60 @@
 - Replay games API now has fallback stats queries + player hydration if relation joins fail
 - Box score batting/pitching stat cells now use explicit high-contrast text for dark panels
 - Replay panel scrollbars are now thin and blended for better readability
+
+---
+
+## ✅ Completed Work (May 6, 2026) — Queue-First League Simulation
+
+- Added league-scoped reset/simulation support to CLI and APIs (`leagueId` and optional `seasonNo` scope)
+- Added queue-mode simulation path in `POST /api/sim/sim-all` (`mode=queue`) with bounded batching
+- Added queue batch polling endpoint (`POST /api/sim/status/batch`) for CLI wait loops
+- Added smoke summary endpoint (`POST /api/sim/summary`) and CLI rendering for rates/per-team-game/spray/launch summaries
+- Added root scripts for queue operations (`sim:reset`, `sim:league`, `sim:summary`, `sim:worker`)
+- Switched daily cron from inline due-game simulation to BullMQ enqueue flow
+- Added worker preflight diagnostics so Redis misconfiguration fails fast with setup guidance
+
+### Queue Pitfalls Hit + Resolved
+
+1. BullMQ rejected custom job IDs containing `:` (`Custom Id cannot contain :`).
+   Resolution: changed dedupe IDs from `schedule:${id}` to `schedule-${id}` in all enqueue producers.
+2. Worker process initially failed with localhost Redis `ECONNREFUSED` when env was not loaded in standalone execution.
+   Resolution: worker bootstrap now hydrates env from `.env.local` files and pings Redis before listening.
+3. Upstash REST vars were mistaken for queue transport.
+   Resolution: documented and enforced TCP Redis connection string usage (`REDIS_URL`/`BULLMQ_REDIS_URL`).
+4. Long inline full-schedule requests were fragile for 150-game runs.
+   Resolution: queue-first + batch loops + worker separation became the recommended default for league replays.
+
+---
+
+## ✅ Completed Work (May 8, 2026) — Replay Lock-In Process
+
+- Added a dedicated replay regression suite covering:
+  - DB skill mapping for at-bat cards (batter/pitcher)
+  - DB-mapped runner speed/agility profiles
+  - Chopped-ball apex guard (no inflated fallback apex)
+  - Fielder movement capped by `speedFps * dt`
+  - Ground-out throw timing tied to thrower arm velocity
+
+- Added deterministic golden fixture coverage:
+  - Fixture file: `apps/web/tests/fixtures/persisted-replay/golden-groundout.fixture.ts`
+  - Golden test: `apps/web/tests/unit/persisted-replay-golden.test.ts`
+  - Locks snapshot/event ordering and key timing markers for a persisted ground-out replay
+
+- Added dedicated CI workflow for lock-in checks:
+  - Workflow: `.github/workflows/replay-lock-in.yml`
+  - Job `Replay Regression Suite` runs:
+    - `tests/unit/persisted-replay-regression.test.ts`
+    - `tests/unit/persisted-replay-golden.test.ts`
+  - Job `Web Typecheck` runs:
+    - `npx tsc -p apps/web/tsconfig.json --noEmit`
+
+### Branch Protection Follow-Through
+
+To complete lock-in at repo-policy level, set these as required status checks in GitHub branch protection for `main`:
+
+1. `Replay Lock-In / Replay Regression Suite`
+2. `Replay Lock-In / Web Typecheck`
 
 ---
 

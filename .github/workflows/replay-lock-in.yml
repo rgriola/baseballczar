@@ -1,0 +1,50 @@
+# Last touched by agent: 2026-05-08T01:40:56Z
+# Purpose: Enforces replay regression and web typecheck checks on PRs.
+
+name: Replay Lock-In
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  replay-regression-suite:
+    name: Replay Regression Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run persisted replay lock-in tests
+        run: npm run test -w apps/web -- tests/unit/persisted-replay-regression.test.ts tests/unit/persisted-replay-golden.test.ts
+
+  web-typecheck:
+    name: Web Typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run web typecheck
+        run: npx tsc -p apps/web/tsconfig.json --noEmit

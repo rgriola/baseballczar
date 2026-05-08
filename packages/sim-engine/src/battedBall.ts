@@ -1,3 +1,4 @@
+// Last touched by agent: 2026-05-07T21:54:13Z
 /**
  * Batted-ball resolution. Uses physics + fielder positions to decide
  * what happens when a hitter makes contact.
@@ -214,8 +215,9 @@ function findConverger(
       + (fielder.skills.fielding - 5) * 1.5;
     // Catch tolerance: fielder can arrive slightly after the ball lands
     // and still make a running/diving catch. Better defense = more slack.
-    // Skill 5 = 0.8s slack, Skill 10 = 1.05s, Skill 1 = 0.55s.
-    const catchSlack = 0.8 + (fielder.skills.fielding - 5) * 0.05;
+    // Skill 5 = 0.65s slack, Skill 10 = 0.85s, Skill 1 = 0.49s.
+    const catchSlack = CONFIG.fielder.catchSlackBaseSec
+      + (fielder.skills.fielding - 5) * CONFIG.fielder.catchSlackDefenseLeverageSec;
     const caught = !isGrounder
       && (reach <= ball.hangTimeSec + catchSlack);
     if (!best || reach < best.reachTimeSec) {

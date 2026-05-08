@@ -1,11 +1,13 @@
+// Last touched by agent: 2026-05-06T17:08:21Z
 import IORedis from 'ioredis';
 
 /**
  * Shared IORedis connection for BullMQ queues/workers.
- * Uses REDIS_URL (standard connection string) from env.
+ * Uses REDIS_URL (standard connection string) from process env.
  */
-const url = process.env.REDIS_URL ?? 'redis://localhost:6379';
+export const queueRedisUrl =
+  process.env.REDIS_URL ?? process.env.BULLMQ_REDIS_URL ?? process.env.UPSTASH_REDIS_URL ?? 'redis://127.0.0.1:6379';
 
-export const connection = new IORedis(url, {
+export const connection = new IORedis(queueRedisUrl, {
   maxRetriesPerRequest: null, // required by BullMQ
 });

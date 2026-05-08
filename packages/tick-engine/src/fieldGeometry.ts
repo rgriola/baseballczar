@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-05T07:44:00Z
+// Last touched by agent: 2026-05-07T18:02:00Z
 // Purpose: Centralized base anchors and offsets for runner/fielder placement.
 import { BASE_COORDS_FT, type Position } from '@baseballczar/sim-engine';
 import type { Point2D } from './entities';
@@ -18,7 +18,8 @@ export const BASE_ANCHORS: Record<BaseName, Point2D> = {
 export const RUNNER_ON_BASE_OFFSETS_FT: Record<OccupiedBase, Point2D> = {
   // Shade the 1B runner toward 2B without moving the bag anchor.
   first: { x: -2.5, y: 2.5 },
-  second: { x: 0, y: 0 },
+  // Keep runner slightly to the infield side for clearer visual separation.
+  second: { x: -1, y: 0 },
   third: { x: 0, y: 0 },
 };
 

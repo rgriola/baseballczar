@@ -20,6 +20,10 @@
       "types": "./dist/managerProfiles.d.ts",
       "default": "./dist/managerProfiles.js"
     },
+    "./fieldGeometry": {
+      "types": "./dist/fieldGeometry.d.ts",
+      "default": "./dist/fieldGeometry.js"
+    },
     "./gameOrchestrator": {
       "types": "./dist/gameOrchestrator.d.ts",
       "default": "./dist/gameOrchestrator.js"

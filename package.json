@@ -15,9 +15,13 @@
     "test:e2e":    "npm run test:e2e -w apps/web",
     "sim":         "npm run sim -w packages/sim-engine",
     "sim2":        "npm run sim2 -w packages/sim-engine --",
+    "sim:reset":   "node scripts/sim-api.mjs reset",
     "sim:due":     "node scripts/sim-api.mjs run-due",
     "sim:all":     "node scripts/sim-api.mjs sim-all",
+    "sim:league":  "node scripts/sim-api.mjs sim-league",
     "sim:run":     "node scripts/sim-api.mjs run",
+    "sim:summary": "node scripts/sim-api.mjs summary",
+    "sim:worker":  "npm run worker:sim -w apps/web",
     "due":         "npm run sim:due",
     "skill-test":  "npm run skill-test -w packages/sim-engine",
     "typecheck":   "npm run typecheck -w packages/sim-engine"

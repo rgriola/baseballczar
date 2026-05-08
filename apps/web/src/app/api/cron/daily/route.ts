@@ -1,13 +1,14 @@
+// Last touched by agent: 2026-05-06T17:08:47Z
 /**
  * GET /api/cron/daily — run by Vercel Cron every day at 4:00 AM UTC.
- * 1. Simulates all due (past game_time) unplayed games
+ * 1. Enqueues due (past game_time) unplayed games for BullMQ workers
  * 2. Runs daily training for all players with assigned training slots
  * 3. Expires stale trade offers and challenge requests (>48 h)
  * Protected by CRON_SECRET header.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { simulateScheduledGame } from '@/lib/sim/simulate-scheduled-game';
+import { simQueue } from '@/lib/queues/sim-queue';
 import { runDailyTraining } from '@/lib/training';
 import { logger } from '@/lib/logger';
 
@@ -20,11 +21,11 @@ export async function GET(request: NextRequest) {
   const supabase = createServiceClient();
   const results: Record<string, unknown> = {};
 
-  // ── 1. Simulate due games ──────────────────────────────────────────
+  // ── 1. Enqueue due games ───────────────────────────────────────────
   const now = new Date().toISOString();
   const { data: dueGames, error: gameErr } = await supabase
     .from('schedules')
-    .select('id')
+    .select('id, league_id')
     .eq('played', false)
     .lte('game_time', now)
     .order('game_time');
@@ -32,16 +33,34 @@ export async function GET(request: NextRequest) {
   if (gameErr) {
     logger.error({ error: gameErr.message }, 'cron: failed to fetch due games');
   } else {
-    let simulated = 0;
-    for (const { id } of dueGames ?? []) {
-      try {
-        await simulateScheduledGame(supabase, id);
-        simulated++;
-      } catch (err) {
-        logger.error({ scheduleId: id, err }, 'cron: sim failed');
-      }
+    const jobs = await simQueue.addBulk(
+      (dueGames ?? []).map((game) => ({
+        name: 'sim-scheduled-game',
+        data: {
+          scheduleId: game.id,
+          leagueId: game.league_id,
+        },
+        opts: {
+          jobId: `schedule-${game.id}`,
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 1000,
+          },
+        },
+      })),
+    );
+
+    const queueCounts = await simQueue.getJobCounts('waiting', 'active', 'delayed', 'completed', 'failed');
+    results.games = {
+      due: dueGames?.length ?? 0,
+      enqueued: jobs.length,
+      queueCounts,
+    };
+
+    if ((dueGames?.length ?? 0) > 0 && jobs.length === 0) {
+      logger.warn({ due: dueGames?.length ?? 0 }, 'cron: due games found but no jobs were enqueued');
     }
-    results.games = { simulated, total: dueGames?.length ?? 0 };
   }
 
   // ── 2. Run daily training ──────────────────────────────────────────
