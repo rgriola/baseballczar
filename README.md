@@ -1,4 +1,4 @@
-> Last touched by agent: 2026-05-06T17:28:17Z
+> Last touched by agent: 2026-05-07T22:10:00Z
 
 # Baseball Czar v2
 
@@ -382,7 +382,7 @@ Current operating decision: keep doubles distribution near ~0.5 2B per team-game
 
 ## Database Migrations
 
-Eleven migrations applied in order:
+Twelve migrations applied in order:
 
 1. **001** — Initial schema (20 tables, RLS policies, indexes)
 2. **002** — Seed 100 first/last names for player generation
@@ -395,14 +395,18 @@ Eleven migrations applied in order:
 9. **009** — Add `game_events.hit_zone` for replay placement
 10. **010** — Add replay telemetry columns to `game_events` (spray/launch/exit/path/base occupancy)
 11. **011** — Add `games.home_errors` and `games.visitor_errors` for replay R/H/E
+12. **012** — Add atomic `persist_sim_game_transaction` RPC and games replay provenance columns (`sim_seed`, `sim_version`, `sim_config_version`)
+
+Migration 012 note:
+
+- Scheduled simulation persistence now depends on `public.persist_sim_game_transaction`.
+- Apply migrations before running sim routes/workers, then restart the web server and worker process.
 
 Apply pending migrations:
 
 ```bash
 cd apps/web
 npx supabase db push
-
-
 ```
 
 ## Testing
