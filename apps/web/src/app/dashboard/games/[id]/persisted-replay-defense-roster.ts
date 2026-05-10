@@ -55,6 +55,7 @@ type FielderProfile = {
   agilitySkill: number;
   fieldingSkill: number;
   throwingSkill: number;
+  playIntelligenceSkill: number;
 };
 
 const DEFENSE_POSITIONS: Position[] = ['P', 'C', 'B1', 'B2', 'SS', 'B3', 'LF', 'CF', 'RF'];
@@ -133,6 +134,7 @@ function profileFromRow(
   const agilitySkill = clampSkill(summary?.ag, 5);
   const fieldingSkill = clampSkill(summary?.fielding, 5);
   const throwingSkill = clampSkill(summary?.throw, fieldingSkill);
+  const playIntelligenceSkill = clampSkill(summary?.play_intel, 5);
 
   return {
     playerId,
@@ -140,6 +142,7 @@ function profileFromRow(
     agilitySkill,
     fieldingSkill,
     throwingSkill,
+    playIntelligenceSkill,
   };
 }
 
@@ -190,6 +193,7 @@ export function buildDefenseFieldersFromRows(
       turnRateRad: turnRateFromAgility(agilitySkill),
       throwVeloFps: throwVelocityMph(position, throwingSkill) * CONFIG.flight.mphToFps,
       defense: fieldingSkill,
+      playIntelligence: profile?.playIntelligenceSkill ?? 5,
       playerId: profile?.playerId ?? -(idx + 1),
       teamColor,
     };

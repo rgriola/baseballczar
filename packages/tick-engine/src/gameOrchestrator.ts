@@ -17,7 +17,7 @@
  *   5. If 3 outs: inning transition, swap sides
  */
 import type { AtBatRecord, Player, Team, GameResult, Position } from '@baseballczar/sim-engine';
-import { throwVelocityMph } from '@baseballczar/sim-engine';
+import { throwVelocityMph, sprintFtPerSec } from '@baseballczar/sim-engine';
 import type { WorldSnapshot, FielderEntity, RunnerEntity } from './entities';
 import { simulateAtBatTick, type TickSimOptions } from './tickEngine';
 import { BASE_POS } from './runnerAI';
@@ -310,7 +310,7 @@ export function simulateFullGame(
         const pitchEvents: import('./entities').TickEvent[] = [];
         if (isFirst) pitchEvents.push(abStartEvent);
 
-        pitchEvents.push(...buildPitchTickEvents(p, pitcherPlayer, ab.batter));
+        pitchEvents.push(...buildPitchTickEvents(p, pitcherPlayer, ab.batter, pitchCount));
 
         if (isLast) {
           pitchEvents.push({ type: 'at-bat-end', result: ab.result, batterId: ab.batter.id, batterName, rbis: ab.rbis });
@@ -362,7 +362,7 @@ export function simulateFullGame(
       const pitchEvents: import('./entities').TickEvent[] = [];
       if (isFirst) pitchEvents.push(abStartEvent);
 
-      pitchEvents.push(...buildPitchTickEvents(p, pitcherPlayer, ab.batter));
+      pitchEvents.push(...buildPitchTickEvents(p, pitcherPlayer, ab.batter, pitchCount));
 
       timeOffset = emitPitchSnapshots(
         allSnapshots, timeOffset, currentFielders, pitchEvents,
@@ -382,7 +382,7 @@ export function simulateFullGame(
     // so every pitch shows in the play-by-play, including the one that was hit.
     if (abSnapshots.length > 0) {
       const contactPitch = ab.pitches[ab.pitches.length - 1];
-      const contactPitchEvents = buildPitchTickEvents(contactPitch, pitcherPlayer, ab.batter);
+      const contactPitchEvents = buildPitchTickEvents(contactPitch, pitcherPlayer, ab.batter, pitchCount);
 
       // Prepend: at-bat-start (if no pre-contact pitches) → pitch → pitch-result → existing events
       const injected: import('./entities').TickEvent[] = [];
@@ -579,18 +579,29 @@ function pitchTypeLabel(zone: 'in' | 'edge' | 'off'): string {
   }
 }
 
+const MPH_TO_FPS = 5280 / 3600;
+
+/** Stamina-based fatigue multiplier for pitch velocity. */
+function pitcherFatigueMultiplier(pitchCount: number, stamina: number): number {
+  const fatigueRatio = Math.max(0, Math.min(1, (pitchCount - 70) / 50));
+  const maxLoss = 0.12 - (Math.min(10, Math.max(1, stamina)) - 1) * 0.01;
+  return 1.0 - fatigueRatio * maxLoss;
+}
+
 /** Build rich pitch + pitch-result tick events from a sim-engine PitchEvent. */
 function buildPitchTickEvents(
   p: import('@baseballczar/sim-engine').PitchEvent,
   pitcher: Player,
   batter: Player,
+  pitchCount: number = 0,
 ): import('./entities').TickEvent[] {
   const events: import('./entities').TickEvent[] = [];
 
-  // Compute real pitch velocity from pitcher's throwing skill
+  // Compute real pitch velocity with stamina fatigue
   const baseMph = throwVelocityMph('P', pitcher.skills.throwing ?? 5);
-  // Offspeed pitches are ~12-15% slower than the heater
-  const mph = p.intentZone === 'off' ? Math.round(baseMph * 0.86) : Math.round(baseMph);
+  const fatigueMult = pitcherFatigueMultiplier(pitchCount, pitcher.skills.stamina ?? 5);
+  const fatigueBaseMph = baseMph * fatigueMult;
+  const mph = p.intentZone === 'off' ? Math.round(fatigueBaseMph * 0.86) : Math.round(fatigueBaseMph);
 
   events.push({
     type: 'pitch',
@@ -658,7 +669,7 @@ function emitPitchSnapshots(
 ): number {
   const mound = FIELDER_POSITIONS_FT.P;
   const plate = { x: 0, y: 0 };
-  const flightVel = { x: 0, y: -135, z: -8 };  // ~92 mph toward plate
+  const flightVel = { x: 0, y: -(throwVelocityMph('P', 5) * MPH_TO_FPS), z: -8 };  // pitcher TH-derived
 
   // 1. Ball leaves pitcher's hand — events fire here
   snapshots.push({
@@ -702,7 +713,7 @@ function buildPitchRunners(
       id: r.player.id,
       pos,
       state: { type: 'on-base', base: r.base },
-      speedFps: 22 + (Math.max(1, r.player.skills.speed) - 1) * 1.0,
+      speedFps: sprintFtPerSec(r.player.skills.speed),
       agility: r.player.skills.ag,
       facingRad: facingToPoint(pos, BASE_POS.home),
       turnRateRad: turnRateFromAg(r.player.skills.ag),
@@ -721,7 +732,7 @@ function buildPitchRunners(
     id: batter.id,
     pos: batterStart,
     state: { type: 'on-base', base: 'first' },
-    speedFps: 22 + (Math.max(1, batter.skills.speed) - 1) * 1.0,
+    speedFps: sprintFtPerSec(batter.skills.speed),
     agility: batterAg,
     facingRad: facingToPoint(batterStart, FIELDER_POSITIONS_FT.P),
     turnRateRad: turnRateFromAg(batterAg),
@@ -757,12 +768,13 @@ function buildRestingFielders(
       pos: { ...home },
       homePos: { ...home },
       state: { type: 'idle' as const },
-      speedFps: 22 + (Math.max(1, player?.skills.speed ?? 5) - 1) * 1.0,
+      speedFps: sprintFtPerSec(player?.skills.speed ?? 5),
       agility: player?.skills.ag ?? 5,
       facingRad: facingToPoint(home, BASE_POS.home),
       turnRateRad: turnRateFromAg(player?.skills.ag ?? 5),
-      throwVeloFps: 0,
+      throwVeloFps: throwVelocityMph(pos, player?.skills.throwing ?? 5) * MPH_TO_FPS,
       defense: player?.skills.fielding ?? 5,
+      playIntelligence: player?.skills.playIntelligence ?? 5,
       playerId: player?.id ?? -1,
       teamColor,
     };

@@ -32,15 +32,22 @@ export function prevBase(current: string): string {
 }
 
 // ─── Runner acceleration model ───────────────────────────────────
-// Matches the sim-engine: linear ramp from 0 to topSpeed over accelTime
-const ACCEL_TIME = 1.2;  // seconds to reach full sprint
+// Accel time is AG-based: high AG → fast ramp, low AG → slow ramp
+// AG 10 = 0.5s, AG 5 = 1.0s, AG 1 = 1.4s to reach full sprint
 const BACKPEDAL_PENALTY = 0.5;
 const BACKPEDAL_ANGLE_RAD = (120 * Math.PI) / 180;
 
-/** Current speed (ft/s) given time spent accelerating. */
-function currentSpeed(topSpeed: number, timeRunning: number): number {
-  if (timeRunning >= ACCEL_TIME) return topSpeed;
-  return topSpeed * (timeRunning / ACCEL_TIME);
+/** Get acceleration time based on agility skill. */
+function accelTimeFromAg(ag: number): number {
+  const clamped = Math.max(1, Math.min(10, ag));
+  return 1.5 - clamped * 0.1;  // AG 1 = 1.4s, AG 5 = 1.0s, AG 10 = 0.5s
+}
+
+/** Current speed (ft/s) given time spent accelerating and agility. */
+function currentSpeed(topSpeed: number, timeRunning: number, ag: number = 5): number {
+  const accelTime = accelTimeFromAg(ag);
+  if (timeRunning >= accelTime) return topSpeed;
+  return topSpeed * (timeRunning / accelTime);
 }
 
 function angleTo(from: Point2D, to: Point2D): number {
@@ -131,7 +138,7 @@ export function tickRunner(
       );
       const facingError = Math.abs(angleDelta(runner.facingRad, desiredFacing));
 
-      const speedBase = currentSpeed(runner.speedFps, runner._runTime);
+      const speedBase = currentSpeed(runner.speedFps, runner._runTime, runner.agility ?? 5);
       const speed = facingError > BACKPEDAL_ANGLE_RAD
         ? speedBase * BACKPEDAL_PENALTY
         : speedBase;

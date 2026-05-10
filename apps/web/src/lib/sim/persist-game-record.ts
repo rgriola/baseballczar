@@ -4,6 +4,7 @@
  */
 import { SupabaseClient } from '@supabase/supabase-js';
 import type { GameResult } from '../sim-engine/types';
+import type { RosterSnapshot } from './simulate-scheduled-game';
 
 export interface GameRecordProvenance {
   simSeed: number;
@@ -15,6 +16,8 @@ export interface GameRecordOpts {
   scheduleId: number;
   leagueId: number;
   provenance?: GameRecordProvenance;
+  homeRosterSnapshot?: RosterSnapshot;
+  visitorRosterSnapshot?: RosterSnapshot;
 }
 
 export function buildGameInsertRow(result: GameResult, opts: GameRecordOpts): Record<string, unknown> {
@@ -38,6 +41,8 @@ export function buildGameInsertRow(result: GameResult, opts: GameRecordOpts): Re
     sim_seed: opts.provenance?.simSeed ?? null,
     sim_version: opts.provenance?.simVersion ?? null,
     sim_config_version: opts.provenance?.simConfigVersion ?? null,
+    home_roster_snapshot: opts.homeRosterSnapshot ?? null,
+    visitor_roster_snapshot: opts.visitorRosterSnapshot ?? null,
   };
 }
 

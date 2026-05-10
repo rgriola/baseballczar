@@ -1,6 +1,19 @@
 # Baseball Czar — Copilot Instructions
 
-> Last touched by agent: 2026-04-30T13:46:48Z
+> Last touched by agent: 2026-05-10T14:31:00Z
+
+---
+
+## ⚠️ Mandatory Pre-Session Reading
+
+**Before writing ANY code, read these files in order:**
+
+1. [`DO_NOT_BREAK.md`](../DO_NOT_BREAK.md) — Verified working behaviors. If your change breaks any of these, REVERT immediately.
+2. [`CURRENT_SPRINT.md`](../CURRENT_SPRINT.md) — Current scope. Only modify files listed as "allowed." Log anything else to the backlog.
+3. This file — Architecture, conventions, and pitfalls.
+
+**Before starting:** Run `npm run test` and confirm all tests pass.
+**After finishing:** Run `npm run test` again. Nothing that was passing should now fail.
 
 ---
 

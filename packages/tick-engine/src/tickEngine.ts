@@ -45,6 +45,8 @@ import {
   FIELDER_POSITIONS_FT,
   CONFIG,
   wallDistanceFt,
+  sprintFtPerSec,
+  throwVelocityMph,
   type Position,
 } from '@baseballczar/sim-engine';
 import type { AtBatRecord, Player } from '@baseballczar/sim-engine';
@@ -52,24 +54,18 @@ import { getRunnerOnBasePoint } from './fieldGeometry';
 
 const TICK_RATE = 60;
 const DT = 1 / TICK_RATE;
-const MAX_PLAY_SECS = 8;    // safety cap per at-bat (tighter = fewer ticks)
+const MAX_PLAY_SECS = 8;    // safety cap per at-bat
 const PLAYER_COLLISION_PASSES = 2;
 const BALL_BODY_COLLISION_MAX_Z_FT = 8;
 const BALL_BODY_MIN_SPEED_FPS = 2;
 
 // ─── Helpers ─────────────────────────────────────────────────────
-
-/** Speed in ft/s from a 1-10 skill rating. */
-function speedFromSkill(skill: number): number {
-  // 1 = 22 ft/s (slow), 5 = 26 ft/s (avg), 10 = 31 ft/s (elite)
-  return 22 + (skill - 1) * 1.0;
-}
-
-/** Throw velocity in ft/s from a 1-10 defense skill. */
-function throwVeloFromSkill(def: number): number {
-  // 1 = 85 ft/s (~58 mph), 5 = 110 ft/s (~75 mph), 10 = 135 ft/s (~92 mph)
-  return 85 + (def - 1) * 5.56;
-}
+// Speed and throw formulas are imported from @baseballczar/sim-engine:
+//   sprintFtPerSec(speedSkill) — same body, same speed for fielding + running
+//   throwVelocityMph(position, throwingSkill) — position-aware arm strength
+//
+// MPH → ft/s conversion constant
+const MPH_TO_FPS = 5280 / 3600;  // 1.467
 
 /** Turn rate in radians/sec from AG skill (1-10). */
 function turnRateFromAg(ag: number): number {
@@ -372,12 +368,13 @@ function makeFielder(
     pos: { ...home },
     homePos: { ...home },
     state: { type: 'idle' },
-    speedFps: speedFromSkill(speed),
+    speedFps: sprintFtPerSec(speed),
     agility: ag,
     facingRad: facingToPoint(home, BASE_POS.home),
     turnRateRad: turnRateFromAg(ag),
-    throwVeloFps: throwVeloFromSkill(defense),
+    throwVeloFps: throwVelocityMph(pos, player?.skills.throwing ?? 5) * MPH_TO_FPS,
     defense,
+    playIntelligence: player?.skills.playIntelligence ?? 5,
     playerId: player?.id ?? -1,
     teamColor,
   };
@@ -394,7 +391,7 @@ function makeRunner(
     id: player.id,
     pos: { ...pos },
     state: { type: 'on-base', base },
-    speedFps: speedFromSkill(player.skills.speed),
+    speedFps: sprintFtPerSec(player.skills.speed),
     agility: ag,
     facingRad: facingToPoint(pos, BASE_POS.home),
     turnRateRad: turnRateFromAg(ag),
@@ -414,7 +411,7 @@ function makeBatterRunner(
     id: player.id,
     pos: start,  // batter box
     state: { type: 'on-base', base: 'first' },  // will be commanded to advance
-    speedFps: speedFromSkill(player.skills.speed),
+    speedFps: sprintFtPerSec(player.skills.speed),
     agility: ag,
     facingRad: facingToPoint(start, FIELDER_POSITIONS_FT.P),
     turnRateRad: turnRateFromAg(ag),
@@ -832,6 +829,7 @@ export function simulateAtBatTick(
               turnRateRad: f.turnRateRad,
               throwVeloFps: f.throwVeloFps,
               defense: f.defense,
+              playIntelligence: f.playIntelligence,
               playerId: f.playerId,
               teamColor: f.teamColor,
             })),
@@ -839,6 +837,11 @@ export function simulateAtBatTick(
         events: enrichedEvents.length > 0 ? [...enrichedEvents] : [],
       });
     }
+  }
+
+  // Safety: if the play timed out without a play-complete event, inject one
+  if (!playComplete && snapshots.length > 0) {
+    snapshots[snapshots.length - 1].events.push({ type: 'play-complete' });
   }
 
   return snapshots;

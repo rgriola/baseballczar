@@ -48,6 +48,7 @@ export interface FielderEntity {
   turnRateRad: number;               // max turning speed (radians/sec)
   throwVeloFps: number;              // throw velocity (ft/sec)
   defense: number;                   // 1-10 defense skill
+  playIntelligence: number;          // 1-10 PI — route reads, throw-target IQ
   playerId: number;
   teamColor: number;
 }

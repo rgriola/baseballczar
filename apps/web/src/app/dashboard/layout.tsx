@@ -35,7 +35,7 @@ export default async function DashboardLayout({
   const teamName = user.user_metadata?.team_name ?? 'My Team';
 
   return (
-    <div className="min-h-screen bg-gray-950">
+    <div className="min-h-screen bg-gray-950 text-white">
       <nav className="border-b border-gray-800 bg-gray-900">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-4">

@@ -121,8 +121,8 @@ export function flight(input: FlightInput): FlightResult {
   // velocity (it bounces off the dirt and rolls). Scale distance by
   // friction so weak contact doesn't roll to the OF unrealistically.
   if (isGrounder) {
-    const evNorm = Math.max(0, (exitVeloMph - 50) / 60);  // 0..1 over [50,110]
-    distanceFt = 20 + evNorm * 230;
+    const evNorm = Math.max(0, Math.min(1, (exitVeloMph - 50) / 60));  // 0..1 over [50,110], clamped
+    distanceFt = 20 + evNorm * 130;  // max ~150 ft for hardest grounders
     // Grounder hang time = travel time along the ground with friction.
     const decel = 10;  // ft/sec² avg deceleration on grass
     const groundV0 = vHoriz * Math.cos(Math.abs(angleRad) * 0.3); // bounce kills some speed

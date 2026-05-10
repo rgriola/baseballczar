@@ -215,10 +215,15 @@ export const CONFIG = {
   // ─── Batted-ball distributions ────────────────────────────────
   // Skill→tendency mapping. These are the v1 levers.
   battedBall: {
-    // HR/FB decision (2026-05-06): keep current power/drag mapping.
-    // Seed-1 baseline hrPerFb is in-band, so no dragCoeff or EV remap change.
-    // Exit velocity tier in mph by power skill (1..10)
+    // ─── Statcast collision model (Phase 4) ─────────────────────
+    // V_exit = q × V_pitch + (1+q) × V_bat
+    collisionEfficiency: 0.2,           // q — wood bat COR
+    batSpeedBaseMph: 60,                // Power 0 bat speed
+    batSpeedRangeMph: 22,               // additional mph over Power 1-10
+
+    // Legacy: kept for analytics/parity checking only
     powerToExitVeloMph: { min: 67, max: 106 },
+
     // Launch angle bias by dhr skill: 1=worm-burner, 10=uppercut.
     // Round bat + round ball can produce -25° to +70° in real baseball.
     // DHR 1 = chopper/worm-burner, DHR 10 = uppercut fly-ball hitter.

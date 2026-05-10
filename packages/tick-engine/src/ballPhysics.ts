@@ -116,6 +116,24 @@ function calibrateLaunch(
     return { vHoriz: baseHoriz, vVert: baseVert };
   }
 
+  // ─── Grounders (negative or near-zero vertical) ─────────────────
+  // For grounders the ball leaves the bat downward and bounces off
+  // the dirt. We should NOT try to calibrate vertical velocity to
+  // match hang time — that makes it dive into the ground at extreme
+  // speed. Instead, use a gentle downward angle and calibrate only
+  // the horizontal speed to match the target distance.
+  if (baseVert <= 0) {
+    // Grounder: small downward vVert (just enough to hit dirt from bat
+    // height in ~0.2-0.3s). The bounce + roll physics in tickBall
+    // handles the rest naturally.
+    const gentleVert = -G * 0.15;  // lands in ~0.3s from 3ft → realistic dirt hit
+    // Horizontal: aim for target distance / target time
+    // (grounder travels at roughly constant speed with friction)
+    const vHoriz = Math.max(10, targetDistanceFt / Math.max(0.3, targetHangTimeSec));
+    return { vHoriz, vVert: gentleVert };
+  }
+
+  // ─── Fly balls / line drives (positive vertical) ────────────────
   let vHoriz = Math.max(5, baseHoriz);
   let vVert = baseVert;
 
@@ -242,19 +260,39 @@ export function tickBall(ball: BallEntity, dt: number): TickBallResult {
       result.landed = true;
       result.landingPoint = { x: ball.pos.x, y: ball.pos.y };
 
-      // Transition to rolling: bounce with energy loss
+      // Transition to rolling: bounce with energy loss.
+      // Ground absorption: harder impacts lose more energy. The ground
+      // exerts an equal-and-opposite force on impact — a ball driven
+      // into the dirt at high speed transfers much more energy into the
+      // surface than a soft landing.
+      const impactVert = Math.abs(vel.z);  // downward speed at impact (ft/s)
       const horizSpeed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
-      if (Math.abs(vel.z) > 3 && horizSpeed > 5) {
+
+      // Impact absorption: scale from gentle (retain 75%) to violent (retain 15%)
+      // impactFrac ∈ [0, 1]: 0 = soft landing, 1 = driven into dirt
+      const impactFrac = Math.min(1, impactVert / 60);  // 60 fps ≈ max grounder impact
+
+      // Vertical restitution: soft = 0.35, hard = 0.20 (dirt absorbs more)
+      const vertRestitution = 0.35 - 0.15 * impactFrac;
+      // Horizontal retention: soft = 0.75, hard = 0.35 (ground friction spike)
+      const horizRetention = 0.75 - 0.40 * impactFrac;
+
+      // Surface matters: dirt absorbs ~15% more than grass on hard hits
+      const onDirt = isOnDirt(ball.pos);
+      const surfacePenalty = onDirt ? 0.85 : 1.0;
+
+      if (impactVert > 3 && horizSpeed > 5) {
         // Significant bounce — ball hops back up briefly
-        vel.z = -vel.z * BOUNCE_RESTITUTION;
-        vel.x *= HORIZ_BOUNCE;
-        vel.y *= HORIZ_BOUNCE;
+        vel.z = -vel.z * vertRestitution * surfacePenalty;
+        vel.x *= horizRetention * surfacePenalty;
+        vel.y *= horizRetention * surfacePenalty;
         ball.pos.z = 0.1;  // tiny lift to stay in flight one more tick
       } else {
         // Low energy — transition to ground roll
+        const rollRetention = horizRetention * surfacePenalty;
         ball.state = {
           type: 'rolling',
-          vel: { x: vel.x * HORIZ_BOUNCE, y: vel.y * HORIZ_BOUNCE },
+          vel: { x: vel.x * rollRetention, y: vel.y * rollRetention },
         };
       }
     }

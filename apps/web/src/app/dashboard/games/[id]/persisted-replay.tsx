@@ -17,6 +17,7 @@ import {
   type PersistedPitchingRow,
   type PersistedPlayerName,
 } from './persisted-replay-data';
+import { canResimulate, resimulateForReplay, type ResimPayload } from './persisted-replay-resim';
 
 type ViewMode = 'box' | 'replay';
 
@@ -56,6 +57,7 @@ export default function PersistedReplay({
 }) {
   const [payload, setPayload] = useState<PersistedGamePayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [resimulating, setResimulating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pbpEntries, setPbpEntries] = useState<PbpEntry[]>([]);
   const [pbpOpen, setPbpOpen] = useState(true);
@@ -95,8 +97,35 @@ export default function PersistedReplay({
     };
   }, [gameId]);
 
+  // Re-simulation runs synchronously but can take 1-2s for a full game.
+  // We use a separate state to show a loading indicator during computation.
   const replay = useMemo(() => {
     if (!payload) return null;
+
+    // Diagnostic: check what data is available for resim
+    const hasSeed = payload.game?.sim_seed != null;
+    const hasHomeSnap = payload.game?.home_roster_snapshot != null;
+    const hasVisitorSnap = payload.game?.visitor_roster_snapshot != null;
+    console.log('[Replay] Seed:', hasSeed, '| HomeSnap:', hasHomeSnap, '| VisitorSnap:', hasVisitorSnap);
+
+    // Use tick engine re-simulation if roster snapshots are available
+    if (canResimulate(payload as unknown as ResimPayload)) {
+      try {
+        console.log('[Replay] ✅ Using TICK ENGINE re-simulation (30fps physics)');
+        setResimulating(true);
+        const result = resimulateForReplay(payload as unknown as ResimPayload);
+        console.log('[Replay] Resim complete:', result.snapshots.length, 'snapshots,', result.totalDurationSec.toFixed(1), 'sec');
+        setResimulating(false);
+        return result;
+      } catch (err) {
+        console.warn('[Replay] Resim failed, falling back to reconstruction:', err);
+        setResimulating(false);
+      }
+    } else {
+      console.log('[Replay] ⚠️ Falling back to legacy reconstruction (no snapshots)');
+    }
+
+    // Fallback for legacy games without roster snapshots
     return buildPersistedSnapshots(payload);
   }, [payload]);
 
@@ -179,10 +208,13 @@ export default function PersistedReplay({
 
   const scrollbarClass = '[scrollbar-width:thin] [scrollbar-color:#52525b_#18181b] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-zinc-900/70 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-zinc-600/70 [&::-webkit-scrollbar-thumb:hover]:bg-zinc-500/80';
 
-  if (loading) {
+  if (loading || resimulating) {
     return (
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-4 py-5 text-sm text-zinc-300">
-        Loading persisted replay...
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-4 py-5 text-sm text-zinc-300 flex items-center gap-3">
+        <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-600 border-t-blue-400" />
+        {resimulating
+          ? 'Generating replay physics...'
+          : 'Loading game data...'}
       </div>
     );
   }

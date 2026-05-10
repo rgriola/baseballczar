@@ -12,6 +12,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { assertGameResultContract, type ScheduledGameContract } from './game-result-contract';
 import { buildGameEventRows, buildGameInsertRow } from './persist-game-record';
+import type { RosterSnapshot } from './simulate-scheduled-game';
 import {
   buildHitterGameRows,
   buildPitcherGameRows,
@@ -30,6 +31,8 @@ interface PersistOptions {
   visitorHitterMeta: Map<number, { teamId: number; position: string; batOrder: number }>;
   homePitcherMeta: Map<number, { teamId: number }>;
   visitorPitcherMeta: Map<number, { teamId: number }>;
+  homeRosterSnapshot?: RosterSnapshot;
+  visitorRosterSnapshot?: RosterSnapshot;
 }
 
 const PERSIST_BOUNDARY_STEPS = ['persist-sim-game-transaction'] as const;
@@ -61,6 +64,8 @@ export async function persistGameResult(
       simVersion: meta.simVersion,
       simConfigVersion: meta.configVersion,
     },
+    homeRosterSnapshot: opts.homeRosterSnapshot,
+    visitorRosterSnapshot: opts.visitorRosterSnapshot,
   });
 
   const eventRows = buildGameEventRows(result);

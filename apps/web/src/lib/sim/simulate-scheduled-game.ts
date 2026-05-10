@@ -171,7 +171,13 @@ export async function simulateScheduledGame(
     simVersion: useV2 ? SIM_VERSION_SCHEDULED_V2 : SIM_VERSION_SCHEDULED_LEGACY,
   });
 
-  // 5. Persist
+  // 5. Ensure budget rows exist (self-healing for teams created before budget system)
+  await ensureBudgetRows(supabase, [sched.home_team_id, sched.visitor_team_id]);
+
+  // 6. Persist (with game-day roster snapshots for deterministic replay)
+  const homeRosterSnapshot = buildRosterSnapshot(homeInput.v2Team, homeInput.v2StarterIndex);
+  const visitorRosterSnapshot = buildRosterSnapshot(visitorInput.v2Team, visitorInput.v2StarterIndex);
+
   const gameId = await persistGameResult(supabase, contract, {
     scheduleId: sched.id,
     leagueId: sched.league_id,
@@ -181,9 +187,11 @@ export async function simulateScheduledGame(
     visitorHitterMeta: visitorInput.hitterMeta,
     homePitcherMeta: homeInput.pitcherMeta,
     visitorPitcherMeta: visitorInput.pitcherMeta,
+    homeRosterSnapshot,
+    visitorRosterSnapshot,
   });
 
-  // 6. Advance starting pitcher rotation (SP1→SP2→…→SP5→SP1)
+  // 7. Advance starting pitcher rotation (SP1→SP2→…→SP5→SP1)
   const homeNextSlot = ((homeTeam.next_sp_slot ?? 1) % 5) + 1;
   const visitorNextSlot = ((visitorTeam.next_sp_slot ?? 1) % 5) + 1;
   await supabase.from('teams').update({ next_sp_slot: homeNextSlot }).eq('id', homeTeam.id);
@@ -202,6 +210,29 @@ function isScheduledEngineV2Enabled(): boolean {
   if (raw == null) return false;
   const value = raw.trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'on';
+}
+
+const STARTING_BALANCE = 5_000_000;
+
+/**
+ * Ensure team_budgets rows exist for the given team IDs.
+ * Self-healing: creates missing rows with $5M starting balance.
+ */
+async function ensureBudgetRows(supabase: SupabaseClient, teamIds: number[]): Promise<void> {
+  const unique = [...new Set(teamIds)];
+  const { data: existing } = await supabase
+    .from('team_budgets')
+    .select('team_id')
+    .in('team_id', unique);
+
+  const existingIds = new Set((existing ?? []).map((b) => b.team_id));
+  const missing = unique.filter((id) => !existingIds.has(id));
+
+  if (missing.length > 0) {
+    await supabase
+      .from('team_budgets')
+      .insert(missing.map((id) => ({ team_id: id, balance: STARTING_BALANCE })));
+  }
 }
 
 function computeScheduledSeed(scheduleId: number, leagueId: number, seasonNo: number): number {
@@ -520,6 +551,70 @@ function toAdapterInput(team: TeamBuild): ScheduledTeamAdapterInput {
     hitterIds: new Set(team.hitterMeta.keys()),
     pitcherIds: new Set(team.pitcherMeta.keys()),
     starterPitcherId,
+  };
+}
+
+// ─── Roster snapshot for replay re-simulation ────────────────
+
+export interface PlayerSnapshot {
+  id: number;
+  firstName: string;
+  lastName: string;
+  hand: 'R' | 'L' | 'S';
+  position: string;
+  skills: {
+    speed: number; ag: number; stamina: number;
+    eye: number; avg: number; power: number;
+    dhr: number; fielding: number; throwing: number;
+    playIntelligence: number; bunting: number; karma: number;
+  };
+}
+
+export interface RosterSnapshot {
+  id: number;
+  name: string;
+  abbrev: string;
+  lineup: PlayerSnapshot[];
+  rotation: PlayerSnapshot[];
+  bullpen: PlayerSnapshot[];
+  bench: PlayerSnapshot[];
+  starterIndex: number;
+}
+
+function snapshotPlayer(p: V2Player): PlayerSnapshot {
+  return {
+    id: p.id,
+    firstName: p.firstName,
+    lastName: p.lastName,
+    hand: p.hand,
+    position: p.position,
+    skills: {
+      speed: p.skills.speed,
+      ag: p.skills.ag,
+      stamina: p.skills.stamina ?? 5,
+      eye: p.skills.eye,
+      avg: p.skills.avg,
+      power: p.skills.power,
+      dhr: p.skills.dhr ?? 5,
+      fielding: p.skills.fielding,
+      throwing: p.skills.throwing,
+      playIntelligence: p.skills.playIntelligence,
+      bunting: p.skills.bunting ?? 5,
+      karma: p.skills.karma ?? 5,
+    },
+  };
+}
+
+function buildRosterSnapshot(team: V2Team, starterIndex: number): RosterSnapshot {
+  return {
+    id: team.id,
+    name: team.name,
+    abbrev: team.abbrev,
+    lineup: team.lineup.map(snapshotPlayer),
+    rotation: team.rotation.map(snapshotPlayer),
+    bullpen: team.bullpen.map(snapshotPlayer),
+    bench: team.bench.map(snapshotPlayer),
+    starterIndex,
   };
 }
 

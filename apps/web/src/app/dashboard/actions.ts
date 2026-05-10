@@ -411,5 +411,26 @@ export async function resetSeason(): Promise<{ error?: string; message?: string 
     .update({ next_sp_slot: 1 })
     .gte('id', 0);
 
+  // Ensure every team has a budget row (backfill for teams created before budget system)
+  const { data: allTeams } = await service.from('teams').select('id');
+  if (allTeams && allTeams.length > 0) {
+    const { data: existingBudgets } = await service
+      .from('team_budgets')
+      .select('team_id');
+    const budgetTeamIds = new Set((existingBudgets ?? []).map((b) => b.team_id));
+    const missing = allTeams.filter((t) => !budgetTeamIds.has(t.id));
+    if (missing.length > 0) {
+      await service
+        .from('team_budgets')
+        .insert(missing.map((t) => ({ team_id: t.id, balance: 5_000_000 })));
+    }
+
+    // Reset all budgets to starting balance
+    await service
+      .from('team_budgets')
+      .update({ balance: 5_000_000 })
+      .gte('team_id', 0);
+  }
+
   return { message: 'Season reset complete' };
 }

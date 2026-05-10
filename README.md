@@ -1,8 +1,24 @@
-> Last touched by agent: 2026-05-07T22:10:00Z
+> Last touched by agent: 2026-05-10T14:31:00Z
 
 # Baseball Czar v2
 
 A baseball management simulation game: draft players, set lineups, manage finances, and compete across a full season. Originally a Java desktop app with a separate simulation daemon, now rebuilt as a TypeScript monorepo targeting web and iOS.
+
+# Quick Start
+Queue-first simulation workflow (recommended for long seasons):
+
+```bash
+# Terminal 1: web server
+npm run dev -w apps/web
+
+# Terminal 2: queue worker
+npm run sim:worker
+
+# Terminal 3: reset + enqueue in batches + wait for completion + print summary
+npm run sim:league -- --leagueId 2 --reset --batchSize 20
+```
+
+
 
 ## Monorepo Structure
 
@@ -14,6 +30,8 @@ baseballczar-v2/
 ├── packages/
 │   ├── sim-engine/       # Shared physics sim engine (@baseballczar/sim-engine)
 │   └── tick-engine/      # Shared tick/presentation engine (@baseballczar/tick-engine)
+├── DO_NOT_BREAK.md       # ⚠️ Verified invariants — read before every session
+├── CURRENT_SPRINT.md     # 🎯 Active scope — what to work on, what to leave alone
 ├── package.json          # Workspace root (npm workspaces)
 ├── review/               # Code review documents
 └── IOS_STRATEGY.md       # iOS product strategy and 5-phase build plan
@@ -194,18 +212,6 @@ npm run skill-test   # Skill sensitivity harness
 npm run typecheck    # TypeScript check (packages/sim-engine)
 ```
 
-Queue-first simulation workflow (recommended for long seasons):
-
-```bash
-# Terminal 1: web server
-npm run dev -w apps/web
-
-# Terminal 2: queue worker
-npm run sim:worker
-
-# Terminal 3: reset + enqueue in batches + wait for completion + print summary
-npm run sim:league -- --leagueId 2 --reset --batchSize 20
-```
 
 Worker Redis requirement:
 
@@ -382,7 +388,7 @@ Current operating decision: keep doubles distribution near ~0.5 2B per team-game
 
 ## Database Migrations
 
-Twelve migrations applied in order:
+Thirteen migrations applied in order:
 
 1. **001** — Initial schema (20 tables, RLS policies, indexes)
 2. **002** — Seed 100 first/last names for player generation
@@ -396,6 +402,7 @@ Twelve migrations applied in order:
 10. **010** — Add replay telemetry columns to `game_events` (spray/launch/exit/path/base occupancy)
 11. **011** — Add `games.home_errors` and `games.visitor_errors` for replay R/H/E
 12. **012** — Add atomic `persist_sim_game_transaction` RPC and games replay provenance columns (`sim_seed`, `sim_version`, `sim_config_version`)
+13. **013** — Add `games.home_roster_snapshot` and `games.visitor_roster_snapshot` JSONB columns for deterministic replay re-simulation
 
 Migration 012 note:
 
@@ -457,8 +464,10 @@ All 18 items from the original P0–P3 improvement plan have been implemented:
 - **P2 (Medium):** Vitest suite (60 tests), structured logging (Pino), cron sim, security headers, named constants ✅
 - **P3 (Backlog):** Playwright E2E, CI/CD, Sentry monitoring, response caching, 200+ name pool, persist-game split ✅
 
-## Code Review
+## Code Review & Guardrails
 
+- [DO_NOT_BREAK.md](DO_NOT_BREAK.md) — ⚠️ Verified working invariants — must read before every coding session
+- [CURRENT_SPRINT.md](CURRENT_SPRINT.md) — 🎯 Active scope and off-limits files
 - [BBZAR_MASTER_REVIEW.md](BBZAR_MASTER_REVIEW.md) — Master hub with severity matrix
 - [issues.md](issues.md) — Open bugs and known sim/render issues
 - [task.md](task.md) — Active task list (P0–P3 backlog)

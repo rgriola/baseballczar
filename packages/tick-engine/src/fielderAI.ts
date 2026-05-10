@@ -13,6 +13,20 @@ import { throwBall } from './ballPhysics';
 import { COLLIDERS, dist2D, clampInsideWall } from './spatial';
 import { getBaseAnchor, getFielderCoverPoint } from './fieldGeometry';
 
+// ─── PI-based helpers ────────────────────────────────────────────
+
+/** Route efficiency: low PI → indirect routes (1.0-1.15x distance).
+ *  High PI → direct route (1.0x). This scales the effective distance. */
+function routeEfficiency(pi: number): number {
+  return 1.0 + (10 - Math.min(10, Math.max(1, pi))) * 0.0167;
+}
+
+/** Decision time: how long a fielder holds the ball before throwing.
+ *  High PI → quick decisions, low PI → hesitation. */
+function decisionTimeSec(pi: number): number {
+  return 0.60 - (Math.min(10, Math.max(1, pi)) - 1) * 0.044;
+}
+
 // ─── Movement ────────────────────────────────────────────────────
 
 const BACKPEDAL_PENALTY = 0.5;
@@ -81,7 +95,9 @@ export function moveToward(
 
   const facingError = Math.abs(angleDelta(fielder.facingRad, desiredFacing));
   const speedPenalty = facingError > BACKPEDAL_ANGLE_RAD ? BACKPEDAL_PENALTY : 1;
-  const speed = (speedOverride ?? fielder.speedFps) * speedPenalty;
+  // Apply route efficiency penalty for low-PI fielders
+  const efficiency = routeEfficiency(fielder.playIntelligence ?? 5);
+  const speed = ((speedOverride ?? fielder.speedFps) * speedPenalty) / efficiency;
   const move = Math.min(speed * dt, dist);
   fielder.pos.x += (dx / dist) * move;
   fielder.pos.y += (dy / dist) * move;
@@ -244,15 +260,17 @@ export function tickFielder(
       // Check if we can catch the ball (collider-based)
       if (ball.state.type === 'in-flight') {
         const distToBall = dist2D(fielder.pos, ball.pos);
+        // PI affects glove radius — high PI fielders take better routes
+        const catchRadius = COLLIDERS.catchStanding + ((fielder.playIntelligence ?? 5) - 5) * 0.3;
         const ballInRange =
-          distToBall < COLLIDERS.catchStanding &&
+          distToBall < catchRadius &&
           ball.pos.z < 12 &&
           ball.pos.z > 0 &&
           isFacingPoint(fielder, { x: ball.pos.x, y: ball.pos.y }, CATCH_FACING_TOLERANCE_RAD);
         if (ballInRange) {
           // Caught it!
           ball.state = { type: 'held', by: fielder.position };
-          fielder.state = { type: 'has-ball', decideSec: 0.4 };
+          fielder.state = { type: 'has-ball', decideSec: decisionTimeSec(fielder.playIntelligence ?? 5) };
           result.caught = true;
           result.event = {
             type: 'ball-caught',
@@ -283,7 +301,7 @@ export function tickFielder(
           (ball.state.type === 'rolling' || ball.state.type === 'idle') &&
           isFacingPoint(fielder, { x: ball.pos.x, y: ball.pos.y }, FIELD_FACING_TOLERANCE_RAD)) {
         ball.state = { type: 'held', by: fielder.position };
-        fielder.state = { type: 'has-ball', decideSec: 0.5 };
+        fielder.state = { type: 'has-ball', decideSec: decisionTimeSec(fielder.playIntelligence ?? 5) };
         result.fielded = true;
         result.event = {
           type: 'ball-fielded',

@@ -240,3 +240,25 @@ Also the ball should bounce off the wall or players. Eventually we will add more
 ...
 
 We centralized the base locations in the last batch of work. This is so Runners and Fielders have a centralized knowledge of where the bases are on the grid, then we used an offset in feet for the runners and fielders to throw to or stand on the base. This should of been noted in the Sim but we may have missed it. I think maybe that logic got lost in this recent iteration, but it is getting better. The screen shot shows a runner at 2nd base between plays about 15 feet from the base. and there are multiple runners and batters. Also the field grid starts at 0,0 the apex corner of home base.
+
+
+....
+*** Task *** 
+- Review Baseballczar and what it is
+- Baseballczar is are two parts - one the Web UI and two the Sim (simulates all the games and creates the game events for the Tick Replay. )
+
+....
+
+For Agent Session: 
+
+Before writing any code:
+1. Read these files:DO_NOT_BREAK.md, CURRENT_SPRINT.md, SIM_STATUS.md
+2. Run `npm run test` and report results
+3. Confirm you understand what is IN scope and what is OFF LIMITS
+4. Ask me if anything is unclear
+
+After finishing:
+1. Run `npm run test` again — nothing that was passing should now fail
+2. Update SIM_STATUS.md with what you changed
+3. Update CURRENT_SPRINT.md progress
+ 
