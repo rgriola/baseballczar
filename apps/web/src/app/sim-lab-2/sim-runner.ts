@@ -383,17 +383,11 @@ export function runSim(
     awayStarterIndex,
   });
 
-  const tickAuthorityEnabled = isTickAuthorityPhase2Enabled();
-  const authority = tickAuthorityEnabled
-    ? applyTickAuthorityPhase2(preRolled, home, away)
-    : {
-        authoritativeResult: preRolled,
-        atBatDeltas: [] as TickAuthorityAtBatDelta[],
-        parity: makeDisabledParitySummary(preRolled),
-      };
-  const result = authority.authoritativeResult;
-
-  const fullGame = simulateFullGame(result, home, away, {
+  // Phase 2 tick-authority is now handled INSIDE simulateFullGame().
+  // The orchestrator runs the tick-engine once for visual snapshots AND
+  // extracts the authoritative outcome from the same run. No separate
+  // headless pass needed — one run, one truth.
+  const fullGame = simulateFullGame(preRolled, home, away, {
     homeProfile: MANAGER_PROFILES[homeProfileKey],
     awayProfile: MANAGER_PROFILES[awayProfileKey],
     homeStarterIndex,
@@ -406,13 +400,13 @@ export function runSim(
 
   return {
     seed,
-    result,
+    result: preRolled,
     home,
     away,
     fullGame,
-    tickAuthorityPhase: tickAuthorityEnabled ? 2 : 0,
-    tickAuthorityEnabled,
-    tickAuthorityDeltas: authority.atBatDeltas,
-    tickAuthorityParity: authority.parity,
+    tickAuthorityPhase: 2,
+    tickAuthorityEnabled: true,
+    tickAuthorityDeltas: [],
+    tickAuthorityParity: makeDisabledParitySummary(preRolled),
   };
 }

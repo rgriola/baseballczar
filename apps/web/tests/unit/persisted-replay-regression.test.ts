@@ -22,8 +22,11 @@ function makeFielder(position: Position, overrides: Partial<FielderEntity> = {})
     facingRad: 0,
     turnRateRad: 5,
     throwVeloFps: 95,
+    throwingSkill: 5,
     defense: 5,
+    playIntelligence: 5,
     playerId: 1,
+    jerseyNumber: 1,
     teamColor: 0x123456,
     ...overrides,
   };

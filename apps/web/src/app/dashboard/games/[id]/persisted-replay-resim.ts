@@ -129,6 +129,7 @@ function snapshotToPlayer(snap: PlayerSnapshot): Player {
 
   return {
     id: snap.id,
+    jerseyNumber: snap.jerseyNumber ?? snap.id,
     firstName: snap.firstName,
     lastName: snap.lastName,
     hand: snap.hand as Hand,

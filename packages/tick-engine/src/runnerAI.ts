@@ -254,6 +254,49 @@ export interface TickRunnerResult {
   scored?: boolean;
 }
 
+/**
+ * Resolve base collisions — two runners cannot occupy the same base.
+ * When a collision is detected, the lead runner (the one who was on
+ * the base before the trailing runner arrived) is forced to advance.
+ *
+ * This handles the common case:
+ *   - R1 on 1B, batter hits single
+ *   - Both batter and R1 head to first/second
+ *   - R1 arrives at 2B, but the runner from 2B didn't advance yet
+ *
+ * Returns the IDs of runners that were forced to advance (for event emission).
+ */
+export function resolveBaseCollisions(runners: RunnerEntity[]): number[] {
+  const forcedRunnerIds: number[] = [];
+  const BASES: OccupiedBase[] = ['first', 'second', 'third'];
+
+  for (const base of BASES) {
+    const onBase = runners.filter(
+      r => r.state.type === 'on-base' && r.state.base === base
+    );
+    if (onBase.length <= 1) continue;
+
+    // Multiple runners on the same base — force all but one to advance.
+    // Keep the LAST one who arrived (most recently set to on-base).
+    // Force the others to the next base.
+    // Simple heuristic: keep the runner closest to home plate direction
+    // (i.e., the one who should be trailing). Force the lead runner forward.
+    for (let i = 0; i < onBase.length - 1; i++) {
+      const runner = onBase[i];
+      const nb = nextBase(base);
+      if (nb === 'home') {
+        // If at 3B, force the runner to score
+        commandRunner(runner, { type: 'advance', targetBase: 'home' });
+      } else {
+        commandRunner(runner, { type: 'advance', targetBase: nb });
+      }
+      forcedRunnerIds.push(runner.id);
+    }
+  }
+
+  return forcedRunnerIds;
+}
+
 // Extend RunnerEntity with internal acceleration tracking
 declare module './entities' {
   interface RunnerEntity {

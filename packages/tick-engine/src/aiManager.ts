@@ -58,14 +58,18 @@ export function decideThrowTarget(
   } => r.state.type === 'running');
 
   if (movingRunners.length === 0) {
-    const settleBase = closestBaseTo(fielder.pos);
+    // No runners moving — no play to make
     return {
-      base: settleBase,
-      point: BASE_POS[settleBase],
+      base: closestBaseTo(fielder.pos),
+      point: BASE_POS[closestBaseTo(fielder.pos)],
       priority: 0,
       reason: 'no immediate play',
     };
   }
+
+  // Which base is the fielder already standing on (within 10 ft)?
+  const fielderBase = closestBaseTo(fielder.pos);
+  const fielderOnBase = dist2D(fielder.pos, BASE_POS[fielderBase]) < 10;
 
   const targets: ThrowTarget[] = [];
 
@@ -74,12 +78,17 @@ export function decideThrowTarget(
     const targetBase = closestBaseTo(runner.state.to);
     const runnerTarget = BASE_POS[targetBase];
 
+    // If the fielder is ALREADY at this base, they don't need to throw.
+    // They just need to step on the bag / tag the runner.
+    if (fielderOnBase && targetBase === fielderBase) {
+      // Return priority 0 — signal that the fielder should HOLD, not throw
+      continue;
+    }
+
     const throwDist = dist2D(fielder.pos, runnerTarget);
     const runnerDist = dist2D(runner.pos, runnerTarget);
 
     // Can we beat the runner there?
-    // Rough: throw arrives in throwDist / throwVelo seconds
-    // Runner arrives in runnerDist / runnerSpeed seconds
     const throwTime = throwDist / Math.max(1, fielder.throwVeloFps);
     const runnerTime = runnerDist / Math.max(1, runner.speedFps);
     const canBeat = throwTime < runnerTime + 0.2;
@@ -129,10 +138,10 @@ export function decideThrowTarget(
   targets.sort((a, b) => b.priority - a.priority);
 
   return targets[0] ?? {
-    base: 'first',
-    point: BASE_POS.first,
+    base: fielderBase,
+    point: BASE_POS[fielderBase],
     priority: 0,
-    reason: 'fallback',
+    reason: 'no play — fielder on base',
   };
 }
 
@@ -196,15 +205,52 @@ export function decideCutoff(
 
 // ─── Runner commands ─────────────────────────────────────────────
 
+/** Base ordering for force-out calculations. */
+const BASE_ORDER_FORCE = ['first', 'second', 'third', 'home'] as const;
+
+/**
+ * Determine if a runner is forced to advance.
+ * A runner is forced when every base between them and home plate
+ * (counting backward from their base) is occupied AND the batter
+ * is running. This creates a chain: batter forces R1, R1 forces R2, etc.
+ */
+function isRunnerForced(
+  runnerBase: string,
+  allRunners: RunnerEntity[],
+): boolean {
+  // Get occupied bases (runners who are on-base or were on-base)
+  const occupied = new Set<string>();
+  for (const r of allRunners) {
+    if (r.state.type === 'on-base') occupied.add(r.state.base);
+  }
+
+  // Runner on 1B is always forced (batter is coming)
+  if (runnerBase === 'first') return true;
+
+  // Runner on 2B is forced if 1B is occupied
+  if (runnerBase === 'second') return occupied.has('first');
+
+  // Runner on 3B is forced if both 1B and 2B are occupied
+  if (runnerBase === 'third') return occupied.has('first') && occupied.has('second');
+
+  return false;
+}
+
 /**
  * Issue commands to all runners based on the current game state.
  * Called by the tick engine when a ball is put in play.
+ *
+ * Force-out rules:
+ *   - A forced runner MUST advance (can't stay at their base)
+ *   - Non-forced runners advance by default on contact
+ *     (they'll evaluate whether to hold later)
  */
 export function commandRunners(
   runners: RunnerEntity[],
   ball: BallEntity,
   situation: GameSituation,
   isCaughtFly: boolean,
+  isProbableFly = false,
 ): void {
   for (const runner of runners) {
     if (runner.state.type === 'scored' || runner.state.type === 'out') continue;
@@ -213,16 +259,119 @@ export function commandRunners(
       // Tag up — hold at current base, will advance after catch
       commandRunner(runner, { type: 'tag-up' });
     } else if (runner.state.type === 'on-base') {
-      // Ball in play — advance!
-      const target = nextBase(runner.state.base);
-      commandRunner(runner, { type: 'advance', targetBase: target });
+      const forced = isRunnerForced(runner.state.base, runners);
+      if (forced && !isProbableFly) {
+        // Forced runners MUST advance on ground balls — no choice.
+        // On fly balls the force doesn't truly exist (batter could be caught out),
+        // so runners hold.
+        const target = nextBase(runner.state.base);
+        commandRunner(runner, { type: 'advance', targetBase: target });
+      } else if (!isProbableFly) {
+        // Non-forced runners on ground balls/liners: advance on contact
+        // but will re-evaluate each tick via reevaluateRunners()
+        const target = nextBase(runner.state.base);
+        commandRunner(runner, { type: 'advance', targetBase: target });
+      }
+      // On probable fly balls, runners hold at their base (go halfway).
+      // They'll advance via tag-up logic after the catch, or via
+      // reevaluation if the ball drops.
+    }
+  }
+}
+
+/**
+ * Per-tick runner re-evaluation. Checks ball state and determines
+ * whether running runners should hold up or retreat.
+ *
+ * Called every tick during flight/fielding/throw phases.
+ * This makes runners react to the developing play instead of
+ * blindly sprinting to their target.
+ */
+export function reevaluateRunners(
+  runners: RunnerEntity[],
+  ball: BallEntity,
+  fielders: FielderEntity[],
+  situation: GameSituation,
+): void {
+  for (const runner of runners) {
+    if (runner.state.type !== 'running') continue;
+
+    const targetBase = closestBaseTo(runner.state.to);
+    const targetPt = BASE_POS[targetBase];
+    const distToTarget = dist2D(runner.pos, targetPt);
+    const runnerTime = distToTarget / runner.speedFps;
+
+    // ── BATTER-RUNNER GUARD: never retreat to home ───────────────
+    // In baseball, once you put the ball in play you must reach first
+    // or be put out. The batter-runner cannot go back to home plate.
+    const cameFromHome = dist2D(runner.state.from, BASE_POS.home) < 12;
+    if (targetBase === 'first' && cameFromHome) continue;
+
+    // ── If ball is HELD by a fielder near our target base → HOLD ──
+    if (ball.state.type === 'held') {
+      const holder = fielders.find(f =>
+        f.state.type === 'has-ball' || f.state.type === 'throwing'
+      );
+      if (holder) {
+        const holderToTarget = dist2D(holder.pos, targetPt);
+        // Fielder is at (or near) the base we're running to
+        if (holderToTarget < 15) {
+          // If we're more than 60% of the way there, commit (can't stop)
+          const totalDist = dist2D(runner.state.from, targetPt);
+          const traveled = totalDist - distToTarget;
+          const progress = totalDist > 0 ? traveled / totalDist : 1;
+
+          if (progress < 0.6) {
+            // Retreat to previous base
+            const prevBase = closestBaseTo(runner.state.from);
+            commandRunner(runner, { type: 'retreat', targetBase: prevBase });
+          }
+          // If > 60% committed, keep running (can't turn back)
+        }
+      }
+    }
+
+    // ── If a THROW is heading to our target base → evaluate ──
+    if (ball.state.type === 'thrown') {
+      const throwTarget = ball.state.target;
+      const throwToTarget = dist2D(throwTarget, targetPt);
+
+      if (throwToTarget < 12) {
+        // Throw is coming to our base!
+        // Estimate throw arrival time
+        const throwDist = dist2D(ball.pos, throwTarget);
+        const throwSpeed = Math.hypot(ball.state.vel.x, ball.state.vel.y);
+        const throwTime = throwSpeed > 0 ? throwDist / throwSpeed : 0;
+
+        // Can we beat it?
+        if (runnerTime > throwTime + 0.3) {
+          // Throw will beat us — retreat if we haven't committed
+          const totalDist = dist2D(runner.state.from, targetPt);
+          const traveled = totalDist - distToTarget;
+          const progress = totalDist > 0 ? traveled / totalDist : 1;
+
+          if (progress < 0.5) {
+            const prevBase = closestBaseTo(runner.state.from);
+            commandRunner(runner, { type: 'retreat', targetBase: prevBase });
+          }
+        }
+      }
     }
   }
 }
 
 /**
  * After a fly is caught, decide which tagged-up runners should go.
- * Runners on 3B go on a sac fly (< 2 outs). Others hold.
+ *
+ * Tag-up decisions are skill-based:
+ *   - Speed: can the runner physically beat the throw?
+ *   - PI: does the runner read the play correctly?
+ *     High PI → better read on ball depth + fielder arm
+ *     Low PI → conservative, only tags on obvious opportunities
+ *
+ * Runners on 3B: tag up home (sac fly) with < 2 outs
+ * Runners on 2B: tag up to 3B on deep flies / weak arms
+ * Runners on 1B: rarely tag (too risky unless very deep)
  */
 export function commandTagUpRunners(
   runners: RunnerEntity[],
@@ -234,30 +383,133 @@ export function commandTagUpRunners(
 
     const currentBase = runner.state.base;
     const nextB = nextBase(currentBase);
-    const target = BASE_POS[nextB];
+    const targetPt = BASE_POS[nextB];
+    const pi = runner.playIntelligence ?? 5;
 
-    // Should this runner tag up and go?
-    // Sac fly: runner on 3B goes home with < 2 outs
     if (currentBase === 'third' && situation.outs < 2) {
+      // Sac fly: runner on 3B tags home
       const throwDist = dist2D(fielder.pos, BASE_POS.home);
       const runnerDist = dist2D(runner.pos, BASE_POS.home);
       const throwTime = throwDist / fielder.throwVeloFps;
       const runnerTime = runnerDist / runner.speedFps;
 
-      if (runnerTime < throwTime + 0.5) {
-        // Runner can beat the throw — go!
+      // PI gives margin: high PI runners go on closer plays
+      const piMargin = (pi - 5) * 0.08;  // PI 10 = +0.4s, PI 1 = -0.32s
+      if (runnerTime < throwTime + 0.3 + piMargin) {
         commandRunner(runner, { type: 'advance', targetBase: 'home' });
       }
-    }
-    // Runner on 2B: tag up to 3B if the throw is going elsewhere
-    else if (currentBase === 'second' && situation.outs < 2) {
+    } else if (currentBase === 'second' && situation.outs < 2) {
+      // Tag to 3B: evaluate throw time vs runner time
       const throwDist = dist2D(fielder.pos, BASE_POS.third);
-      if (throwDist > 200) {
-        // Deep fly — tag and advance to 3B
+      const runnerDist = dist2D(runner.pos, BASE_POS.third);
+      const throwTime = throwDist / fielder.throwVeloFps;
+      const runnerTime = runnerDist / runner.speedFps;
+
+      // Easier tag than home — OF usually throws home, not to 3B
+      const piMargin = (pi - 5) * 0.06;
+      // If the throw is going home (deep fly), the runner can tag easily
+      const throwGoingHome = throwDist > dist2D(fielder.pos, BASE_POS.home) + 20;
+      const margin = throwGoingHome ? 1.0 : 0.3;
+
+      if (runnerTime < throwTime + margin + piMargin) {
         commandRunner(runner, { type: 'advance', targetBase: 'third' });
       }
     }
+    // Runners on 1B: too risky to tag to 2B in most situations
+    // Could add for very deep flies with high-PI/fast runners later
   }
+}
+
+/**
+ * Evaluate whether a runner who just arrived at a base should
+ * continue to the next base. Called when a runner reaches a base
+ * and the ball is still in play.
+ *
+ * Decision factors:
+ *   - Speed: can they beat the throw?
+ *   - PI: do they read the play correctly?
+ *   - Ball state: is it still rolling? Being fielded? Already thrown?
+ *   - Distance: how far is the ball from the next base?
+ *
+ * Returns true if the runner should advance to the next base.
+ */
+export function evaluateExtraBaseAdvance(
+  runner: RunnerEntity,
+  ball: BallEntity,
+  fielders: FielderEntity[],
+  situation: GameSituation,
+): boolean {
+  if (runner.state.type !== 'on-base') return false;
+
+  const currentBase = runner.state.base;
+  const nextB = nextBase(currentBase);
+
+  // Don't try to score from 1B — too risky (would need 1B→2B→3B→home)
+  if (nextB === 'home' && currentBase !== 'third') {
+    return false;
+  }
+
+  const nextBasePt = BASE_POS[nextB];
+  const runnerDist = dist2D(runner.pos, nextBasePt);
+  const runnerTime = runnerDist / runner.speedFps;
+
+  const pi = runner.playIntelligence ?? 5;
+  const piMargin = (pi - 5) * 0.1;  // high PI = +0.5s margin, low PI = -0.4s
+
+  // Don't stretch if the ball is already being thrown
+  if (ball.state.type === 'thrown') {
+    // Ball in the air — too risky unless PI says otherwise
+    if (pi < 7) return false;
+    // High PI: check if the throw is going elsewhere
+    const throwTarget = ball.state.target;
+    const throwGoingToNextBase = dist2D(throwTarget, nextBasePt) < 15;
+    if (throwGoingToNextBase) return false;  // throw is coming to us
+    // Throw is going elsewhere — we can advance
+    return runnerTime < 2.0;  // only if close
+  }
+
+  // Ball is held — a fielder has it, too late to advance
+  if (ball.state.type === 'held') return false;
+
+  // Ball is still rolling or being chased
+  if (ball.state.type === 'rolling' || ball.state.type === 'idle') {
+    // Find the closest fielder to the ball
+    let closestDist = Infinity;
+    let closestFielder: FielderEntity | undefined;
+    for (const f of fielders) {
+      const d = dist2D(f.pos, ball.pos);
+      if (d < closestDist) {
+        closestDist = d;
+        closestFielder = f;
+      }
+    }
+
+    if (!closestFielder) return false;
+
+    // Estimate: fielder reaches ball + picks up + throws
+    const fielderToBall = closestDist / closestFielder.speedFps;
+    const transferTime = 0.3;  // approximate
+    const throwDist = dist2D(ball.pos, nextBasePt);
+    const throwTime = throwDist / closestFielder.throwVeloFps;
+    const totalDefenseTime = fielderToBall + transferTime + throwTime;
+
+    // Runner needs to beat the total defensive time
+    if (runnerTime < totalDefenseTime + piMargin) {
+      return true;
+    }
+  }
+
+  // Ball is in flight — fielder hasn't caught it yet
+  if (ball.state.type === 'in-flight') {
+    // Ball is in the air — runner should be advancing on contact already
+    // Extra-base advance here means going 1st→3rd or 2nd→home on a hit
+    // More aggressive than before: PI 4+ runners attempt extra bases
+    if (pi >= 4 && runnerTime < 4.0 + piMargin) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // ─── Fielder role reassignment ───────────────────────────────────
@@ -273,18 +525,120 @@ export function reassignFielderRoles(
   runners: RunnerEntity[],
   situation: GameSituation,
 ): void {
-  // Only reassign during active throws (relay situations)
-  if (ball.state.type !== 'thrown') return;
+  // During throws, ensure someone covers the throw target
+  if (ball.state.type === 'thrown') {
+    ensureThrowTargetCovered(fielders, ball.state.target);
+    return;
+  }
 
-  const throwTarget = ball.state.target;
+  // During rolling/idle ball, assign situational coverage to non-busy fielders
+  if (ball.state.type === 'rolling' || ball.state.type === 'idle' || ball.state.type === 'in-flight') {
+    applySituationalCoverage(fielders, runners, situation, ball);
+  }
+}
 
-  // Ensure someone is covering the throw target base
+// ─── Situational coverage logic ─────────────────────────────────
+
+/**
+ * Decide where a non-primary fielder should go based on the game
+ * situation. Considers runner positions, outs, and ball location.
+ */
+function applySituationalCoverage(
+  fielders: FielderEntity[],
+  runners: RunnerEntity[],
+  situation: GameSituation,
+  ball: BallEntity,
+): void {
+  // Only assign idle/returning/backing-up fielders — don't override
+  // anyone actively tracking, chasing, holding, throwing, or covering.
+  const occupiedBases = new Set<string>();
+  for (const r of runners) {
+    if (r.state.type === 'on-base') occupiedBases.add(r.state.base);
+    if (r.state.type === 'running') {
+      const targetBase = closestBaseTo(r.state.to);
+      occupiedBases.add(targetBase);
+    }
+  }
+
+  // Always need home covered
+  occupiedBases.add('home');
+
+  // Build a list of bases that need coverage based on ACTUAL runners.
+  // Only cover bases where a runner could realistically advance.
+  const basesToCover: BaseName[] = [];
+  // First base always needs coverage (batter-runner heading there)
+  basesToCover.push('first');
+  // Second only if runner on first could advance there
+  if (occupiedBases.has('first')) basesToCover.push('second');
+  // Third only if runner on second could advance there
+  if (occupiedBases.has('second')) basesToCover.push('third');
+  basesToCover.push('home');  // catcher always covers home
+
+  // Track which bases already have a fielder covering them
+  const coveredBases = new Set<string>();
+  for (const f of fielders) {
+    if (f.state.type === 'covering') {
+      const base = closestBaseTo(f.state.base);
+      coveredBases.add(base);
+    }
+  }
+
+  // Natural position-to-base affinity
+  const positionBaseAffinity: Partial<Record<Position, BaseName>> = {
+    C: 'home',
+    B1: 'first',
+    B2: 'second',
+    SS: 'second',
+    B3: 'third',
+    P: 'home',  // pitcher backs up home or covers first
+  };
+
+  for (const f of fielders) {
+    // Only reassign fielders that are not busy
+    if (f.state.type !== 'idle' && f.state.type !== 'returning' && f.state.type !== 'backing-up') {
+      continue;
+    }
+
+    // Skip outfielders — they should be backing up, not covering bases
+    if (['LF', 'CF', 'RF'].includes(f.position)) continue;
+
+    const naturalBase = positionBaseAffinity[f.position];
+    if (!naturalBase) continue;
+
+    // If the base we'd naturally cover needs it and isn't covered yet
+    if (basesToCover.includes(naturalBase) && !coveredBases.has(naturalBase)) {
+      const coverPoint = naturalBase === 'home'
+        ? getBaseAnchor('home')
+        : getFielderCoverPoint(naturalBase as OccupiedBase, f.position);
+      f.state = { type: 'covering', base: coverPoint };
+      coveredBases.add(naturalBase);
+    }
+  }
+
+  // Special: pitcher covers first if B1 is the primary fielder
+  const b1 = fielders.find(f => f.position === 'B1');
+  const pitcher = fielders.find(f => f.position === 'P');
+  if (b1 && pitcher &&
+      (b1.state.type === 'chasing' || b1.state.type === 'tracking' || b1.state.type === 'has-ball') &&
+      (pitcher.state.type === 'idle' || pitcher.state.type === 'returning' || pitcher.state.type === 'backing-up') &&
+      !coveredBases.has('first')) {
+    pitcher.state = { type: 'covering', base: getFielderCoverPoint('first', 'P') };
+    coveredBases.add('first');
+  }
+}
+
+// ─── Throw target coverage ──────────────────────────────────────
+
+function ensureThrowTargetCovered(
+  fielders: FielderEntity[],
+  throwTarget: Point2D,
+): void {
+  // Check if someone is already covering the throw target
   for (const f of fielders) {
     if (f.state.type === 'covering') {
       const coverDist = dist2D(f.state.base, throwTarget);
       if (coverDist < COLLIDERS.receiveThrow) {
-        // This fielder is already covering the right base
-        return;
+        return;  // Already covered
       }
     }
   }
@@ -375,6 +729,100 @@ function closestBaseTo(pt: Point2D): BaseName {
 
 function baseIndex(base: string): number {
   return ['home', 'first', 'second', 'third'].indexOf(base);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DEFENSIVE ALIGNMENT — Pre-contact positioning
+// ═══════════════════════════════════════════════════════════════════
+
+export type BatterHand = 'L' | 'R';
+
+interface AlignmentResult {
+  positions: Partial<Record<Position, Point2D>>;
+  label: string;  // for PBP/debugging: "standard", "infield-in", "no-doubles", etc.
+}
+
+/**
+ * Compute pre-pitch defensive alignment based on game situation.
+ * Returns adjusted home positions for fielders that should shift.
+ *
+ * @param situation - outs, inning, score
+ * @param runners - current runners on base
+ * @param batterHand - 'L' or 'R' for generic pull tendency
+ */
+export function getDefensiveAlignment(
+  situation: GameSituation,
+  runners: RunnerEntity[],
+  batterHand: BatterHand = 'R',
+): AlignmentResult {
+  const occupiedBases = new Set<string>();
+  for (const r of runners) {
+    if (r.state.type === 'on-base') occupiedBases.add(r.state.base);
+  }
+
+  const hasRunnerOnThird = occupiedBases.has('third');
+  const hasRunnerOnSecond = occupiedBases.has('second');
+  const hasRunnerOnFirst = occupiedBases.has('first');
+  const isLate = situation.inning >= 7;
+  const isCloseGame = Math.abs(situation.scoreDiff) <= 2;
+
+  // ── Infield-in: runner on 3B, fewer than 2 outs ──────────────
+  // Bring infield in 20 ft to cut off the run at the plate.
+  if (hasRunnerOnThird && situation.outs < 2) {
+    const inDelta = 20;
+    return {
+      positions: {
+        B1: { x: 50,   y: 85 - inDelta },
+        B2: { x: 35,   y: 130 - inDelta },
+        SS: { x: -35,  y: 130 - inDelta },
+        B3: { x: -50,  y: 85 - inDelta },
+      },
+      label: 'infield-in',
+    };
+  }
+
+  // ── Bunt defense: runner on 1B or 2B, 0 outs ─────────────────
+  // P/1B/3B creep forward to field the bunt.
+  if ((hasRunnerOnFirst || hasRunnerOnSecond) && situation.outs === 0) {
+    return {
+      positions: {
+        P:  { x: 0,    y: 50 },   // pitcher creeps toward plate
+        B1: { x: 40,   y: 65 },   // 1B plays in
+        B3: { x: -40,  y: 65 },   // 3B plays in
+      },
+      label: 'bunt-defense',
+    };
+  }
+
+  // ── No-doubles: late in close game, OF plays deep ─────────────
+  // Outfielders push back ~25 ft to prevent extra bases.
+  if (isLate && isCloseGame && !hasRunnerOnThird) {
+    const deepDelta = 25;
+    return {
+      positions: {
+        LF: { x: -136, y: 227 + deepDelta },
+        CF: { x:    0, y: 295 + deepDelta },
+        RF: { x:  136, y: 227 + deepDelta },
+      },
+      label: 'no-doubles',
+    };
+  }
+
+  // ── Pull shift: generic L/R batter tendency ───────────────────
+  // Shift the infield and outfield toward the pull side.
+  // L batter pulls to right → shift right. R batter pulls left → shift left.
+  const pullShift = batterHand === 'L' ? 12 : -12;  // ft of lateral shift
+  const ofPullShift = batterHand === 'L' ? 20 : -20;
+
+  return {
+    positions: {
+      B2: { x: 35 + pullShift,   y: 130 },
+      SS: { x: -35 + pullShift,  y: 130 },
+      LF: { x: -136 + ofPullShift, y: 227 },
+      RF: { x:  136 + ofPullShift, y: 227 },
+    },
+    label: 'pull-shift',
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════

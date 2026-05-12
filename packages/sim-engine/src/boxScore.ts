@@ -37,6 +37,7 @@ export interface BoxScorePitcher {
   strikeouts: number;
   homeRuns: number;
   pitches: number;
+  decision?: 'W' | 'L' | 'SV';
 }
 
 export interface BoxScoreTeamLine {
@@ -172,6 +173,38 @@ export function buildBoxScore(result: GameResult): BoxScore {
   const homeBatters = buildBatters(homeTeam, result.batterStats);
   const awayPitchers = buildPitchers(awayTeam, result.pitcherStats);
   const homePitchers = buildPitchers(homeTeam, result.pitcherStats);
+
+  // Assign W/L/SV decisions
+  const homeWon = result.homeRuns > result.awayRuns;
+  const winPitchers = homeWon ? homePitchers : awayPitchers;
+  const losePitchers = homeWon ? awayPitchers : homePitchers;
+
+  // W: starter gets the win if they pitched 5+ innings (15 outs), else last reliever
+  if (winPitchers.length > 0) {
+    const starter = winPitchers[0];
+    if (starter.ipOuts >= 15 || winPitchers.length === 1) {
+      starter.decision = 'W';
+    } else {
+      // Last reliever before the final pitcher gets the W
+      // (simplified — in real baseball it's the pitcher of record when the
+      // winning team took the lead)
+      const relieverIdx = Math.max(1, winPitchers.length - 2);
+      winPitchers[relieverIdx].decision = 'W';
+    }
+  }
+
+  // L: starter of losing team (simplified)
+  if (losePitchers.length > 0) {
+    losePitchers[0].decision = 'L';
+  }
+
+  // SV: last pitcher of winning team if different from W pitcher and pitched 3+ outs
+  if (winPitchers.length > 1) {
+    const closer = winPitchers[winPitchers.length - 1];
+    if (!closer.decision && closer.ipOuts >= 3) {
+      closer.decision = 'SV';
+    }
+  }
 
   return {
     away: {

@@ -192,9 +192,11 @@ export function buildDefenseFieldersFromRows(
       facingRad: facingToHome(homePos),
       turnRateRad: turnRateFromAgility(agilitySkill),
       throwVeloFps: throwVelocityMph(position, throwingSkill) * CONFIG.flight.mphToFps,
+      throwingSkill,
       defense: fieldingSkill,
       playIntelligence: profile?.playIntelligenceSkill ?? 5,
       playerId: profile?.playerId ?? -(idx + 1),
+      jerseyNumber: profile?.playerId ?? 0,
       teamColor,
     };
   });

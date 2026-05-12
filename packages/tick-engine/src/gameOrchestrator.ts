@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-05T08:18:00Z
+// Last touched by agent: 2026-05-12T09:19:00Z
 /**
  * Full-game orchestrator for the tick engine.
  *
@@ -20,7 +20,8 @@ import type { AtBatRecord, Player, Team, GameResult, Position } from '@baseballc
 import { throwVelocityMph, sprintFtPerSec } from '@baseballczar/sim-engine';
 import type { WorldSnapshot, FielderEntity, RunnerEntity } from './entities';
 import { simulateAtBatTick, type TickSimOptions } from './tickEngine';
-import { BASE_POS } from './runnerAI';
+import { extractTickOutcome } from './tickAuthority';
+import { BASE_POS, tickRunner, commandRunner } from './runnerAI';
 import {
   computeDefensiveAlignment,
   type GameSituation,
@@ -183,7 +184,7 @@ export function simulateFullGame(
       // Emit inning change snapshot with fielders visible
       allSnapshots.push({
         time: timeOffset,
-        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
+        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
         fielders: currentFielders,
         runners: [],
         events: [{
@@ -252,6 +253,22 @@ export function simulateFullGame(
     const batterName = playerTag(ab.batter);
     const pitcherPlayer = defensiveStrategic.currentPitcher;
     defenseMap.set('P', pitcherPlayer);
+
+    // Sync the pitcher FielderEntity in the fielders array so the
+    // canvas debug overlay and tick engine see the correct player.
+    const pitcherFielder = currentFielders.find(f => f.position === 'P');
+    if (pitcherFielder) {
+      pitcherFielder.playerId = pitcherPlayer.id;
+      pitcherFielder.jerseyNumber = pitcherPlayer.jerseyNumber ?? 0;
+      pitcherFielder.speedFps = sprintFtPerSec(pitcherPlayer.skills.speed);
+      pitcherFielder.agility = pitcherPlayer.skills.ag ?? 5;
+      pitcherFielder.turnRateRad = turnRateFromAg(pitcherPlayer.skills.ag ?? 5);
+      pitcherFielder.throwVeloFps = throwVelocityMph('P', pitcherPlayer.skills.throwing ?? 5) * MPH_TO_FPS;
+      pitcherFielder.throwingSkill = pitcherPlayer.skills.throwing ?? 5;
+      pitcherFielder.defense = pitcherPlayer.skills.fielding ?? 5;
+      pitcherFielder.playIntelligence = pitcherPlayer.skills.playIntelligence ?? 5;
+    }
+
     const pitcherName = playerTag(pitcherPlayer);
     const activeBases = runnersOnBase.map(r => r.base);
 
@@ -325,6 +342,89 @@ export function simulateFullGame(
 
       timeOffset += 0.5;  // brief pause after at-bat
 
+      // For walks/HBP, animate the batter jogging to first base
+      // and any forced runners advancing
+      if (ab.result === 'walk' || ab.result === 'hbp') {
+        const JOG_SPEED_FPS = 14; // casual jog — reaches 1B in ~6.5 sec
+        const JOG_DT = 1 / 15;    // 15 fps for jog animation
+        const JOG_MAX_SECS = 8;   // enough time to cover 90 ft at jog pace
+
+        // Build runner entities with the batter starting at home
+        const jogRunners: RunnerEntity[] = runnersOnBase.map((r): RunnerEntity => {
+          const pos = getRunnerOnBasePoint(r.base);
+          return {
+            id: r.player.id,
+            pos: { ...pos },
+            state: { type: 'on-base', base: r.base },
+            speedFps: JOG_SPEED_FPS,
+            agility: 5,
+            playIntelligence: 5,
+            facingRad: facingToPoint(pos, BASE_POS.home),
+            turnRateRad: 4,
+          };
+        });
+
+        // Batter starts at home plate
+        const batterStart = { x: ab.batter.hand === 'L' ? 3 : -3, y: 0 };
+        const batterJogger: RunnerEntity = {
+          id: ab.batter.id,
+          pos: { ...batterStart },
+          state: { type: 'running', from: { ...batterStart }, to: BASE_POS.first },
+          speedFps: JOG_SPEED_FPS,
+          agility: 5,
+          playIntelligence: 5,
+          facingRad: facingToPoint(batterStart, BASE_POS.first),
+          turnRateRad: 4,
+        };
+        jogRunners.push(batterJogger);
+
+        // Force runners ahead of the batter to advance (walk forces)
+        const hasR1 = runnersOnBase.some(r => r.base === 'first');
+        const hasR2 = runnersOnBase.some(r => r.base === 'second');
+        for (const jr of jogRunners) {
+          if (jr.id === ab.batter.id) continue;
+          if (jr.state.type !== 'on-base') continue;
+          // Walk forces: R1 must advance if batter takes first
+          // R2 must advance if R1 was forced, etc.
+          if (jr.state.base === 'first') {
+            commandRunner(jr, { type: 'advance', targetBase: 'second' });
+            jr.speedFps = JOG_SPEED_FPS;
+          } else if (jr.state.base === 'second' && hasR1) {
+            commandRunner(jr, { type: 'advance', targetBase: 'third' });
+            jr.speedFps = JOG_SPEED_FPS;
+          } else if (jr.state.base === 'third' && hasR1 && hasR2) {
+            commandRunner(jr, { type: 'advance', targetBase: 'home' });
+            jr.speedFps = JOG_SPEED_FPS;
+          }
+        }
+
+        // Simulate jog animation
+        let jogTime = 0;
+        let jogFrame = 0;
+        while (jogTime < JOG_MAX_SECS) {
+          for (const jr of jogRunners) {
+            tickRunner(jr, JOG_DT);
+          }
+          jogTime += JOG_DT;
+          jogFrame++;
+
+          // Capture every other frame (7.5 fps output)
+          if (jogFrame % 2 === 0) {
+            allSnapshots.push({
+              time: timeOffset + jogTime,
+              ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
+              fielders: currentFielders,
+              runners: cloneRunnersForSnapshot(jogRunners.filter(r => r.state.type !== 'scored')),
+              events: [],
+            });
+          }
+
+          // Stop when the batter reaches first
+          if (batterJogger.state.type === 'on-base' || batterJogger.state.type === 'scored') break;
+        }
+        timeOffset += jogTime;
+      }
+
       const stateUpdate = updateGameState(ab, runnersOnBase, outs);
       runnersOnBase = stateUpdate.runners;
       outs = stateUpdate.outs;
@@ -376,6 +476,8 @@ export function simulateFullGame(
       ...opts,
       runners: runnersOnBase,
       situation,
+      errorType: ab.errorType,
+      errorBy: ab.fielding?.errorBy,
     });
 
     // Inject the CONTACT PITCH's PBP events into the tick engine's first snapshot
@@ -408,12 +510,30 @@ export function simulateFullGame(
       }
     }
 
+    // ── TICK-ENGINE IS THE SINGLE SOURCE OF TRUTH ────────────────
+    // Extract the authoritative outcome from the SAME snapshots used
+    // for visual playback. No second run, no band-aids — one run,
+    // one truth. The tick-engine's physics determines hit vs out.
+    let tickResult = ab.result;   // fallback for non-batted-ball ABs
+    let tickRunsScored = ab.runsScored;
+    let tickOutsRecorded = 0;
+    let tickRunnersAfter: { runnerId: number; base: 'first' | 'second' | 'third' }[] | null = null;
+    if (ab.battedBall && abSnapshots.length > 0) {
+      const tickOutcome = extractTickOutcome(
+        abSnapshots, ab.batter.id, ab.battedBall, runnersOnBase,
+      );
+      tickResult = tickOutcome.outcome;
+      tickRunsScored = tickOutcome.statDeltas.runsScored;
+      tickOutsRecorded = tickOutcome.statDeltas.outsRecorded;
+      tickRunnersAfter = tickOutcome.runnersAfter;
+    }
+
     // Inject at-bat-end into the last snapshot's events
     if (abSnapshots.length > 0) {
       const lastSnap = abSnapshots[abSnapshots.length - 1];
       lastSnap.events = [
         ...lastSnap.events.filter(e => e.type !== 'play-complete'),
-        { type: 'at-bat-end', result: ab.result, batterId: ab.batter.id, batterName, rbis: ab.rbis, fieldedBy: fieldedByLabel },
+        { type: 'at-bat-end', result: tickResult, batterId: ab.batter.id, batterName, rbis: tickRunsScored, fieldedBy: fieldedByLabel },
         { type: 'play-complete' },
       ];
     }
@@ -431,29 +551,51 @@ export function simulateFullGame(
       timeOffset = abSnapshots[abSnapshots.length - 1].time;
     }
 
-    // ── 1-second mound breather ──────────────────────
-    // Pitcher gets the ball back, everyone resets — give the game a breath
-    const MOUND_PAUSE_SEC = 1.0;
-    const idleSnap: WorldSnapshot = {
-      time: timeOffset + 0.5,
-      ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
-      fielders: currentFielders,
-      runners: [],
-      events: [],
-    };
-    allSnapshots.push(idleSnap);
-    timeOffset += MOUND_PAUSE_SEC + 0.5;
-
     // Update pitch count
     pitchCount += ab.pitches.length;
     defensiveStrategic.pitchCount += ab.pitches.length;
 
-    // Update game state from the at-bat result
-    const stateUpdate = updateGameState(ab, runnersOnBase, outs);
-    runnersOnBase = stateUpdate.runners;
-    outs = stateUpdate.outs;
-    homeScore += isHomeBatting ? ab.runsScored : 0;
-    awayScore += isHomeBatting ? 0 : ab.runsScored;
+    // ── Update game state ─────────────────────────────────────────
+    // For batted-ball plays, use the tick-engine's authoritative runner
+    // positions. For non-batted-ball ABs (K, BB, HBP), use the static
+    // heuristic since there's no physics simulation.
+    if (tickRunnersAfter) {
+      // Build a player lookup from current + batter for runnerId → Player mapping
+      const playerById = new Map<number, Player>();
+      for (const r of runnersOnBase) playerById.set(r.player.id, r.player);
+      playerById.set(ab.batter.id, ab.batter);
+
+      runnersOnBase = tickRunnersAfter
+        .map(r => {
+          const player = playerById.get(r.runnerId);
+          return player ? { player, base: r.base } : null;
+        })
+        .filter((r): r is { player: Player; base: 'first' | 'second' | 'third' } => r !== null);
+      outs += tickOutsRecorded;
+    } else {
+      const stateUpdate = updateGameState(
+        { ...ab, result: tickResult } as AtBatRecord,
+        runnersOnBase, outs,
+      );
+      runnersOnBase = stateUpdate.runners;
+      outs = stateUpdate.outs;
+    }
+    homeScore += isHomeBatting ? tickRunsScored : 0;
+    awayScore += isHomeBatting ? 0 : tickRunsScored;
+
+    // ── 1-second mound breather ──────────────────────
+    // Pitcher gets the ball back, everyone resets — give the game a breath
+    const MOUND_PAUSE_SEC = 1.0;
+    const breathRunners = buildPitchRunners(runnersOnBase);
+    const idleSnap: WorldSnapshot = {
+      time: timeOffset + 0.5,
+      ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
+      fielders: currentFielders,
+      runners: cloneRunnersForSnapshot(breathRunners),
+      events: [],
+    };
+    allSnapshots.push(idleSnap);
+    timeOffset += MOUND_PAUSE_SEC + 0.5;
   }
 
   return {
@@ -468,7 +610,8 @@ export function simulateFullGame(
 // ─── Helpers ─────────────────────────────────────────────────────
 
 function playerTag(player: Player): string {
-  return `#${player.id} ${player.lastName}`;
+  const jersey = player.jerseyNumber > 0 ? player.jerseyNumber : player.id;
+  return `#${String(jersey).padStart(2, '0')} ${player.lastName}`;
 }
 
 function displayPosition(pos: string): string {
@@ -674,7 +817,7 @@ function emitPitchSnapshots(
   // 1. Ball leaves pitcher's hand — events fire here
   snapshots.push({
     time: t,
-    ball: { pos: { x: mound.x, y: mound.y, z: 5.5 }, state: { type: 'in-flight', vel: flightVel } },
+    ball: { pos: { x: mound.x, y: mound.y, z: 5.5 }, state: { type: 'in-flight', vel: flightVel }, bounceCount: 0 },
     fielders,
     runners: cloneRunnersForSnapshot(runners),
     events,
@@ -684,7 +827,7 @@ function emitPitchSnapshots(
   // 2. Ball arrives at plate (catcher)
   snapshots.push({
     time: t + 0.35,
-    ball: { pos: { x: plate.x, y: plate.y, z: 3 }, state: { type: 'in-flight', vel: { x: 0, y: -20, z: -2 } } },
+    ball: { pos: { x: plate.x, y: plate.y, z: 3 }, state: { type: 'in-flight', vel: { x: 0, y: -20, z: -2 } }, bounceCount: 0 },
     fielders,
     runners: cloneRunnersForSnapshot(runners),
     events: [],
@@ -693,7 +836,7 @@ function emitPitchSnapshots(
   // 3. Ball back in pitcher's glove (idle — hidden)
   snapshots.push({
     time: t + 0.70,
-    ball: { pos: { x: mound.x, y: mound.y, z: 5 }, state: { type: 'idle' } },
+    ball: { pos: { x: mound.x, y: mound.y, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
     fielders,
     runners: cloneRunnersForSnapshot(runners),
     events: [],
@@ -715,6 +858,7 @@ function buildPitchRunners(
       state: { type: 'on-base', base: r.base },
       speedFps: sprintFtPerSec(r.player.skills.speed),
       agility: r.player.skills.ag,
+      playIntelligence: r.player.skills.playIntelligence ?? 5,
       facingRad: facingToPoint(pos, BASE_POS.home),
       turnRateRad: turnRateFromAg(r.player.skills.ag),
     };
@@ -734,6 +878,7 @@ function buildPitchRunners(
     state: { type: 'on-base', base: 'first' },
     speedFps: sprintFtPerSec(batter.skills.speed),
     agility: batterAg,
+    playIntelligence: batter.skills.playIntelligence ?? 5,
     facingRad: facingToPoint(batterStart, FIELDER_POSITIONS_FT.P),
     turnRateRad: turnRateFromAg(batterAg),
   });
@@ -749,6 +894,7 @@ function cloneRunnersForSnapshot(runners: RunnerEntity[]): RunnerEntity[] {
     state: { ...r.state } as RunnerEntity['state'],
     speedFps: r.speedFps,
     agility: r.agility,
+    playIntelligence: r.playIntelligence,
     facingRad: r.facingRad,
     turnRateRad: r.turnRateRad,
   }));
@@ -773,9 +919,11 @@ function buildRestingFielders(
       facingRad: facingToPoint(home, BASE_POS.home),
       turnRateRad: turnRateFromAg(player?.skills.ag ?? 5),
       throwVeloFps: throwVelocityMph(pos, player?.skills.throwing ?? 5) * MPH_TO_FPS,
+      throwingSkill: player?.skills.throwing ?? 5,
       defense: player?.skills.fielding ?? 5,
       playIntelligence: player?.skills.playIntelligence ?? 5,
       playerId: player?.id ?? -1,
+      jerseyNumber: player?.jerseyNumber ?? 0,
       teamColor,
     };
   });
@@ -783,9 +931,17 @@ function buildRestingFielders(
 
 function buildDefenseMap(team: Team): Map<Position, Player> {
   const map = new Map<Position, Player>();
-  const positions: Position[] = ['P', 'C', 'B1', 'B2', 'SS', 'B3', 'LF', 'CF', 'RF'];
-  for (let i = 0; i < positions.length && i < team.roster.length; i++) {
-    map.set(positions[i], team.roster[i]);
+  // Map each lineup player to their assigned defensive position.
+  // DH maps to 'P' in the sim engine (excluded from field defense);
+  // the actual pitcher is set separately via defenseMap.set('P', pitcher).
+  for (const p of team.lineup) {
+    if (p.position !== 'P') {
+      map.set(p.position, p);
+    }
+  }
+  // Fallback: if rotation has a starter, seed 'P' so the map is never empty
+  if (!map.has('P') && team.rotation.length > 0) {
+    map.set('P', team.rotation[0]);
   }
   return map;
 }

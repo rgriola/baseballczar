@@ -469,7 +469,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
     return {
       snapshots: [{
         time: 0,
-        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
+        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
         fielders: cloneFielders(homeDefense),
         runners: [],
         events: [],
@@ -510,7 +510,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
     if (row.inning !== previousInning || row.half !== previousHalf) {
       snapshots.push({
         time: t,
-        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
+        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
         fielders: cloneFielders(defense),
         runners: buildBaseRunners(beforeBase, resolveRunnerProfile),
         events: [{ type: 'inning-change', inning: row.inning, half: row.half }],
@@ -533,7 +533,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
 
     snapshots.push({
       time: t,
-      ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
+      ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
       fielders: cloneFielders(defense),
       runners: buildAtBatStartRunners(beforeBase, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
       events: [{
@@ -560,7 +560,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
     for (const pitchEvents of syntheticPitchFrames) {
       snapshots.push({
         time: t,
-        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
+        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
         fielders: cloneFielders(defense),
         runners: buildAtBatStartRunners(beforeBase, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
         events: pitchEvents,
@@ -610,7 +610,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
 
       snapshots.push({
         time: t,
-        ball: { pos: { x: contact.x, y: contact.y, z: contact.z }, state: { type: 'in-flight', vel: { x: 0, y: 0, z: 0 } } },
+        ball: { pos: { x: contact.x, y: contact.y, z: contact.z }, state: { type: 'in-flight', vel: { x: 0, y: 0, z: 0 } }, bounceCount: 0 },
         fielders: defenseFrame,
         runners: buildPlayRunners(beforeBase, afterBase, outcome, 0, runsScored, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
         events: [{
@@ -671,6 +671,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
                 resolveZoneFielder,
                 defenseFrame,
               ),
+              bounceCount: 0,
             },
             fielders: defenseFrame,
             runners: buildPlayRunners(beforeBase, afterBase, outcome, playU, runsScored, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
@@ -713,7 +714,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
       if (outcome === 'home-run') {
         snapshots.push({
           time: t,
-          ball: { pos: { x: 0, y: 61, z: 8 }, state: { type: 'idle' } },
+          ball: { pos: { x: 0, y: 61, z: 8 }, state: { type: 'idle' }, bounceCount: 0 },
           fielders: cloneFielders(defense),
           runners: buildPlayRunners(beforeBase, afterBase, outcome, 1, runsScored, batterRunnerId, resolveRunnerProfile, batterRunnerProfile),
           events: [{ type: 'home-run', distanceFt }],
@@ -760,7 +761,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
 
     snapshots.push({
       time: t,
-      ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
+      ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
       fielders: cloneFielders(defense),
       runners: buildBaseRunners(afterBase, resolveRunnerProfile),
       events: resultEvents,
@@ -770,7 +771,7 @@ export function buildPersistedSnapshots(payload: PersistedGamePayload): ReplayBu
 
     snapshots.push({
       time: t,
-      ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
+      ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
       fielders: cloneFielders(defense),
       runners: buildBaseRunners(afterBase, resolveRunnerProfile),
       events: [{ type: 'play-complete' }],

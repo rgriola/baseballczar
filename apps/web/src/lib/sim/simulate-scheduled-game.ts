@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-07T23:35:00Z
+// Last touched by agent: 2026-05-12T08:54:00Z
 /**
  * Simulate a single scheduled game — loads rosters from Supabase,
  * runs the sim engine, and persists all results.
@@ -35,6 +35,7 @@ import {
   SIM_VERSION_SCHEDULED_LEGACY,
   SIM_VERSION_SCHEDULED_V2,
 } from './game-result-contract';
+import { logger } from '@/lib/logger';
 
 interface SimulateScheduledGameResult {
   gameId: number;
@@ -134,13 +135,14 @@ export async function simulateScheduledGame(
     throw new Error('Could not load teams');
   }
 
-  // 3. Load rosters (pass next_sp_slot so the correct starter is chosen)
-  const homeInput = await buildTeamInput(supabase, homeTeam.id, homeTeam.team_name, homeTeam.next_sp_slot ?? 1);
+  // 3. Load rosters (pass scheduleId + next_sp_slot so game-specific lineups are used)
+  const homeInput = await buildTeamInput(supabase, homeTeam.id, homeTeam.team_name, homeTeam.next_sp_slot ?? 1, sched.id);
   const visitorInput = await buildTeamInput(
     supabase,
     visitorTeam.id,
     visitorTeam.team_name,
     visitorTeam.next_sp_slot ?? 1,
+    sched.id,
   );
 
   // 4. Run simulation
@@ -236,8 +238,73 @@ async function ensureBudgetRows(supabase: SupabaseClient, teamIds: number[]): Pr
 }
 
 function computeScheduledSeed(scheduleId: number, leagueId: number, seasonNo: number): number {
-  const seed = (scheduleId * 104729) ^ (leagueId * 8191) ^ (seasonNo * 131);
+  // Mix in Date.now() so that re-simulating the same schedule (after a
+  // season reset) produces completely different game outcomes.  The
+  // granularity of Date.now() (ms) is more than enough entropy — two
+  // games simmed within the same millisecond will still differ because
+  // of the scheduleId term.
+  const timeBits = (Date.now() >>> 0) ^ (Date.now() >>> 16);
+  const seed = (scheduleId * 104729) ^ (leagueId * 8191) ^ (seasonNo * 131) ^ timeBits;
   return Math.abs(seed) + 1;
+}
+
+// ─── Defense position healing ──────────────────────────────────────
+
+/** Valid lineup positions: 8 field positions + DH */
+const VALID_LINEUP_POSITIONS = new Set(['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH']);
+const FIELD_DEFENSE_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF'] as const;
+
+/**
+ * Detect and repair invalid / duplicate defense positions in the 9-hitter lineup.
+ * This is a self-healing layer for legacy data saved before server-side validation.
+ *
+ * Correct lineup: 8 unique field positions + exactly 1 DH.
+ * If violations are found, players are reassigned to unused positions and a
+ * warning is logged so we can track how often legacy bad data hits.
+ */
+function healDefensePositions(hitters: HitterRow[], teamId: number): void {
+  const used = new Set<string>();
+  const needsHeal: number[] = []; // indices into hitters[]
+
+  // Pass 1: identify valid, unique assignments
+  for (let i = 0; i < hitters.length; i++) {
+    const pos = hitters[i].position;
+    if (VALID_LINEUP_POSITIONS.has(pos) && !used.has(pos)) {
+      used.add(pos);
+    } else {
+      needsHeal.push(i);
+    }
+  }
+
+  if (needsHeal.length === 0) return; // lineup is clean
+
+  // Compute unused positions (prefer DH first since it has no fielding impact,
+  // then outfield, then infield)
+  const preferOrder = ['DH', 'RF', 'LF', 'CF', '1B', '3B', '2B', 'SS', 'C'];
+  const unused = preferOrder.filter((p) => !used.has(p));
+
+  const healed: string[] = [];
+  for (const idx of needsHeal) {
+    const oldPos = hitters[idx].position;
+    const newPos = unused.shift();
+    if (newPos) {
+      hitters[idx] = { ...hitters[idx], position: newPos };
+      used.add(newPos);
+      healed.push(`#${hitters[idx].jersey_no} ${hitters[idx].last_name}: '${oldPos}' → '${newPos}'`);
+    } else {
+      // Extreme edge case: more invalid players than available positions.
+      // Fall back to DH so the player at least doesn't crash the sim.
+      hitters[idx] = { ...hitters[idx], position: 'DH' };
+      healed.push(`#${hitters[idx].jersey_no} ${hitters[idx].last_name}: '${oldPos}' → 'DH' (overflow)`);
+    }
+  }
+
+  logger.warn(
+    { teamId, healed },
+    'sim-engine healed %d invalid defense position(s) for team %d',
+    healed.length,
+    teamId,
+  );
 }
 
 // ─── Roster loading ──────────────────────────────────────────
@@ -247,17 +314,55 @@ async function buildTeamInput(
   teamId: number,
   teamName: string,
   nextSpSlot: number,
+  scheduleId?: number,
 ): Promise<TeamBuild> {
-  // Load active hitters (ordered by batt_order)
-  const { data: hitters, error: hErr } = await supabase
-    .from('players')
-    .select('id, first_name, last_name, jersey_no, position, batt_order, hand_batting, speed, stamina, ag, eye, avg, strength, dhr, play_intel, bunting, fielding, throw, karma')
-    .eq('team_id', teamId)
-    .eq('fielder', true)
-    .eq('roster_status', 'active')
-    .gte('batt_order', 1)
-    .lte('batt_order', 9)
-    .order('batt_order');
+  // ── Try game_lineups first (per-game lineup) ──────────────────
+  let hitters: HitterRow[] | null = null;
+  let hErr: Error | null = null;
+
+  if (scheduleId) {
+    const { data: glRows } = await supabase
+      .from('game_lineups')
+      .select('player_id, batt_order, position')
+      .eq('schedule_id', scheduleId)
+      .eq('team_id', teamId)
+      .gte('batt_order', 1)
+      .lte('batt_order', 9)
+      .order('batt_order');
+
+    if (glRows && glRows.length > 0) {
+      // Load full player data for the IDs from game_lineups
+      const playerIds = glRows.map((r) => r.player_id);
+      const { data: playerData } = await supabase
+        .from('players')
+        .select('id, first_name, last_name, jersey_no, position, batt_order, hand_batting, speed, stamina, ag, eye, avg, strength, dhr, play_intel, bunting, fielding, throw, karma')
+        .in('id', playerIds);
+
+      if (playerData && playerData.length > 0) {
+        // Merge game_lineups batt_order/position onto player data
+        const glMap = new Map(glRows.map((r) => [r.player_id, r]));
+        hitters = (playerData as HitterRow[]).map((p) => {
+          const gl = glMap.get(p.id);
+          return gl ? { ...p, batt_order: gl.batt_order, position: gl.position } : p;
+        });
+      }
+    }
+  }
+
+  // ── Fallback: load from players table (legacy path) ──────────
+  if (!hitters || hitters.length === 0) {
+    const { data, error } = await supabase
+      .from('players')
+      .select('id, first_name, last_name, jersey_no, position, batt_order, hand_batting, speed, stamina, ag, eye, avg, strength, dhr, play_intel, bunting, fielding, throw, karma')
+      .eq('team_id', teamId)
+      .eq('fielder', true)
+      .eq('roster_status', 'active')
+      .gte('batt_order', 1)
+      .lte('batt_order', 9)
+      .order('batt_order');
+    hitters = (data ?? []) as HitterRow[];
+    hErr = error as Error | null;
+  }
 
   // Normalize to exact batting slots 1..9 so we never drift array order.
   const lineupSlots: Array<HitterRow | null> = new Array(9).fill(null);
@@ -306,22 +411,58 @@ async function buildTeamInput(
     throw new Error(`Team ${teamId} has insufficient lineup hitters (${finalHitters.length})`);
   }
 
-  // Load pitchers (rotation slots 1-12: SP1-5, RP1-4, CL, optional RP5-6)
-  const { data: pitchers, error: pErr } = await supabase
-    .from('players')
-    .select('id, first_name, last_name, jersey_no, hand_batting, rotation_slot, speed, stamina, ag, eye, avg, strength, dhr, play_intel, bunting, fielding, throw, karma')
-    .eq('team_id', teamId)
-    .eq('fielder', false)
-    .eq('roster_status', 'active')
-    .gt('rotation_slot', 0)
-    .lte('rotation_slot', 12)
-    .order('rotation_slot');
+  // Self-heal any invalid/duplicate defense positions before feeding to the sim
+  healDefensePositions(finalHitters, teamId);
 
-  if (pErr || !pitchers || pitchers.length < 1) {
-    throw new Error(`Team ${teamId} has no active pitchers`);
+  // ── Load pitchers: try game_rotation first ───────────────────
+  let pitcherRows: PitcherRow[] = [];
+  let pErr: Error | null = null;
+
+  if (scheduleId) {
+    const { data: grRows } = await supabase
+      .from('game_rotation')
+      .select('player_id, rotation_slot')
+      .eq('schedule_id', scheduleId)
+      .eq('team_id', teamId)
+      .gt('rotation_slot', 0)
+      .lte('rotation_slot', 12)
+      .order('rotation_slot');
+
+    if (grRows && grRows.length > 0) {
+      const pitcherIds = grRows.map((r) => r.player_id);
+      const { data: pitcherData } = await supabase
+        .from('players')
+        .select('id, first_name, last_name, jersey_no, hand_batting, rotation_slot, speed, stamina, ag, eye, avg, strength, dhr, play_intel, bunting, fielding, throw, karma')
+        .in('id', pitcherIds);
+
+      if (pitcherData && pitcherData.length > 0) {
+        const grMap = new Map(grRows.map((r) => [r.player_id, r.rotation_slot]));
+        pitcherRows = (pitcherData as PitcherRow[]).map((p) => {
+          const slot = grMap.get(p.id);
+          return slot != null ? { ...p, rotation_slot: slot } : p;
+        }).sort((a, b) => a.rotation_slot - b.rotation_slot);
+      }
+    }
   }
 
-  const pitcherRows = pitchers as PitcherRow[];
+  // Fallback: load from players table
+  if (pitcherRows.length === 0) {
+    const { data: pitchers, error: pitchersErr } = await supabase
+      .from('players')
+      .select('id, first_name, last_name, jersey_no, hand_batting, rotation_slot, speed, stamina, ag, eye, avg, strength, dhr, play_intel, bunting, fielding, throw, karma')
+      .eq('team_id', teamId)
+      .eq('fielder', false)
+      .eq('roster_status', 'active')
+      .gt('rotation_slot', 0)
+      .lte('rotation_slot', 12)
+      .order('rotation_slot');
+    pitcherRows = (pitchers ?? []) as PitcherRow[];
+    pErr = pitchersErr as Error | null;
+  }
+
+  if (pErr || pitcherRows.length < 1) {
+    throw new Error(`Team ${teamId} has no active pitchers`);
+  }
 
   // Identify today's starting pitcher by next_sp_slot
   const starterSlot = Math.max(1, Math.min(5, nextSpSlot)); // clamp 1-5
@@ -479,7 +620,8 @@ function toV2Hand(handBatting: number): V2Hand {
 function toV2Position(rawPosition: string): V2Position {
   const p = rawPosition.toUpperCase();
   if (p === 'P') return 'P';
-  // V2 has no DH position type; map DH to P so it stays bat-only in defense mapping.
+  // DH is batting-only — maps to 'P' so buildDefenseMap() excludes them
+  // from the field defense (the actual pitcher occupies the 'P' slot).
   if (p === 'DH') return 'P';
   if (p === 'C') return 'C';
   if (p === '1B' || p === 'B1') return 'B1';
@@ -489,12 +631,16 @@ function toV2Position(rawPosition: string): V2Position {
   if (p === 'LF') return 'LF';
   if (p === 'CF') return 'CF';
   if (p === 'RF') return 'RF';
+  // Unknown position — should have been healed by healDefensePositions().
+  // Log a warning and default to CF so the sim doesn't crash.
+  logger.warn({ rawPosition }, 'toV2Position: unrecognized position "%s", defaulting to CF', rawPosition);
   return 'CF';
 }
 
 function toV2Hitter(row: HitterRow): V2Player {
   return {
     id: row.id,
+    jerseyNumber: row.jersey_no,
     firstName: row.first_name,
     lastName: row.last_name,
     hand: toV2Hand(row.hand_batting),
@@ -519,6 +665,7 @@ function toV2Hitter(row: HitterRow): V2Player {
 function toV2Pitcher(row: PitcherRow): V2Player {
   return {
     id: row.id,
+    jerseyNumber: row.jersey_no,
     firstName: row.first_name,
     lastName: row.last_name,
     hand: toV2Hand(row.hand_batting),
@@ -558,6 +705,7 @@ function toAdapterInput(team: TeamBuild): ScheduledTeamAdapterInput {
 
 export interface PlayerSnapshot {
   id: number;
+  jerseyNumber: number;
   firstName: string;
   lastName: string;
   hand: 'R' | 'L' | 'S';
@@ -584,6 +732,7 @@ export interface RosterSnapshot {
 function snapshotPlayer(p: V2Player): PlayerSnapshot {
   return {
     id: p.id,
+    jerseyNumber: p.jerseyNumber,
     firstName: p.firstName,
     lastName: p.lastName,
     hand: p.hand,

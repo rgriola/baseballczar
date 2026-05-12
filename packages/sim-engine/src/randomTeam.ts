@@ -64,10 +64,11 @@ function rollHand(rng: Rng): Hand {
 
 let nextPlayerId = 1;
 
-function makePlayer(rng: Rng, position: Position): Player {
+function makePlayer(rng: Rng, position: Position, jerseyNumber: number): Player {
   const isPitcher = position === 'P';
   return {
     id: nextPlayerId++,
+    jerseyNumber,
     firstName: rng.pick(FIRST_NAMES),
     lastName: rng.pick(LAST_NAMES),
     hand: rollHand(rng),
@@ -86,19 +87,20 @@ function makePlayer(rng: Rng, position: Position): Player {
  */
 export function generateTeam(rng: Rng, id: number, name: string, abbrev: string): Team {
   const roster: Player[] = [];
+  let jerseyCounter = 1;
 
   // Pitchers
   const rotation: Player[] = [];
   const bullpen: Player[] = [];
   for (let i = 0; i < CONFIG.game.rotationSize; i++) {
-    const p = makePlayer(rng, 'P');
+    const p = makePlayer(rng, 'P', jerseyCounter++);
     // Starters get a stamina boost
     p.skills.stamina = Math.min(10, p.skills.stamina + 2);
     rotation.push(p);
     roster.push(p);
   }
   for (let i = 0; i < CONFIG.game.bullpenSize; i++) {
-    const p = makePlayer(rng, 'P');
+    const p = makePlayer(rng, 'P', jerseyCounter++);
     bullpen.push(p);
     roster.push(p);
   }
@@ -107,7 +109,7 @@ export function generateTeam(rng: Rng, id: number, name: string, abbrev: string)
   const positionStarters: Position[] = ['C', 'B1', 'B2', 'SS', 'B3', 'LF', 'CF', 'RF'];
   const lineupStarters: Player[] = [];
   for (const pos of positionStarters) {
-    const p = makePlayer(rng, pos);
+    const p = makePlayer(rng, pos, jerseyCounter++);
     lineupStarters.push(p);
     roster.push(p);
   }
@@ -116,7 +118,7 @@ export function generateTeam(rng: Rng, id: number, name: string, abbrev: string)
   const benchPositions: Position[] = ['C', 'SS', 'CF', 'B3', 'B2'];
   const bench: Player[] = [];
   for (const pos of benchPositions) {
-    const p = makePlayer(rng, pos);
+    const p = makePlayer(rng, pos, jerseyCounter++);
     bench.push(p);
     roster.push(p);
   }

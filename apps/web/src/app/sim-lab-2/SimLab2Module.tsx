@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   formatTickEvents,
+  createPbpState,
   type PbpEntry,
 } from '@baseballczar/tick-engine/formatPbp';
 import type { TickEvent } from '@baseballczar/tick-engine/entities';
@@ -57,6 +58,8 @@ export default function SimLab2Module({
   const [simError, setSimError] = useState<string | null>(null);
   const [pbpEntries, setPbpEntries] = useState<PbpEntry[]>([]);
   const [debugPbp, setDebugPbp] = useState(false);
+  const [debugBallCoords, setDebugBallCoords] = useState(false);
+  const pbpStateRef = useRef(createPbpState());
   const [homeProfileKey, setHomeProfileKey] = useState<(typeof PROFILE_KEYS)[number]>('balanced');
   const [awayProfileKey, setAwayProfileKey] = useState<(typeof PROFILE_KEYS)[number]>('balanced');
   const simWorkerRef = useRef<Worker | null>(null);
@@ -152,6 +155,7 @@ export default function SimLab2Module({
     setSimulating(true);
     setSimError(null);
     setPbpEntries([]);
+    pbpStateRef.current = createPbpState();
     setSim(null);
     const startedAt = performance.now();
 
@@ -212,7 +216,7 @@ export default function SimLab2Module({
 
   const handleEvent = useCallback((evts: TickEvent[], time: number, meta?: EventDispatchMeta) => {
     if (evts.length > 0) {
-      const formatted = formatTickEvents(evts, time);
+      const formatted = formatTickEvents(evts, time, debugPbp, pbpStateRef.current, debugBallCoords);
       const debugEntries: PbpEntry[] = debugPbp && meta ? [{
         time,
         kind: 'flow',
@@ -224,7 +228,7 @@ export default function SimLab2Module({
         setPbpEntries(prev => [...prev, ...debugEntries, ...formatted].slice(-300));
       }
     }
-  }, [debugPbp]);
+  }, [debugPbp, debugBallCoords]);
 
   // Auto-scroll PBP to bottom (inside its own container, not the page)
   const pbpScrollRef = useRef<HTMLDivElement>(null);
@@ -236,12 +240,14 @@ export default function SimLab2Module({
   // Toggle dev debug trace with keyboard shortcut.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== 'd') return;
+      const key = event.key.toLowerCase();
+      if (key !== 'd' && key !== 'b') return;
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
       event.preventDefault();
-      setDebugPbp((prev) => !prev);
+      if (key === 'd') setDebugPbp((prev) => !prev);
+      if (key === 'b') setDebugBallCoords((prev) => !prev);
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -269,6 +275,7 @@ export default function SimLab2Module({
       lookup[p.id] = {
         lastName: p.lastName,
         position: POS_LABEL[p.position] ?? p.position,
+        jerseyNumber: p.jerseyNumber ?? 0,
       };
     };
 
@@ -361,6 +368,9 @@ export default function SimLab2Module({
             <div className={`text-xs px-2 py-1 rounded ${debugPbp ? 'bg-fuchsia-900/60 text-fuchsia-200 border border-fuchsia-700' : 'bg-zinc-800 text-zinc-500 border border-zinc-700'}`}>
               D Debug: {debugPbp ? 'ON' : 'OFF'}
             </div>
+            <div className={`text-xs px-2 py-1 rounded ${debugBallCoords ? 'bg-sky-900/60 text-sky-200 border border-sky-700' : 'bg-zinc-800 text-zinc-500 border border-zinc-700'}`}>
+              B Ball: {debugBallCoords ? 'ON' : 'OFF'}
+            </div>
 
             <div className="text-xs px-2 py-1 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 font-mono">
               PERF: {timingStats.lastMs === null
@@ -413,7 +423,7 @@ export default function SimLab2Module({
           ) : (
             <div className="flex gap-4 h-full">
               {/* Field canvas — fixed size */}
-              <div className="flex-shrink-0">
+              <div className="flex-shrink-0 relative">
                 <TickFieldCanvas
                   snapshots={sim.fullGame.snapshots}
                   autoplay={true}
@@ -422,6 +432,19 @@ export default function SimLab2Module({
                   debugPlayerTags={debugPbp}
                   playerLookup={debugPlayerLookup}
                 />
+                {/* Debug mode indicators — top-left corner of the field */}
+                <div className="absolute top-2 left-2 z-10 flex flex-col gap-1 pointer-events-none">
+                  {debugBallCoords && (
+                    <div className="bg-sky-600/80 text-white text-xs font-bold px-2 py-0.5 rounded shadow-lg backdrop-blur-sm">
+                      B
+                    </div>
+                  )}
+                  {debugPbp && (
+                    <div className="bg-fuchsia-600/80 text-white text-xs font-bold px-2 py-0.5 rounded shadow-lg backdrop-blur-sm">
+                      D
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Sidebar — fills height, internal scroll */}
@@ -586,7 +609,6 @@ export default function SimLab2Module({
                             <thead>
                               <tr className="text-zinc-500 border-b border-zinc-700">
                                 <th className="text-left py-0.5 font-medium">Player</th>
-                                <th className="text-center py-0.5 font-medium w-5">Pos</th>
                                 <th className="text-center py-0.5 font-medium w-6">AB</th>
                                 <th className="text-center py-0.5 font-medium w-5">R</th>
                                 <th className="text-center py-0.5 font-medium w-5">H</th>
@@ -599,15 +621,18 @@ export default function SimLab2Module({
                             <tbody>
                               {team.batters.map(b => (
                                 <tr key={b.player.id} className="border-b border-zinc-800/30 hover:bg-zinc-800/30">
-                                  <td className="py-0.5 text-zinc-200 text-[11px]">{b.player.firstName[0]}. {b.player.lastName}</td>
-                                  <td className="text-center py-0.5 text-zinc-500">{b.posLabel}</td>
-                                  <td className="text-center py-0.5 tabular-nums">{b.ab}</td>
-                                  <td className={`text-center py-0.5 tabular-nums ${b.runs > 0 ? 'text-amber-300' : ''}`}>{b.runs}</td>
-                                  <td className={`text-center py-0.5 tabular-nums ${b.hits > 0 ? 'text-green-300' : ''}`}>{b.hits}</td>
-                                  <td className={`text-center py-0.5 tabular-nums ${b.homeRuns > 0 ? 'text-red-300 font-bold' : ''}`}>{b.homeRuns}</td>
-                                  <td className={`text-center py-0.5 tabular-nums ${b.rbis > 0 ? 'text-amber-200' : ''}`}>{b.rbis}</td>
-                                  <td className="text-center py-0.5 tabular-nums text-zinc-400">{b.walks}</td>
-                                  <td className="text-center py-0.5 tabular-nums text-zinc-500">{b.strikeouts}</td>
+                                  <td className="py-0.5 text-white text-[11px] text-left">
+                                    <span className="text-zinc-400">#{String(b.player.jerseyNumber).padStart(2, '0')}</span>{' '}
+                                    {b.player.lastName}{' '}
+                                    <span className="text-zinc-400">{b.posLabel}</span>
+                                  </td>
+                                  <td className="text-center py-0.5 tabular-nums text-white">{b.ab}</td>
+                                  <td className={`text-center py-0.5 tabular-nums ${b.runs > 0 ? 'text-amber-300' : 'text-white'}`}>{b.runs}</td>
+                                  <td className={`text-center py-0.5 tabular-nums ${b.hits > 0 ? 'text-green-300' : 'text-white'}`}>{b.hits}</td>
+                                  <td className={`text-center py-0.5 tabular-nums ${b.homeRuns > 0 ? 'text-red-300 font-bold' : 'text-white'}`}>{b.homeRuns}</td>
+                                  <td className={`text-center py-0.5 tabular-nums ${b.rbis > 0 ? 'text-amber-200' : 'text-white'}`}>{b.rbis}</td>
+                                  <td className="text-center py-0.5 tabular-nums text-white">{b.walks}</td>
+                                  <td className="text-center py-0.5 tabular-nums text-white">{b.strikeouts}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -635,14 +660,24 @@ export default function SimLab2Module({
                             <tbody>
                               {team.pitchers.map(p => (
                                 <tr key={p.player.id} className="border-b border-zinc-800/30 hover:bg-zinc-800/30">
-                                  <td className="py-0.5 text-zinc-200 text-[11px]">{p.player.firstName[0]}. {p.player.lastName}</td>
-                                  <td className="text-center py-0.5 tabular-nums">{p.ip}</td>
-                                  <td className="text-center py-0.5 tabular-nums">{p.hits}</td>
-                                  <td className={`text-center py-0.5 tabular-nums ${p.runs > 0 ? 'text-red-300' : ''}`}>{p.runs}</td>
-                                  <td className="text-center py-0.5 tabular-nums text-zinc-400">{p.walks}</td>
-                                  <td className={`text-center py-0.5 tabular-nums ${p.strikeouts > 3 ? 'text-cyan-300' : ''}`}>{p.strikeouts}</td>
-                                  <td className="text-center py-0.5 tabular-nums">{p.homeRuns}</td>
-                                  <td className="text-center py-0.5 tabular-nums text-zinc-500">{p.pitches}</td>
+                                  <td className="py-0.5 text-white text-[11px] text-left">
+                                    <span className="text-zinc-400">#{String(p.player.jerseyNumber).padStart(2, '0')}</span>{' '}
+                                    {p.player.lastName}
+                                    {p.decision && (
+                                      <span className={`ml-1 text-[10px] font-bold ${
+                                        p.decision === 'W' ? 'text-green-400' :
+                                        p.decision === 'L' ? 'text-red-400' :
+                                        'text-sky-400'
+                                      }`}>({p.decision})</span>
+                                    )}
+                                  </td>
+                                  <td className="text-center py-0.5 tabular-nums text-white">{p.ip}</td>
+                                  <td className="text-center py-0.5 tabular-nums text-white">{p.hits}</td>
+                                  <td className={`text-center py-0.5 tabular-nums ${p.runs > 0 ? 'text-red-300' : 'text-white'}`}>{p.runs}</td>
+                                  <td className="text-center py-0.5 tabular-nums text-white">{p.walks}</td>
+                                  <td className={`text-center py-0.5 tabular-nums ${p.strikeouts > 3 ? 'text-cyan-300' : 'text-white'}`}>{p.strikeouts}</td>
+                                  <td className="text-center py-0.5 tabular-nums text-white">{p.homeRuns}</td>
+                                  <td className="text-center py-0.5 tabular-nums text-white">{p.pitches}</td>
                                 </tr>
                               ))}
                             </tbody>

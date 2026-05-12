@@ -262,3 +262,59 @@ After finishing:
 2. Update SIM_STATUS.md with what you changed
 3. Update CURRENT_SPRINT.md progress
  
+
+ -- I need another worker. This one checks lineups prior to each game being simulated. The issue we ran into 
+
+
+Suggested Improvements
+1. Fielding events are too verbose / mechanical Currently every fielded ball emits 3-4 separate lines: ball-fielded, throw-released, ball-received, then runner-out/runner-safe. A routine groundout reads like:
+
+🏃 #22 Lopez (SS) charges in and scoops it
+💨 #22 Lopez (SS) fires to 1B
+👐 #15 Garcia (1B) receives the throw
+❌ #18 King is OUT at 1B!
+
+This should be condensed to one or two lines for routine plays. The full breakdown only matters on close plays, relays, or errors. Consider: #22 Lopez (SS) fields and throws to 1B — #18 King is OUT (6-3).
+
+#1 Yes condense these Consider: #22 Lopez (SS) fields and throws to Garcia at 1B — #18 King is OUT (6-3).
+
+2. Missing defensive scoring notation As you noted earlier — 6-3, 4-6-3, 9-2 — these aren't in the PBP yet. The throw-released and ball-received events have the position data to construct this. Adding it to the at-bat-end result line (→ #18 King: Groundout (6-3)) would be a huge baseball authenticity win.
+
+#2 Yes add these. 
+
+
+3. ball-landed is noise 📍 Ball lands at (340, 210) — raw coordinates mean nothing to the reader. This should either be translated to a field location ("in the gap in right-center", "down the left field line", "shallow center") or removed entirely for routine plays.
+
+#3 the descriptions are a good idea. Kepp the coordinates I need those to help me understand where the ball is on the field in the sim.  Add to Debug view. Add some items to help me: 
+ if ball hits the ground📍 ball landed (X, Y) - track bounces until the ball rolls. 
+ if ball is fielded on the ground 📍 ball fielded at (X, Y), 
+ if ball is caught in the air 📍 ball caught  (X, Y). ball does not touch the ground before it is caught/touched by a fielder. 
+
+4. wall-cleared uses coordinates too 🧱 Cleared the wall at (380, 15) — same problem. Should say "Cleared the wall in left-center at 380 ft" or similar using the spray direction from the contact event.   
+
+#4 add to debug, add the descrioption. Make sure the Wall Height is factored into ball trajectory and landing. The ball hits the wall it should have a small bounce and come to a stop. I have seen some balls that are HR's just sit at the wall when they land and they look short. 
+
+#5 I believe this is addressed in 1 and 2, as long as the play event in #1 describes the event clearly this can be removed.
+
+(#6) 1. In this PBP statement could be condensed: 
+#26 Jackson throws Slider 85 mph to #03 Martinez — paints the corner
+#03 Martinez fouls it off (0-0) — 79 mph, LA -10°, 83 ft RF-line, Apex 3 ft
+
+Condensed:  #26 Jackson throws [a] Slider to Martinez, Martinez fouls it off (0-1). [85mph]
+
+Ball in Play Example Condensed
+4. #26 Jackson throws Changeup to #04 Martin he lines to RF  [73 mph]
+>> next line >> — EV 79 mph | LA 12° | Spray 27° | 120 ft | apex 12 ft | hang 1.6s 
+
+The statements like "paints the corner", "catches the corner" "down the middle" "outside" "inside" should only be used on pitches the batter does not swing at. 
+These are tougher to constuct but condensing them will make it easier to follow. 
+
+7. No stolen base / caught stealing / wild pitch / passed ball events These mid-AB events are missing from the PBP entirely. When they get added to the sim engine, the formatter has no handlers for them.
+
+#7 Add these handlers
+
+#8 Add to Debug only 
+
+#9. Manager signals are vague 📋 mound-visit: ... — could be more narrative: "Manager calls timeout heads out to the mound"
+
+#10 yes add an inning summary + ========= to denote the end. 

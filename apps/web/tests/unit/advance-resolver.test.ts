@@ -5,7 +5,7 @@ import type { Player } from '@baseballczar/sim-engine';
 let nextId = 1;
 function mk(name: string): Player {
   return {
-    id: nextId++, firstName: name, lastName: 'X', hand: 'R', position: 'CF',
+    id: nextId++, jerseyNumber: 0, firstName: name, lastName: 'X', hand: 'R', position: 'CF',
     skills: {
       ag: 5, avg: 5, power: 5, eye: 5, dhr: 5, speed: 5,
       stamina: 5, fielding: 5, throwing: 5, playIntelligence: 5,

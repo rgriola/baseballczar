@@ -1,12 +1,17 @@
-// Last touched by agent: 2026-05-07T17:01:03Z
+// Last touched by agent: 2026-05-12T08:53:00Z
 'use server';
 
 import { z } from 'zod';
 import { createClient } from '@/lib/supabase/server';
 import { createServiceClient } from '@/lib/supabase/service';
 import { simulateScheduledGame } from '@/lib/sim/simulate-scheduled-game';
+import { syncDefaultLineupToSchedule, syncDefaultRotationToSchedule } from '@/lib/lineup/sync-schedule';
 
 const FIELD_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'] as const;
+/** The 8 on-field defensive positions (P is assigned by rotation, not lineup editor) */
+const DEFENSIVE_POSITIONS = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF'] as const;
+/** Positions where left-handed throwers are not allowed */
+const LEFT_THROW_LOCKED = new Set(['C', '2B', '3B', 'SS']);
 /** Matches field positions and bench codes (B1, B2, … B99) */
 const positionRegex = /^(C|1B|2B|3B|SS|LF|CF|RF|DH|B\d{1,2})$/;
 
@@ -32,6 +37,24 @@ export async function updateLineup(formData: FormData) {
   });
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
+  // ── Position integrity checks ──────────────────────────────────
+  const positions = parsed.data.positions;
+  const uniquePositions = new Set(positions);
+  if (uniquePositions.size !== 9) {
+    return { error: 'Each lineup player must have a unique position assignment.' };
+  }
+
+  const dhCount = positions.filter((p) => p === 'DH').length;
+  if (dhCount !== 1) {
+    return { error: 'Lineup must include exactly 1 DH (Designated Hitter).' };
+  }
+
+  for (const defPos of DEFENSIVE_POSITIONS) {
+    if (!uniquePositions.has(defPos)) {
+      return { error: `Lineup is missing defensive position: ${defPos}` };
+    }
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: 'Not authenticated' };
@@ -47,13 +70,22 @@ export async function updateLineup(formData: FormData) {
   // Verify all players belong to this team and are fielders
   const { data: players } = await supabase
     .from('players')
-    .select('id')
+    .select('id, hand_throw')
     .eq('team_id', team.id)
     .eq('fielder', true)
     .in('id', parsed.data.playerIds);
 
   if (!players || players.length !== 9) {
     return { error: 'Invalid player selection — must be 9 of your active fielders' };
+  }
+
+  // Left-hand throw restriction: C, 2B, 3B, SS
+  const playerHandMap = new Map(players.map((p) => [p.id, p.hand_throw]));
+  for (let i = 0; i < 9; i++) {
+    const handThrow = playerHandMap.get(parsed.data.playerIds[i]);
+    if (handThrow === 2 && LEFT_THROW_LOCKED.has(positions[i])) {
+      return { error: `Left-handed throwers cannot play ${positions[i]}.` };
+    }
   }
 
   // Update batting order and position
@@ -92,6 +124,9 @@ export async function updateLineup(formData: FormData) {
         .eq('id', h.id);
     }
   }
+
+  // Sync the updated default lineup into game_lineups for all unplayed games
+  await syncDefaultLineupToSchedule(supabase, team.id);
 
   return { success: true };
 }
@@ -195,6 +230,9 @@ export async function updateRotation(formData: FormData) {
         .eq('id', p.id);
     }
   }
+
+  // Sync the updated rotation into game_rotation for all unplayed games
+  await syncDefaultRotationToSchedule(supabase, team.id);
 
   return { success: true };
 }
@@ -433,4 +471,176 @@ export async function resetSeason(): Promise<{ error?: string; message?: string 
   }
 
   return { message: 'Season reset complete' };
+}
+
+// ─── Per-Game Lineup (writes to game_lineups only) ──────────────
+
+const gameLineupSchema = z.object({
+  scheduleId: z.number().int().positive(),
+  playerIds: z.array(z.number().int().positive()).length(9),
+  positions: z.array(z.enum(FIELD_POSITIONS)).length(9),
+  benchIds: z.array(z.number().int().positive()).optional(),
+});
+
+export async function setGameLineup(formData: FormData) {
+  const parsed = gameLineupSchema.safeParse({
+    scheduleId: Number(formData.get('scheduleId')),
+    playerIds: JSON.parse(formData.get('playerIds') as string ?? '[]'),
+    positions: JSON.parse(formData.get('positions') as string ?? '[]'),
+    benchIds: JSON.parse(formData.get('benchIds') as string ?? '[]'),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const { scheduleId, positions } = parsed.data;
+
+  // Position integrity
+  const uniquePositions = new Set(positions);
+  if (uniquePositions.size !== 9) return { error: 'Each player must have a unique position.' };
+  if (positions.filter((p) => p === 'DH').length !== 1) return { error: 'Must include exactly 1 DH.' };
+  for (const defPos of DEFENSIVE_POSITIONS) {
+    if (!uniquePositions.has(defPos)) return { error: `Missing defensive position: ${defPos}` };
+  }
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Not authenticated' };
+
+  const { data: team } = await supabase.from('teams').select('id').eq('owner_id', user.id).single();
+  if (!team) return { error: 'No team found' };
+
+  // Verify schedule is unplayed and involves this team
+  const { data: sched } = await supabase
+    .from('schedules')
+    .select('id, home_team_id, visitor_team_id, played')
+    .eq('id', scheduleId)
+    .single();
+  if (!sched) return { error: 'Game not found' };
+  if (sched.played) return { error: 'Cannot modify lineup for a game already played.' };
+  if (sched.home_team_id !== team.id && sched.visitor_team_id !== team.id) {
+    return { error: 'This game does not involve your team.' };
+  }
+
+  // Verify players belong to team
+  const { data: players } = await supabase
+    .from('players')
+    .select('id, hand_throw')
+    .eq('team_id', team.id)
+    .eq('fielder', true)
+    .in('id', parsed.data.playerIds);
+  if (!players || players.length !== 9) return { error: 'Invalid player selection' };
+
+  // Left-hand throw restriction
+  const playerHandMap = new Map(players.map((p) => [p.id, p.hand_throw]));
+  for (let i = 0; i < 9; i++) {
+    const handThrow = playerHandMap.get(parsed.data.playerIds[i]);
+    if (handThrow === 2 && LEFT_THROW_LOCKED.has(positions[i])) {
+      return { error: `Left-handed throwers cannot play ${positions[i]}.` };
+    }
+  }
+
+  // Delete existing game_lineups for this schedule + team, then insert fresh
+  await supabase
+    .from('game_lineups')
+    .delete()
+    .eq('schedule_id', scheduleId)
+    .eq('team_id', team.id);
+
+  const rows: Array<{ schedule_id: number; team_id: number; player_id: number; batt_order: number; position: string }> = parsed.data.playerIds.map((playerId, i) => ({
+    schedule_id: scheduleId,
+    team_id: team.id,
+    player_id: playerId,
+    batt_order: i + 1,
+    position: positions[i],
+  }));
+
+  // Also insert bench players with batt_order 0
+  const benchIds = parsed.data.benchIds ?? [];
+  for (let i = 0; i < benchIds.length; i++) {
+    rows.push({
+      schedule_id: scheduleId,
+      team_id: team.id,
+      player_id: benchIds[i],
+      batt_order: 0,
+      position: `B${i + 1}`,
+    });
+  }
+
+  const { error: insertErr } = await supabase.from('game_lineups').insert(rows);
+  if (insertErr) return { error: `Failed to save game lineup: ${insertErr.message}` };
+
+  return { success: true };
+}
+
+// ─── Per-Game Rotation (writes to game_rotation only) ───────────
+
+const gameRotationSchema = z.object({
+  scheduleId: z.number().int().positive(),
+  pitcherIds: z.array(z.number().int().positive()).length(5),
+  bullpenIds: z.array(z.number().int().positive()).length(4),
+  closerId: z.number().int().positive(),
+});
+
+export async function setGameRotation(formData: FormData) {
+  const parsed = gameRotationSchema.safeParse({
+    scheduleId: Number(formData.get('scheduleId')),
+    pitcherIds: JSON.parse(formData.get('pitcherIds') as string ?? '[]'),
+    bullpenIds: JSON.parse(formData.get('bullpenIds') as string ?? '[]'),
+    closerId: Number(formData.get('closerId')),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const { scheduleId, closerId } = parsed.data;
+  const allIds = [...parsed.data.pitcherIds, ...parsed.data.bullpenIds, closerId];
+  if (new Set(allIds).size !== allIds.length) {
+    return { error: 'A pitcher cannot be assigned to multiple roles.' };
+  }
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Not authenticated' };
+
+  const { data: team } = await supabase.from('teams').select('id').eq('owner_id', user.id).single();
+  if (!team) return { error: 'No team found' };
+
+  // Verify schedule
+  const { data: sched } = await supabase
+    .from('schedules')
+    .select('id, home_team_id, visitor_team_id, played')
+    .eq('id', scheduleId)
+    .single();
+  if (!sched) return { error: 'Game not found' };
+  if (sched.played) return { error: 'Cannot modify rotation for a game already played.' };
+  if (sched.home_team_id !== team.id && sched.visitor_team_id !== team.id) {
+    return { error: 'This game does not involve your team.' };
+  }
+
+  // Verify pitchers belong to team
+  const { data: pitchers } = await supabase
+    .from('players')
+    .select('id')
+    .eq('team_id', team.id)
+    .eq('fielder', false)
+    .in('id', allIds);
+  if (!pitchers || pitchers.length !== allIds.length) return { error: 'Invalid pitcher selection' };
+
+  // Delete existing game_rotation for this schedule + team, then insert fresh
+  await supabase
+    .from('game_rotation')
+    .delete()
+    .eq('schedule_id', scheduleId)
+    .eq('team_id', team.id);
+
+  const rows: Array<{ schedule_id: number; team_id: number; player_id: number; rotation_slot: number }> = [];
+  for (let i = 0; i < parsed.data.pitcherIds.length; i++) {
+    rows.push({ schedule_id: scheduleId, team_id: team.id, player_id: parsed.data.pitcherIds[i], rotation_slot: i + 1 });
+  }
+  for (let i = 0; i < parsed.data.bullpenIds.length; i++) {
+    rows.push({ schedule_id: scheduleId, team_id: team.id, player_id: parsed.data.bullpenIds[i], rotation_slot: 6 + i });
+  }
+  rows.push({ schedule_id: scheduleId, team_id: team.id, player_id: closerId, rotation_slot: 10 });
+
+  const { error: insertErr } = await supabase.from('game_rotation').insert(rows);
+  if (insertErr) return { error: `Failed to save game rotation: ${insertErr.message}` };
+
+  return { success: true };
 }

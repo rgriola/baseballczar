@@ -319,25 +319,27 @@ function deriveContactHeuristicResolution(
 }
 
 /**
- * Run one at-bat through tick simulation in headless mode and reduce
- * it to outcome + stat deltas only.
+ * Extract the authoritative at-bat outcome from pre-computed WorldSnapshots.
+ *
+ * This is the SINGLE SOURCE OF TRUTH for what happened on a batted ball.
+ * Both the orchestrator (visual playback) and headless resolution use this.
+ *
+ * @param snapshots - WorldSnapshots from simulateAtBatTick()
+ * @param batterId  - The batter's player ID
+ * @param battedBall - The BattedBall physics data
+ * @param runners   - Runners on base before the play
  */
-export function resolveAtBatHeadless(
-  ab: AtBatRecord,
-  defenseRoster: Map<Position, Player>,
-  opts: HeadlessTickResolveOptions = {},
+export function extractTickOutcome(
+  snapshots: import('./entities').WorldSnapshot[],
+  batterId: number,
+  battedBall: BattedBall,
+  runners: RunnerStateInput = [],
 ): HeadlessAtBatResolution {
-  if (!ab.battedBall) {
-    return deriveSeedNonBattedResolution(ab, opts.runners ?? []);
-  }
-
-  const snapshots = simulateAtBatTick(ab, defenseRoster, opts.teamColor ?? 0x1e5631, {
-    ...opts,
-    captureEvery: 1,
-  });
-
   if (snapshots.length === 0) {
-    return deriveContactHeuristicResolution(ab, opts.runners ?? []);
+    return deriveContactHeuristicResolution(
+      { battedBall, batter: { id: batterId } } as AtBatRecord,
+      runners,
+    );
   }
 
   const scoredRunnerIds = new Set<number>();
@@ -368,12 +370,12 @@ export function resolveAtBatHeadless(
   }
 
   if (caughtFly) {
-    outRunnerIds.add(ab.batter.id);
+    outRunnerIds.add(batterId);
   }
 
   if (wallCleared) {
-    scoredRunnerIds.add(ab.batter.id);
-    for (const runner of opts.runners ?? []) {
+    scoredRunnerIds.add(batterId);
+    for (const runner of runners) {
       scoredRunnerIds.add(runner.player.id);
     }
 
@@ -403,12 +405,12 @@ export function resolveAtBatHeadless(
     if (runner.state.type !== 'on-base') continue;
 
     if (
-      runner.id === ab.batter.id
+      runner.id === batterId
       && runner.state.base === 'first'
       && distanceFromHome(runner.pos.x, runner.pos.y) < HOME_PLACEHOLDER_RADIUS_FT
-      && !safeBasesByRunner.has(ab.batter.id)
-      && !scoredRunnerIds.has(ab.batter.id)
-      && !outRunnerIds.has(ab.batter.id)
+      && !safeBasesByRunner.has(batterId)
+      && !scoredRunnerIds.has(batterId)
+      && !outRunnerIds.has(batterId)
     ) {
       continue;
     }
@@ -422,7 +424,6 @@ export function resolveAtBatHeadless(
     }
   }
 
-  const batterId = ab.batter.id;
   let batterOut = outRunnerIds.has(batterId);
   let batterScored = scoredRunnerIds.has(batterId);
   let batterBase: 'first' | 'second' | 'third' | 'home' | undefined;
@@ -499,7 +500,7 @@ export function resolveAtBatHeadless(
     if (outsRecordedNow >= 2) {
       outcome = 'double-play';
     } else if (caughtFly) {
-      outcome = scoredRunnerIds.size > 0 ? 'sac-fly' : inferCaughtFlyOutcome(ab.battedBall);
+      outcome = scoredRunnerIds.size > 0 ? 'sac-fly' : inferCaughtFlyOutcome(battedBall);
     } else {
       outcome = 'ground-out';
     }
@@ -508,7 +509,10 @@ export function resolveAtBatHeadless(
   } else if (batterBase) {
     outcome = inferHitOutcomeFromBase(batterBase);
   } else {
-    return deriveContactHeuristicResolution(ab, opts.runners ?? []);
+    return deriveContactHeuristicResolution(
+      { battedBall, batter: { id: batterId } } as AtBatRecord,
+      runners,
+    );
   }
 
   const outsRecorded = Math.min(3, outRunnerIds.size);
@@ -542,3 +546,25 @@ export function resolveAtBatHeadless(
     usedPreRollFallback: false,
   };
 }
+
+/**
+ * Run one at-bat through tick simulation in headless mode and reduce
+ * it to outcome + stat deltas only.
+ */
+export function resolveAtBatHeadless(
+  ab: AtBatRecord,
+  defenseRoster: Map<Position, Player>,
+  opts: HeadlessTickResolveOptions = {},
+): HeadlessAtBatResolution {
+  if (!ab.battedBall) {
+    return deriveSeedNonBattedResolution(ab, opts.runners ?? []);
+  }
+
+  const snapshots = simulateAtBatTick(ab, defenseRoster, opts.teamColor ?? 0x1e5631, {
+    ...opts,
+    captureEvery: 1,
+  });
+
+  return extractTickOutcome(snapshots, ab.batter.id, ab.battedBall, opts.runners ?? []);
+}
+

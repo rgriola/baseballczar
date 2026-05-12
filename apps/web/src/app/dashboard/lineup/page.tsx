@@ -18,6 +18,9 @@ export default async function LineupPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-white">{team.team_name} — Lineup</h1>
+      <div className="rounded-lg border border-zinc-700/50 bg-zinc-800/30 px-4 py-2 text-sm text-zinc-400">
+        This sets your <strong className="text-zinc-200">default lineup</strong> for all games. To customize a specific game, use the <a href="/dashboard/schedule" className="text-blue-400 underline hover:text-blue-300">Schedule</a> page.
+      </div>
       <LineupEditor hitters={hitters ?? []} />
     </div>
   );

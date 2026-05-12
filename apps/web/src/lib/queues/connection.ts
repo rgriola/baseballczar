@@ -10,4 +10,11 @@ export const queueRedisUrl =
 
 export const connection = new IORedis(queueRedisUrl, {
   maxRetriesPerRequest: null, // required by BullMQ
+  enableReadyCheck: true,
+  keepAlive: 30_000,          // send TCP keepalive every 30s to prevent idle drops
+  reconnectOnError(err) {
+    // auto-reconnect on transient errors (ECONNRESET, READONLY, etc.)
+    const target = err.message;
+    return target.includes('READONLY') || target.includes('ECONNRESET');
+  },
 });

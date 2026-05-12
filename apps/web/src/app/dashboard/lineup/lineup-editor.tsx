@@ -2,7 +2,7 @@
 'use client';
 
 import { Fragment, useEffect, useMemo, useState, useTransition } from 'react';
-import { updateLineup } from '../actions';
+import { updateLineup, setGameLineup } from '../actions';
 import { CountryFlag } from '../roster/country-flag';
 
 const HAND_LABEL: Record<number, string> = { 1: 'R', 2: 'L', 3: 'S' };
@@ -108,7 +108,15 @@ function buildUniquePositionMap(
   return next;
 }
 
-export default function LineupEditor({ hitters }: { hitters: Hitter[] }) {
+export default function LineupEditor({
+  hitters,
+  scheduleId,
+  gameLabel,
+}: {
+  hitters: Hitter[];
+  scheduleId?: number;
+  gameLabel?: string;
+}) {
   const starters = hitters
     .filter((player) => player.batt_order >= 1 && player.batt_order <= 9)
     .sort((a, b) => a.batt_order - b.batt_order);
@@ -290,18 +298,42 @@ export default function LineupEditor({ hitters }: { hitters: Hitter[] }) {
       return;
     }
 
+    // Verify exact coverage: 8 field positions + 1 DH
+    const fieldPositions: DefensePosition[] = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF'];
+    const missingField = fieldPositions.find((pos) => !uniquePositions.has(pos));
+    if (missingField) {
+      setMessage(`Lineup is missing defensive position: ${missingField}`);
+      return;
+    }
+    if (!uniquePositions.has('DH')) {
+      setMessage('Lineup must include exactly 1 DH (Designated Hitter).');
+      return;
+    }
+
     const formData = new FormData();
     formData.set('playerIds', JSON.stringify(lineup.map((player) => player.id)));
     formData.set('positions', JSON.stringify(orderedPositions));
     formData.set('benchIds', JSON.stringify(bench.map((player) => player.id)));
 
+    if (scheduleId) {
+      formData.set('scheduleId', String(scheduleId));
+    }
+
     startTransition(async () => {
-      const result = await updateLineup(formData);
-      setMessage(result?.error ?? 'Lineup + defense saved!');
+      const result = scheduleId
+        ? await setGameLineup(formData)
+        : await updateLineup(formData);
+      setMessage(result?.error ?? (scheduleId ? `Game lineup saved!` : 'Lineup + defense saved!'));
     });
   }
 
   return (
+    <div>
+      {gameLabel && (
+        <div className="mb-4 rounded-lg border border-amber-700/50 bg-amber-900/20 px-4 py-2.5 text-sm text-amber-200">
+          ⚾ <strong>{gameLabel}</strong> — Changes apply to this game only. Your default lineup is unchanged.
+        </div>
+      )}
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
       <section className="rounded-lg border border-gray-800 bg-gray-900/40 p-4 order-2">
         <div className="mb-4 flex items-center justify-between">
@@ -371,9 +403,8 @@ export default function LineupEditor({ hitters }: { hitters: Hitter[] }) {
                     setDragPlayer({ source: 'lineup', playerId: player.id });
                   }}
                   onDragEnd={() => setDragPlayer(null)}
-                  className={`w-24 rounded border border-gray-600/80 bg-gray-950/85 px-1.5 py-0.5 text-center backdrop-blur-sm ${
-                    player ? 'cursor-grab' : ''
-                  }`}
+                  className={`w-24 rounded border border-gray-600/80 bg-gray-950/85 px-1.5 py-0.5 text-center backdrop-blur-sm ${player ? 'cursor-grab' : ''
+                    }`}
                 >
                   <p className="text-[9px] font-semibold text-blue-300">{slot.pos}</p>
                   {player ? (
@@ -510,6 +541,7 @@ export default function LineupEditor({ hitters }: { hitters: Hitter[] }) {
           )}
         </div>
       </section>
+    </div>
     </div>
   );
 }

@@ -30,16 +30,21 @@ import {
   predictLanding,
   tickFielder,
   moveToward,
+  type FieldContext,
 } from './fielderAI';
-import { tickRunner, BASE_POS, commandRunner } from './runnerAI';
-import { COLLIDERS, separateBodyColliders, reflectVelocity } from './spatial';
+import { tickRunner, BASE_POS, commandRunner, nextBase, resolveBaseCollisions } from './runnerAI';
+import { COLLIDERS, separateBodyColliders, reflectVelocity, dist2D } from './spatial';
 import {
   decideThrowTarget,
   commandRunners,
   commandTagUpRunners,
+  evaluateExtraBaseAdvance,
+  reevaluateRunners,
   reassignFielderRoles,
   updatePredictedTracking,
+  getDefensiveAlignment,
   type GameSituation,
+  type BatterHand,
 } from './aiManager';
 import {
   FIELDER_POSITIONS_FT,
@@ -79,7 +84,61 @@ function facingToPoint(from: Point2D, to: Point2D): number {
 }
 
 function playerTag(player: Player): string {
-  return `#${player.id} ${player.lastName}`;
+  const jersey = player.jerseyNumber > 0 ? player.jerseyNumber : player.id;
+  const jerseyStr = String(jersey).padStart(2, '0');
+  return `#${jerseyStr} ${player.lastName}`;
+}
+
+/**
+ * Check if a fielder who just received a throw at a base should
+ * record a force-out or tag-out on a runner.
+ *
+ * Returns the runner entity that is out (or null if no out).
+ */
+function resolveForceOut(
+  receiverPos: Point2D,
+  runners: RunnerEntity[],
+  ball: BallEntity,
+): RunnerEntity | null {
+  // Which base did the fielder receive at?
+  let receiverBase = 'home';
+  let receiverBaseDist = Infinity;
+  for (const [name, pos] of Object.entries(BASE_POS)) {
+    const d = dist2D(receiverPos, pos);
+    if (d < receiverBaseDist) {
+      receiverBaseDist = d;
+      receiverBase = name;
+    }
+  }
+  // Fielder must be close to a base (within 10ft)
+  if (receiverBaseDist > 10) return null;
+
+  // Find a runner who is heading TO this base and hasn't arrived yet
+  for (const r of runners) {
+    if (r.state.type !== 'running') continue;
+
+    // Where is the runner heading?
+    let targetBase = 'first';
+    let targetDist = Infinity;
+    for (const [name, pos] of Object.entries(BASE_POS)) {
+      const d = dist2D(r.state.to, pos);
+      if (d < targetDist) {
+        targetDist = d;
+        targetBase = name;
+      }
+    }
+
+    if (targetBase !== receiverBase) continue;
+
+    // The runner is heading to this base. Did the fielder beat them?
+    const runnerDistToBase = dist2D(r.pos, BASE_POS[receiverBase]);
+    if (runnerDistToBase > COLLIDERS.runnerOnBase + 2) {
+      // Runner hasn't reached the base yet — OUT
+      return r;
+    }
+  }
+
+  return null;
 }
 
 function enforcePlayerBodySeparation(
@@ -311,7 +370,9 @@ function enrichEventsWithPlayerTags(
           }
         }
         if (!event.playerName && playerId != null && playerId > 0) {
-          event.playerName = playerLabels.get(playerId) ?? `#${playerId} ${displayPos(event.by)}`;
+          const fielder = fielders.find(f => f.playerId === playerId);
+          const jersey = fielder && fielder.jerseyNumber > 0 ? fielder.jerseyNumber : playerId;
+          event.playerName = playerLabels.get(playerId) ?? `#${String(jersey).padStart(2, '0')} ${displayPos(event.by)}`;
         }
         break;
       }
@@ -326,7 +387,9 @@ function enrichEventsWithPlayerTags(
           }
         }
         if (!event.fromName && fromId != null && fromId > 0) {
-          event.fromName = playerLabels.get(fromId) ?? `#${fromId} ${displayPos(event.from)}`;
+          const fielder = fielders.find(f => f.playerId === fromId);
+          const jersey = fielder && fielder.jerseyNumber > 0 ? fielder.jerseyNumber : fromId;
+          event.fromName = playerLabels.get(fromId) ?? `#${String(jersey).padStart(2, '0')} ${displayPos(event.from)}`;
         }
         break;
       }
@@ -363,6 +426,7 @@ function makeFielder(
   const speed = player?.skills.speed ?? 5;
   const ag = player?.skills.ag ?? 5;
   const defense = player?.skills.fielding ?? 5;
+  const th = player?.skills.throwing ?? 5;
   return {
     position: pos,
     pos: { ...home },
@@ -372,10 +436,12 @@ function makeFielder(
     agility: ag,
     facingRad: facingToPoint(home, BASE_POS.home),
     turnRateRad: turnRateFromAg(ag),
-    throwVeloFps: throwVelocityMph(pos, player?.skills.throwing ?? 5) * MPH_TO_FPS,
+    throwVeloFps: throwVelocityMph(pos, th) * MPH_TO_FPS,
+    throwingSkill: th,
     defense,
     playIntelligence: player?.skills.playIntelligence ?? 5,
     playerId: player?.id ?? -1,
+    jerseyNumber: player?.jerseyNumber ?? 0,
     teamColor,
   };
 }
@@ -393,6 +459,7 @@ function makeRunner(
     state: { type: 'on-base', base },
     speedFps: sprintFtPerSec(player.skills.speed),
     agility: ag,
+    playIntelligence: player.skills.playIntelligence ?? 5,
     facingRad: facingToPoint(pos, BASE_POS.home),
     turnRateRad: turnRateFromAg(ag),
   };
@@ -413,6 +480,7 @@ function makeBatterRunner(
     state: { type: 'on-base', base: 'first' },  // will be commanded to advance
     speedFps: sprintFtPerSec(player.skills.speed),
     agility: ag,
+    playIntelligence: player.skills.playIntelligence ?? 5,
     facingRad: facingToPoint(start, FIELDER_POSITIONS_FT.P),
     turnRateRad: turnRateFromAg(ag),
   };
@@ -422,6 +490,7 @@ function makeBall(): BallEntity {
   return {
     pos: { x: 0, y: 61, z: 5 },  // pitcher's hand
     state: { type: 'idle' },
+    bounceCount: 0,
   };
 }
 
@@ -434,6 +503,12 @@ export interface TickSimOptions {
   runners?: { player: Player; base: 'first' | 'second' | 'third' }[];
   /** Game situation for AI Manager decisions. */
   situation?: GameSituation;
+  /** Pre-determined error from the sim engine. */
+  errorType?: 'fielding' | 'throw';
+  /** Position charged with the error (e.g., 'SS', 'B3'). */
+  errorBy?: string;
+  /** Batter hand for defensive alignment ('L' or 'R'). */
+  batterHand?: BatterHand;
 }
 
 /**
@@ -490,6 +565,17 @@ export function simulateAtBatTick(
   let isCaughtFly = false;
   let flyCaughtThisTick = false;
 
+  // ─── Error flags (pre-determined by sim engine) ─────────────
+  // These are consumed once: when the error-committing fielder
+  // would normally make the play, the error fires instead.
+  let pendingFieldingError = opts.errorType === 'fielding';
+  let pendingThrowError = opts.errorType === 'throw';
+  const errorByPosition = opts.errorBy ?? '';
+
+  // ─── Fielder awareness context ──────────────────────────────
+  // Tracks which fielder is the primary ("I got it!") so others yield.
+  let primaryPosition = '';
+
   // ─── Pitch phase: ball travels from mound to plate ──────────
   const PITCH_DUR = 0.45;
   const pitcherPos = FIELDER_POSITIONS_FT.P;
@@ -500,8 +586,15 @@ export function simulateAtBatTick(
   let throwCount = 0;
   const MAX_THROWS = 3;
 
+  // Accumulate events across ticks so that events firing on non-capture
+  // frames aren't silently dropped. Flushed into each captured snapshot.
+  let pendingEvents: TickEvent[] = [];
+
   while (!playComplete && time < MAX_PLAY_SECS) {
-    const events: TickEvent[] = [];
+    // Events accumulated since the last captured snapshot.
+    // Flushed into the snapshot on capture frames (see below).
+    const events: TickEvent[] = [...pendingEvents];
+    pendingEvents.length = 0;
 
     switch (phase) {
       case 'pitch': {
@@ -510,6 +603,20 @@ export function simulateAtBatTick(
         ball.pos.x = pitcherPos.x + (platePos.x - pitcherPos.x) * u;
         ball.pos.y = pitcherPos.y + (platePos.y - pitcherPos.y) * u;
         ball.pos.z = 6 + (3 - 6) * u;
+
+        // Pre-contact alignment: fielders shift to situational positions
+        if (pitchT <= PITCH_DUR) {
+          const alignment = getDefensiveAlignment(situation, runners, opts.batterHand);
+          for (const f of fielders) {
+            const shiftedPos = alignment.positions[f.position];
+            if (shiftedPos) {
+              // Update homePos so fielders return to shifted positions
+              f.homePos = { ...shiftedPos };
+              // Walk toward shifted position during the pitch
+              moveToward(f, shiftedPos, DT, f.speedFps * 0.5);
+            }
+          }
+        }
 
         if (u >= 1) {
           // Contact!
@@ -555,7 +662,7 @@ export function simulateAtBatTick(
           // Assign fielder roles based on predicted landing
           const landing = predictLanding(ball);
           if (landing) {
-            assignFielderRoles(fielders, ball, landing);
+            primaryPosition = assignFielderRoles(fielders, ball, landing, battedBall.sprayAngleDeg, runners);
           }
 
           // Add batter as a runner heading to first
@@ -566,7 +673,20 @@ export function simulateAtBatTick(
           }
 
           // Command existing runners to advance
-          commandRunners(runners, ball, situation, false);
+          if (battedBall.isHomeRun) {
+            // Home run — all runners go home immediately
+            for (const r of runners) {
+              if (r.id === batterRunner.id) continue;
+              if (r.state.type === 'scored' || r.state.type === 'out') continue;
+              commandRunner(r, { type: 'advance', targetBase: 'home' });
+            }
+          } else {
+            // On high fly balls (LA >= 20°), runners hold at their base
+            // instead of advancing. They'll advance via tag-up if caught
+            // or via reevaluation when the ball drops.
+            const isProbableFly = (battedBall.launchAngleDeg ?? 0) >= 20;
+            commandRunners(runners, ball, situation, false, isProbableFly);
+          }
 
           phase = 'flight';
         }
@@ -579,11 +699,31 @@ export function simulateAtBatTick(
 
         if (ballResult.landed && !battedBall.isHomeRun) {
           events.push({ type: 'ball-landed', at: ballResult.landingPoint! });
+
+          // If runners were holding on a fly ball and the ball dropped,
+          // they can now advance — it's a live base hit, not a catch.
+          if ((ball.bounceCount ?? 0) === 1) {
+            for (const r of runners) {
+              if (r.state.type === 'on-base' && r.id !== batterRunner.id) {
+                commandRunner(r, { type: 'advance', targetBase: nextBase(r.state.base) });
+              }
+            }
+          }
         }
         if (ballResult.homeRun || (battedBall.isHomeRun && ballResult.landed)) {
           const wallCrossPoint = ballResult.wallHitPoint ?? hrWallCrossPoint;
           const wallCrossHeightFt = ballResult.wallCrossHeightFt ?? ball.pos.z;
           events.push({ type: 'wall-cleared', at: wallCrossPoint, heightFt: wallCrossHeightFt });
+
+          // All runners (including batter) score instantly on a HR —
+          // they don't visually trot the bases, they just disappear.
+          for (const r of runners) {
+            if (r.state.type !== 'scored' && r.state.type !== 'out') {
+              r.state = { type: 'scored' };
+              events.push({ type: 'runner-scored', runnerId: r.id });
+            }
+          }
+
           events.push({ type: 'play-complete' });
           phase = 'done';
           playComplete = true;
@@ -595,42 +735,141 @@ export function simulateAtBatTick(
           // Predictive tracking: continuously update target
           updatePredictedTracking(f, ball);
 
-          const fResult = tickFielder(f, ball, DT);
+          const fResult = tickFielder(f, ball, DT, {
+            allFielders: fielders,
+            runners,
+            situation,
+            primaryPosition,
+          });
           if (fResult.event) events.push(fResult.event as TickEvent);
           if (fResult.caught) {
-            isCaughtFly = true;
-            flyCaughtThisTick = true;
+            // Check for pre-determined fielding error (dropped fly)
+            if (pendingFieldingError && (errorByPosition === '' || f.position === errorByPosition)) {
+              pendingFieldingError = false;  // consumed
+              // Dropped fly — ball bounces off the glove and rolls away
+              const bounceAngle = Math.atan2(f.pos.y, f.pos.x) + 0.3;  // deterministic
+              const bounceSpeed = 6 + (10 - (f.defense ?? 5)) * 1.0;
+              ball.state = {
+                type: 'rolling',
+                vel: { x: Math.cos(bounceAngle) * bounceSpeed, y: Math.sin(bounceAngle) * bounceSpeed },
+              };
+              ball.pos.z = 1;  // near ground after the drop
+              events.push({
+                type: 'fielding-error',
+                by: f.position,
+                playerId: f.playerId > 0 ? f.playerId : undefined,
+                errorType: 'fielding',
+                at: { ...f.pos },
+              });
+              // Fielder needs to re-chase the dropped ball
+              f.state = { type: 'chasing', target: { x: ball.pos.x, y: ball.pos.y } };
+              // Don't mark as caught fly — runners don't need to tag up
+              phase = 'fielding';
+            } else {
+              // Clean catch — true fly out (ball never hit the ground)
+              isCaughtFly = true;
+              flyCaughtThisTick = true;
 
-            // AI Manager: decide tag-up runners
-            commandTagUpRunners(runners, f, situation);
+              // AI Manager: decide tag-up runners
+              commandTagUpRunners(runners, f, situation);
 
-            // Stop all non-tag-up runners
-            for (const r of runners) {
-              if (r.state.type === 'running' && r !== batterRunner) {
-                // Runners who went on contact should retreat to their origin base.
-                let retreatBase = 'first';
-                let retreatDist = Infinity;
-                for (const [baseName, basePos] of Object.entries(BASE_POS)) {
-                  if (baseName === 'home') continue;
-                  const d = Math.hypot(r.state.from.x - basePos.x, r.state.from.y - basePos.y);
-                  if (d < retreatDist) {
-                    retreatDist = d;
-                    retreatBase = baseName;
+              // Stop all non-tag-up runners
+              for (const r of runners) {
+                if (r.state.type === 'running' && r !== batterRunner) {
+                  // Runners who went on contact should retreat to their origin base.
+                  let retreatBase = 'first';
+                  let retreatDist = Infinity;
+                  for (const [baseName, basePos] of Object.entries(BASE_POS)) {
+                    if (baseName === 'home') continue;
+                    const d = Math.hypot(r.state.from.x - basePos.x, r.state.from.y - basePos.y);
+                    if (d < retreatDist) {
+                      retreatDist = d;
+                      retreatBase = baseName;
+                    }
+                  }
+                  commandRunner(r, { type: 'retreat', targetBase: retreatBase });
+                }
+              }
+
+              // Batter is out on a caught fly
+              batterRunner.state = { type: 'out' };
+              events.push({ type: 'runner-out', runnerId: batterRunner.id, at: 'first' });
+
+              // AI Manager: decide throw target for tag-up plays
+              const throwTarget = decideThrowTarget(f, runners, situation);
+              if (throwTarget.priority > 0) {
+                f.state = {
+                  type: 'has-ball',
+                  decideSec: 0.5,
+                  throwTarget: throwTarget.point,
+                  throwBase: throwTarget.base,
+                };
+              } else {
+                // No tag-up play — hold the ball
+                f.state = { type: 'has-ball', decideSec: 0 };
+              }
+
+              phase = 'throw';
+            }
+          }
+
+          // Ball bounced before being collected — ground-ball play.
+          // Fielder must throw to a base; this is NOT a fly out.
+          // Runners stay running (force plays are active).
+          if (fResult.fielded) {
+            if (pendingFieldingError && (errorByPosition === '' || f.position === errorByPosition)) {
+              pendingFieldingError = false;
+              const bounceAngle = Math.atan2(ball.pos.y - f.pos.y, ball.pos.x - f.pos.x)
+                + (f.pos.x > 0 ? 0.5 : -0.5);
+              const bounceSpeed = 8 + (10 - (f.defense ?? 5)) * 1.5;
+              ball.state = {
+                type: 'rolling',
+                vel: { x: Math.cos(bounceAngle) * bounceSpeed, y: Math.sin(bounceAngle) * bounceSpeed },
+              };
+              events.push({
+                type: 'fielding-error',
+                by: f.position,
+                playerId: f.playerId > 0 ? f.playerId : undefined,
+                errorType: 'fielding',
+                at: { ...f.pos },
+              });
+              f.state = { type: 'chasing', target: { x: ball.pos.x, y: ball.pos.y } };
+              phase = 'fielding';
+            } else {
+              // Clean fielding — resolve force-out or throw to base
+              const fieldedOutRunner = resolveForceOut(f.pos, runners, ball);
+              if (fieldedOutRunner) {
+                fieldedOutRunner.state = { type: 'out' };
+                let outBase = 'first';
+                let outBaseDist = Infinity;
+                for (const [name, pos] of Object.entries(BASE_POS)) {
+                  const d = dist2D(f.pos, pos);
+                  if (d < outBaseDist) {
+                    outBaseDist = d;
+                    outBase = name;
                   }
                 }
-                commandRunner(r, { type: 'retreat', targetBase: retreatBase });
+                events.push({
+                  type: 'runner-out',
+                  runnerId: fieldedOutRunner.id,
+                  at: outBase,
+                });
+              }
+
+              const throwTarget = decideThrowTarget(f, runners, situation);
+              if (throwTarget.priority > 0) {
+                f.state = {
+                  type: 'has-ball',
+                  decideSec: 0.3,
+                  throwTarget: throwTarget.point,
+                  throwBase: throwTarget.base,
+                };
+                phase = 'throw';
+              } else {
+                f.state = { type: 'has-ball', decideSec: 0 };
+                phase = 'throw';
               }
             }
-
-            // Batter is out on a caught fly
-            batterRunner.state = { type: 'out' };
-            events.push({ type: 'runner-out', runnerId: batterRunner.id, at: 'first' });
-
-            // AI Manager: decide throw target for tag-up plays
-            const throwTarget = decideThrowTarget(f, runners, situation);
-            f.state = { type: 'has-ball', decideSec: 0.5 };
-
-            phase = 'throw';
           }
         }
 
@@ -641,7 +880,44 @@ export function simulateAtBatTick(
             events.push({ type: 'runner-safe', runnerId: r.id, base: 'home' });
           } else if (rResult.arrivedAtBase) {
             const base = r.state.type === 'on-base' ? r.state.base : 'first';
-            events.push({ type: 'runner-safe', runnerId: r.id, base });
+
+            // Only emit runner-safe if the ball has bounced (ground ball /
+            // base hit). While the ball is still in flight, the runner's
+            // advance is provisional — a catch would force them to retreat.
+            // Emitting runner-safe now creates misleading PBP like
+            // "✅ safe at 2B" followed by a caught-fly that invalidates it.
+            const ballHasBounced = (ball.bounceCount ?? 0) > 0;
+            if (ballHasBounced || isCaughtFly) {
+              events.push({ type: 'runner-safe', runnerId: r.id, base });
+            }
+
+            if (r.state.type === 'on-base' && !playComplete) {
+              if (battedBall.isHomeRun) {
+                // HR trot: always advance to the next base
+                commandRunner(r, { type: 'advance', targetBase: nextBase(r.state.base) });
+              } else if (evaluateExtraBaseAdvance(r, ball, fielders, situation)) {
+                commandRunner(r, { type: 'advance', targetBase: nextBase(r.state.base) });
+              }
+            }
+          }
+        }
+
+        // Resolve base collisions (two runners on same base)
+        resolveBaseCollisions(runners);
+
+        // Per-tick runner re-evaluation: react to ball state
+        if (!battedBall.isHomeRun) {
+          reevaluateRunners(runners, ball, fielders, situation);
+        }
+
+        // Continuous extra-base: re-evaluate runners sitting on base
+        if (!playComplete && !battedBall.isHomeRun) {
+          for (const r of runners) {
+            if (r.state.type === 'on-base' && r.state.base !== 'third') {
+              if (evaluateExtraBaseAdvance(r, ball, fielders, situation)) {
+                commandRunner(r, { type: 'advance', targetBase: nextBase(r.state.base) });
+              }
+            }
           }
         }
 
@@ -663,18 +939,72 @@ export function simulateAtBatTick(
 
         // Tick fielders
         for (const f of fielders) {
-          const fResult = tickFielder(f, ball, DT);
+          const fResult = tickFielder(f, ball, DT, {
+            allFielders: fielders,
+            runners,
+            situation,
+            primaryPosition,
+          });
           if (fResult.event) events.push(fResult.event as TickEvent);
           if (fResult.fielded) {
-            // AI Manager: decide throw target
-            const throwTarget = decideThrowTarget(f, runners, situation);
-            // Override the fielder's default throw with the manager's decision
-            f.state = { type: 'has-ball', decideSec: 0.3 };
+            // Check for pre-determined fielding error
+            if (pendingFieldingError && (errorByPosition === '' || f.position === errorByPosition)) {
+              pendingFieldingError = false;  // consumed
+              // Muffed ball — bounces away from the fielder
+              const bounceAngle = Math.atan2(ball.pos.y - f.pos.y, ball.pos.x - f.pos.x)
+                + (f.pos.x > 0 ? 0.5 : -0.5);  // deterministic deflection
+              const bounceSpeed = 8 + (10 - (f.defense ?? 5)) * 1.5;  // low FLD = bigger deflection
+              ball.state = {
+                type: 'rolling',
+                vel: { x: Math.cos(bounceAngle) * bounceSpeed, y: Math.sin(bounceAngle) * bounceSpeed },
+              };
+              events.push({
+                type: 'fielding-error',
+                by: f.position,
+                playerId: f.playerId > 0 ? f.playerId : undefined,
+                errorType: 'fielding',
+                at: { ...f.pos },
+              });
+              // Stay in fielding phase — fielder needs to re-chase
+              f.state = { type: 'chasing', target: { x: ball.pos.x, y: ball.pos.y } };
+            } else {
+              // Clean fielding — check for force-out at this base, then decide throw
+              const fieldedOutRunner = resolveForceOut(f.pos, runners, ball);
+              if (fieldedOutRunner) {
+                fieldedOutRunner.state = { type: 'out' };
+                let outBase = 'first';
+                let outBaseDist = Infinity;
+                for (const [name, pos] of Object.entries(BASE_POS)) {
+                  const d = dist2D(f.pos, pos);
+                  if (d < outBaseDist) {
+                    outBaseDist = d;
+                    outBase = name;
+                  }
+                }
+                events.push({
+                  type: 'runner-out',
+                  runnerId: fieldedOutRunner.id,
+                  at: outBase,
+                });
+              }
 
-            // Store the manager's throw decision on the fielder
-            (f as any)._managerThrowTarget = throwTarget;
-
-            phase = 'throw';
+              const throwTarget = decideThrowTarget(f, runners, situation);
+              if (throwTarget.priority > 0) {
+                // Throw to the target base
+                f.state = {
+                  type: 'has-ball',
+                  decideSec: 0.3,
+                  throwTarget: throwTarget.point,
+                  throwBase: throwTarget.base,
+                };
+                phase = 'throw';
+              } else {
+                // No play needed (fielder is on the force-out base, or no runners)
+                // Hold the ball — play will end via safety check
+                f.state = { type: 'has-ball', decideSec: 0 };
+                phase = 'throw';  // enter throw phase for out/end detection
+              }
+            }
           }
         }
 
@@ -686,8 +1016,34 @@ export function simulateAtBatTick(
           } else if (rResult.arrivedAtBase) {
             const base = r.state.type === 'on-base' ? r.state.base : 'first';
             events.push({ type: 'runner-safe', runnerId: r.id, base });
+            // Evaluate extra-base advance during fielding phase
+            if (r.state.type === 'on-base' && !playComplete) {
+              if (evaluateExtraBaseAdvance(r, ball, fielders, situation)) {
+                commandRunner(r, { type: 'advance', targetBase: nextBase(r.state.base) });
+              }
+            }
           }
         }
+
+        // Resolve base collisions
+        resolveBaseCollisions(runners);
+
+        // Per-tick runner re-evaluation
+        reevaluateRunners(runners, ball, fielders, situation);
+
+        // Continuous extra-base re-evaluation
+        if (!playComplete) {
+          for (const r of runners) {
+            if (r.state.type === 'on-base' && r.state.base !== 'third') {
+              if (evaluateExtraBaseAdvance(r, ball, fielders, situation)) {
+                commandRunner(r, { type: 'advance', targetBase: nextBase(r.state.base) });
+              }
+            }
+          }
+        }
+
+        // AI Manager: assign situational coverage during fielding
+        reassignFielderRoles(fielders, ball, runners, situation);
         break;
       }
 
@@ -696,38 +1052,117 @@ export function simulateAtBatTick(
 
         // Tick fielders — handle throw execution
         for (const f of fielders) {
-          // If a fielder has the ball and is deciding, use manager's target
-          if (f.state.type === 'has-ball' && f.state.decideSec <= 0) {
-            const mgrTarget = (f as any)._managerThrowTarget;
-            if (mgrTarget && throwCount < MAX_THROWS) {
-              // Execute the throw to the manager's chosen base
-              throwBall(ball, f.pos, mgrTarget.point, f.throwVeloFps, f.position);
-              throwCount++;
-              events.push({ type: 'throw-released', from: f.position, fromId: f.playerId > 0 ? f.playerId : undefined, toBase: mgrTarget.base });
-              f.state = { type: 'returning' };
-              delete (f as any)._managerThrowTarget;
+          // If a fielder has the ball and the decision timer expired,
+          // the fielderAI's has-ball→throwing transition handles it.
+          // But if there's no throwTarget or max throws, end the play.
+          if (f.state.type === 'has-ball' && f.state.decideSec <= 0 && !f.state.throwTarget) {
+            if (throwCount < MAX_THROWS) {
+              // No pre-set target — ask the AI Manager now
+              const mgrTarget = decideThrowTarget(f, runners, situation);
+              if (mgrTarget.priority > 0) {
+                f.state = {
+                  type: 'has-ball',
+                  decideSec: 0,
+                  throwTarget: mgrTarget.point,
+                  throwBase: mgrTarget.base,
+                };
+              } else {
+                // No play to make — end
+                phase = 'done';
+                events.push({ type: 'play-complete' });
+                playComplete = true;
+                f.state = { type: 'returning' };
+              }
             } else {
-              // No target or max throws — end the play
+              // Max throws reached — end the play
               phase = 'done';
               events.push({ type: 'play-complete' });
               playComplete = true;
+              f.state = { type: 'returning' };
             }
           }
 
-          const fResult = tickFielder(f, ball, DT);
+          const fResult = tickFielder(f, ball, DT, {
+            allFielders: fielders,
+            runners,
+            situation,
+            primaryPosition,
+          });
           if (fResult.event) events.push(fResult.event as TickEvent);
+          if (fResult.threw) {
+            throwCount++;
+            // Check for pre-determined throwing error
+            if (pendingThrowError && (errorByPosition === '' || f.position === errorByPosition)) {
+              pendingThrowError = false;  // consumed
+              // Wild throw — apply extreme lateral scatter to the ball
+              if (ball.state.type === 'thrown') {
+                const vel = ball.state.vel;
+                // Add strong perpendicular deflection
+                const speed = Math.hypot(vel.x, vel.y);
+                if (speed > 1) {
+                  const perpX = -vel.y / speed;
+                  const perpY = vel.x / speed;
+                  // Wild throw sails 15-25 ft off target (deterministic direction)
+                  const wildScatter = 15 + (10 - (f.throwingSkill ?? 5)) * 2;
+                  const direction = f.pos.x > 0 ? 1 : -1;  // deterministic side
+                  vel.x += perpX * wildScatter * direction;
+                  vel.y += perpY * wildScatter * direction;
+                  vel.z += 3;  // tends to sail high
+                }
+                events.push({
+                  type: 'throwing-error',
+                  by: f.position,
+                  playerId: f.playerId > 0 ? f.playerId : undefined,
+                  at: { ...f.pos },
+                  intendedBase: fResult.event?.type === 'throw-released'
+                    ? (fResult.event as any).toBase ?? 'unknown'
+                    : 'unknown',
+                });
+              }
+            }
+          }
 
-          // If a fielder received a throw, they need to decide too
+          // If a fielder received a throw, check for force-out then relay
           if (fResult.event?.type === 'ball-received') {
-            // AI Manager: should this fielder relay or hold?
+            // ── Force-out check: did the throw beat a runner to this base? ──
+            const outRunner = resolveForceOut(f.pos, runners, ball);
+            if (outRunner) {
+              outRunner.state = { type: 'out' };
+              // Find which base the out was recorded at
+              let outBase = 'first';
+              let outBaseDist = Infinity;
+              for (const [name, pos] of Object.entries(BASE_POS)) {
+                const d = dist2D(f.pos, pos);
+                if (d < outBaseDist) {
+                  outBaseDist = d;
+                  outBase = name;
+                }
+              }
+              events.push({
+                type: 'runner-out',
+                runnerId: outRunner.id,
+                at: outBase,
+              });
+            }
+
+            // ── Relay check: are there other runners to throw to? ──
             const activeRunners = runners.filter(r =>
               r.state.type === 'running'
             );
+
             if (activeRunners.length > 0 && throwCount < MAX_THROWS) {
               const newTarget = decideThrowTarget(f, runners, situation);
-              (f as any)._managerThrowTarget = newTarget;
+              if (newTarget.priority > 0) {
+                // There IS a play at another base — relay (double play attempt)
+                f.state = {
+                  type: 'has-ball',
+                  decideSec: 0.2,
+                  throwTarget: newTarget.point,
+                  throwBase: newTarget.base,
+                };
+              }
+              // If priority is 0, the fielder holds — play will end via safety check
             }
-            // Otherwise the fielder will hold and the play ends
           }
         }
 
@@ -739,8 +1174,20 @@ export function simulateAtBatTick(
           } else if (rResult.arrivedAtBase) {
             const base = r.state.type === 'on-base' ? r.state.base : 'first';
             events.push({ type: 'runner-safe', runnerId: r.id, base });
+            // Evaluate extra-base advance during throw phase
+            if (r.state.type === 'on-base' && !playComplete) {
+              if (evaluateExtraBaseAdvance(r, ball, fielders, situation)) {
+                commandRunner(r, { type: 'advance', targetBase: nextBase(r.state.base) });
+              }
+            }
           }
         }
+
+        // Resolve base collisions
+        resolveBaseCollisions(runners);
+
+        // Per-tick runner re-evaluation during throws
+        reevaluateRunners(runners, ball, fielders, situation);
 
         // AI Manager: reassign coverage during throws
         reassignFielderRoles(fielders, ball, runners, situation);
@@ -779,13 +1226,14 @@ export function simulateAtBatTick(
         ? enrichEventsWithPlayerTags(events, fielders, playerLabels)
         : events;
       const snapshotRunners = runners
-        .filter(r => r.state.type !== 'out')
+        .filter(r => r.state.type !== 'out' && r.state.type !== 'scored')
         .map(r => ({
           id: r.id,
           pos: { ...r.pos },
           state: { ...r.state } as RunnerEntity['state'],
           speedFps: r.speedFps,
           agility: r.agility,
+          playIntelligence: r.playIntelligence,
           facingRad: r.facingRad,
           turnRateRad: r.turnRateRad,
         }));
@@ -798,6 +1246,7 @@ export function simulateAtBatTick(
           state: { ...preContactBatter.state } as RunnerEntity['state'],
           speedFps: preContactBatter.speedFps,
           agility: preContactBatter.agility,
+          playIntelligence: preContactBatter.playIntelligence,
           facingRad: preContactBatter.facingRad,
           turnRateRad: preContactBatter.turnRateRad,
         });
@@ -809,6 +1258,7 @@ export function simulateAtBatTick(
         ball: {
           pos: { ...ball.pos },
           state: { ...ball.state } as BallEntity['state'],
+          bounceCount: ball.bounceCount ?? 0,
         },
         // First snapshot carries full fielder data (static props for sprite creation).
         // Subsequent snapshots carry only dynamic data (pos + state) to save memory.
@@ -828,20 +1278,35 @@ export function simulateAtBatTick(
               facingRad: f.facingRad,
               turnRateRad: f.turnRateRad,
               throwVeloFps: f.throwVeloFps,
+              throwingSkill: f.throwingSkill,
               defense: f.defense,
               playIntelligence: f.playIntelligence,
               playerId: f.playerId,
+              jerseyNumber: f.jerseyNumber,
               teamColor: f.teamColor,
             })),
         runners: snapshotRunners,
         events: enrichedEvents.length > 0 ? [...enrichedEvents] : [],
       });
+
+      // Events were flushed into this snapshot — reset the accumulator.
+      pendingEvents.length = 0;
+    } else {
+      // Not a capture frame — carry events forward to the next snapshot.
+      pendingEvents.push(...events);
     }
   }
 
-  // Safety: if the play timed out without a play-complete event, inject one
+  // Safety: if the play timed out without a play-complete event, inject one.
+  // Also flush any pending events that accumulated on non-capture ticks.
   if (!playComplete && snapshots.length > 0) {
-    snapshots[snapshots.length - 1].events.push({ type: 'play-complete' });
+    const lastSnap = snapshots[snapshots.length - 1];
+    if (pendingEvents.length > 0) {
+      const flushed = enrichEventsWithPlayerTags(pendingEvents, fielders, playerLabels);
+      lastSnap.events.push(...flushed);
+      pendingEvents.length = 0;
+    }
+    lastSnap.events.push({ type: 'play-complete' });
   }
 
   return snapshots;

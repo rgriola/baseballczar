@@ -130,6 +130,7 @@ function makeRunnerEntity(
     state,
     speedFps: Math.max(1, profile.speedFps),
     agility,
+    playIntelligence: 5,  // persisted replays don't need PI for decisions
     facingRad: facingToPoint(pos, facingTarget),
     turnRateRad: Number.isFinite(profile.turnRateRad) && profile.turnRateRad > 0
       ? profile.turnRateRad

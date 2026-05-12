@@ -9,7 +9,7 @@ import type { CoverageAssignments } from '../../../../packages/sim-engine/src/de
 
 function mkPlayer(pi: number | undefined, speed = 5): Player {
   return {
-    id: 1, firstName: 'F', lastName: 'L', hand: 'R', position: 'CF',
+    id: 1, jerseyNumber: 1, firstName: 'F', lastName: 'L', hand: 'R', position: 'CF',
     skills: {
       ag: 5, avg: 5, power: 5, eye: 5, dhr: 5, speed,
       stamina: 5, fielding: 5, throwing: 5, playIntelligence: 5,

@@ -69,7 +69,7 @@ export const CONFIG = {
   // ─── Throw velocities (mph) by position ───────────────────────
   // Higher defense skill adds velocity (see throw.ts). OF crow-hop bonus.
   throwVeloBaseMph: {
-    P:  85, C:  82,
+    P: 85, C: 82,
     B1: 80, B2: 82, SS: 86, B3: 84,
     LF: 86, CF: 88, RF: 88,
   } as Record<Position, number>,
@@ -185,7 +185,7 @@ export const CONFIG = {
      *  kept here as 0 for any code that still references them during
      *  transition, but the real model lives in fielder.* above. */
     rangeDefenseLeverageFps: 0,
-    rangeSpeedLeverageFps:   0,
+    rangeSpeedLeverageFps: 0,
     /** Foul-pop catch radii (ft from home) — how far each fielder will
      *  drift into foul ground for a pop-up. */
     foulCatch: {
@@ -318,14 +318,14 @@ export const CONFIG = {
   // runsPerGame [3.5, 5.5]
   // foulsPerPa [1.2, 1.8]
   expectedRanges: {
-    bbPct:        [0.065, 0.095],
-    kPct:         [0.220, 0.275],
-    babip:        [0.345, 0.385],
-    hrPerFb:      [0.10, 0.14],
+    bbPct: [0.065, 0.095],
+    kPct: [0.220, 0.275],
+    babip: [0.345, 0.385],
+    hrPerFb: [0.10, 0.14],
     pitchesPerPa: [3.80, 4.10],
     pitchesPerGame: [152, 172],  // per team
-    runsPerGame:  [4.20, 5.60],  // per team
-    foulsPerPa:   [0.90, 1.10],
+    runsPerGame: [4.20, 5.60],  // per team
+    foulsPerPa: [0.90, 1.10],
     foulPerContact: [0.54, 0.66],
   },
 } as const;

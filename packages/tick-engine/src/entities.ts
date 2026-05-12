@@ -23,15 +23,16 @@ export type BallState =
 export interface BallEntity {
   pos: Point3D;          // x, y in feet (engine coords), z = altitude
   state: BallState;
+  bounceCount: number;   // how many times the ball has hit the ground (0 = never touched ground)
 }
 
 // ─── Fielder ─────────────────────────────────────────────────────
 export type FielderState =
   | { type: 'idle' }                                           // at home position
-  | { type: 'tracking'; target: Point2D }                      // running to predicted landing
+  | { type: 'tracking'; target: Point2D; reactionSec?: number } // running to predicted landing
   | { type: 'chasing'; target: Point2D }                       // ball got past, redirecting
-  | { type: 'has-ball'; decideSec: number }                    // holding ball, deciding throw
-  | { type: 'throwing'; target: Point2D; windupSec: number }   // windup animation
+  | { type: 'has-ball'; decideSec: number; throwTarget?: Point2D; throwBase?: string }  // holding ball, deciding throw
+  | { type: 'throwing'; target: Point2D; throwBase?: string; windupSec: number }   // windup animation
   | { type: 'covering'; base: Point2D }                        // covering a base
   | { type: 'cutting'; relayPoint: Point2D }                   // moving to cutoff position
   | { type: 'backing-up'; target: Point2D }                    // backup fielder
@@ -47,9 +48,11 @@ export interface FielderEntity {
   facingRad: number;                 // current facing direction (radians)
   turnRateRad: number;               // max turning speed (radians/sec)
   throwVeloFps: number;              // throw velocity (ft/sec)
+  throwingSkill: number;             // 1-10 TH skill (raw, for accuracy calc)
   defense: number;                   // 1-10 defense skill
   playIntelligence: number;          // 1-10 PI — route reads, throw-target IQ
   playerId: number;
+  jerseyNumber: number;              // 1-99, from DB jersey_no
   teamColor: number;
 }
 
@@ -66,6 +69,7 @@ export interface RunnerEntity {
   state: RunnerState;
   speedFps: number;
   agility: number;                   // 1-10 AG skill (drives turn rate)
+  playIntelligence: number;          // 1-10 PI — baserunning reads, extra-base decisions
   facingRad: number;                 // current facing direction (radians)
   turnRateRad: number;               // max turning speed (radians/sec)
 }
@@ -188,6 +192,15 @@ export type TickEvent =
   // Manager decision events (Phase 3)
   | { type: 'manager-signal'; decision: string; detail: string }
   | { type: 'defensive-shift'; positions: Record<string, Point2D> }
+  // Error events
+  | { type: 'fielding-error'; by: string; playerId?: number; playerName?: string; errorType: 'fielding' | 'throw'; at: Point2D }
+  | { type: 'throwing-error'; by: string; playerId?: number; playerName?: string; at: Point2D; intendedBase: string }
+  // Baserunning / pitching miscue events
+  | { type: 'stolen-base'; runnerId: number; runnerName?: string; base: string }
+  | { type: 'caught-stealing'; runnerId: number; runnerName?: string; at: string }
+  | { type: 'wild-pitch'; pitcherId?: number; pitcherName?: string }
+  | { type: 'passed-ball'; catcherId?: number; catcherName?: string }
+  | { type: 'balk'; pitcherId?: number; pitcherName?: string }
   // Game flow
   | { type: 'play-complete' }
   | { type: 'inning-change'; inning: number; half: 'top' | 'bottom' }

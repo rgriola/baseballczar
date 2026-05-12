@@ -11,6 +11,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { generateRoster, generateTeamName } from './generate-players';
 import { generateSchedule } from './generate-schedule';
+import { syncDefaultsToSchedule } from '@/lib/lineup/sync-schedule';
 
 interface CreateLeagueOptions {
   leagueName?: string;
@@ -134,6 +135,11 @@ export async function createLeague(
   const { error: standErr } = await supabase.from('standings').insert(standingsInserts);
   if (standErr) {
     throw new Error(`Failed to insert standings: ${standErr.message}`);
+  }
+
+  // 6. Auto-populate game_lineups + game_rotation for each team
+  for (const teamId of teamIds) {
+    await syncDefaultsToSchedule(supabase, teamId);
   }
 
   return { leagueId, teamIds, playerCount, scheduleCount };

@@ -27,6 +27,53 @@ function decisionTimeSec(pi: number): number {
   return 0.60 - (Math.min(10, Math.max(1, pi)) - 1) * 0.044;
 }
 
+// ─── Glove / Fielding skill helpers ──────────────────────────────
+
+/** Catch radius for fly balls. FLD is the dominant factor (glove reach
+ *  + hand softness), PI adds a small bonus for route precision. */
+function catchRadiusForSkills(defense: number, pi: number): number {
+  const fld = Math.max(1, Math.min(10, defense));
+  const piVal = Math.max(1, Math.min(10, pi));
+  // Base: 6 ft. FLD adds ±2.5 ft (range: 3.5–8.5 ft).
+  // PI adds ±0.6 ft (small: route precision, not reach).
+  return COLLIDERS.catchStanding
+    + (fld - 5) * 0.5     // FLD: dominant glove reach
+    + (piVal - 5) * 0.12; // PI: minor route precision bonus
+}
+
+/** Field radius for grounders. FLD affects range and clean pickup. */
+function fieldRadiusForSkills(defense: number): number {
+  const fld = Math.max(1, Math.min(10, defense));
+  // Base: 4 ft. FLD adds ±1.6 ft (range: 2.4–5.6 ft).
+  return COLLIDERS.fieldGrounder + (fld - 5) * 0.4;
+}
+
+/** Transfer time: time from fielding/catching the ball to being ready
+ *  to throw. Glove-to-hand transfer + body set.
+ *  FLD = hand softness / clean exchange, AG = body quickness. */
+function transferTimeSec(defense: number, ag: number): number {
+  const fld = Math.max(1, Math.min(10, defense));
+  const agVal = Math.max(1, Math.min(10, ag));
+  // Base: 0.30s. FLD reduces by up to 0.16s, AG reduces by up to 0.12s.
+  // FLD 10 + AG 10 = 0.02s (elite). FLD 1 + AG 1 = 0.58s (clumsy).
+  return Math.max(0.02, 0.30 + (5 - fld) * 0.04 + (5 - agVal) * 0.03);
+}
+
+/** Windup time before throw release. Varies by position + AG.
+ *  Catchers are slowest (crouch transfer), P is mid, IF are fastest. */
+function windupTimeSec(position: string, ag: number): number {
+  const agVal = Math.max(1, Math.min(10, ag));
+  const baseByPos: Record<string, number> = {
+    C: 0.28,   // longest — transfer from crouch
+    P: 0.22,   // mid — mound mechanics
+    B1: 0.16, B2: 0.14, SS: 0.14, B3: 0.16,  // infielders: quick
+    LF: 0.20, CF: 0.18, RF: 0.20,             // outfielders: mid-quick
+  };
+  const base = baseByPos[position] ?? 0.18;
+  const agBonus = (agVal - 5) * -0.012;  // high AG = faster release
+  return Math.max(0.06, base + agBonus);
+}
+
 // ─── Movement ────────────────────────────────────────────────────
 
 const BACKPEDAL_PENALTY = 0.5;
@@ -37,7 +84,16 @@ const RECEIVE_FACING_TOLERANCE_RAD = (85 * Math.PI) / 180;
 const THROW_FACING_TOLERANCE_RAD = (25 * Math.PI) / 180;
 const SHORT_CONTACT_DEPTH_FT = 70;
 const INFIELD_CONTACT_DEPTH_FT = 150;
+const INFIELD_OF_GRAY_ZONE_FT = 120;  // overlap zone where both IF/OF can field
 const CORNER_SIDE_THRESHOLD_FT = 35;
+
+/** PI-based reaction delay (seconds) before a fielder starts tracking.
+ *  High PI = quick read, low PI = hesitation / bad first step. */
+function reactionDelaySec(pi: number): number {
+  const piVal = Math.max(1, Math.min(10, pi));
+  // PI 10 = 0.10s (elite read), PI 5 = 0.28s, PI 1 = 0.45s
+  return 0.48 - piVal * 0.038;
+}
 
 function angleToPoint(from: Point2D, to: Point2D): number {
   return Math.atan2(-(to.y - from.y), to.x - from.x);
@@ -115,19 +171,50 @@ function distTo(f: FielderEntity, pt: Point2D): number {
   return dist2D(f.pos, pt);
 }
 
-/** Find the closest fielder to a point (by position type filter). */
+/** Find the closest fielder to a point (by position type filter).
+ *  When `ballDir` is supplied, raw distance is adjusted by the approach
+ *  angle: fielders the ball is heading TOWARD get a lower effective
+ *  distance, while fielders the ball is moving AWAY from are penalized.
+ *  This models the real-world advantage of converging on the ball vs
+ *  having to chase it down from behind. */
 export function closestFielder(
   fielders: FielderEntity[],
   pt: Point2D,
   filter?: Position[],
+  ballDir?: Point2D,
 ): FielderEntity | undefined {
+  // Normalized ball direction for approach-angle weighting
+  let bdNorm: Point2D | null = null;
+  if (ballDir) {
+    const bdLen = Math.hypot(ballDir.x, ballDir.y);
+    if (bdLen > 0.01) bdNorm = { x: ballDir.x / bdLen, y: ballDir.y / bdLen };
+  }
+
+  // Approach-angle weight: how much the effective distance shifts.
+  // 0.30 = 30% bonus for head-on convergence, 30% penalty for chasing.
+  const APPROACH_WEIGHT = 0.30;
+
   let best: FielderEntity | undefined;
   let bestDist = Infinity;
   for (const f of fielders) {
     if (filter && !filter.includes(f.position)) continue;
-    const d = distTo(f, pt);
-    if (d < bestDist) {
-      bestDist = d;
+    const rawDist = distTo(f, pt);
+
+    let effectiveDist = rawDist;
+    if (bdNorm) {
+      // Direction from ball origin toward this fielder
+      const toFielder = { x: f.pos.x - pt.x, y: f.pos.y - pt.y };
+      const tfLen = Math.hypot(toFielder.x, toFielder.y);
+      if (tfLen > 0.01) {
+        // dot ∈ [-1, 1]: +1 = ball heading straight at fielder, -1 = straight away
+        const dot = (bdNorm.x * toFielder.x + bdNorm.y * toFielder.y) / tfLen;
+        // factor: 0.70 (converging) .. 1.00 (perpendicular) .. 1.30 (chasing)
+        effectiveDist = rawDist * (1 - APPROACH_WEIGHT * dot);
+      }
+    }
+
+    if (effectiveDist < bestDist) {
+      bestDist = effectiveDist;
       best = f;
     }
   }
@@ -156,28 +243,104 @@ export function predictLanding(ball: BallEntity): Point2D | null {
 
 // ─── Assignment ──────────────────────────────────────────────────
 
-/** Assign fielder roles after contact. Called once per batted ball. */
+/** Assign fielder roles after contact. Called once per batted ball.
+ *  Returns the position of the primary fielder (the one tracking the ball).
+ *  @param sprayAngleDeg - spray angle of the hit (-45 = pull left, +45 = pull right) */
 export function assignFielderRoles(
   fielders: FielderEntity[],
   ball: BallEntity,
   predictedLanding: Point2D,
-): void {
+  sprayAngleDeg?: number,
+  runners?: import('./entities').RunnerEntity[],
+): string {
   const depthFt = Math.hypot(predictedLanding.x, predictedLanding.y);
   const isOutfieldBall = depthFt > INFIELD_CONTACT_DEPTH_FT;
+  const spray = sprayAngleDeg ?? 0;
+
+  // ─── SS/2B spray angle rules ──────────────────────────────────
+  // Balls hit to the LEFT side (-45° to 0°): SS fields, 2B covers 2nd
+  // Balls hit to the RIGHT side (1° to 45°): 2B fields, SS covers 2nd
+  const ssFields = spray <= 0;   // left side of field
+  const b2Fields = spray > 0;    // right side of field
+
+  // Pitcher is only eligible for very short balls (<70ft) hit near the mound.
+  // Real pitchers only field comebacers, bunts, and slow rollers — not
+  // routine grounders that belong to the corner/middle infielders.
+  const pitcherLateralOk = Math.abs(predictedLanding.x) <= 15;  // within 15ft of mound center
+  const pitcherEligible = depthFt <= SHORT_CONTACT_DEPTH_FT && pitcherLateralOk;
+
+  // Catcher is only eligible for balls in bunt/dribbler territory —
+  // very close to home plate (<20 ft). Beyond that, the pitcher and
+  // infielders handle it. Real catchers don't chase ground balls past
+  // the mound.
+  const CATCHER_MAX_DEPTH_FT = 20;
+  const catcherEligible = depthFt <= CATCHER_MAX_DEPTH_FT;
+
+  // Gray-zone overlap: balls in the 120-180ft range allow BOTH IF and OF
+  let shortPool: Position[];
+  if (pitcherEligible && catcherEligible) {
+    shortPool = ['P', 'C', 'B1', 'B2', 'SS', 'B3'];
+  } else if (pitcherEligible) {
+    shortPool = ['P', 'B1', 'B2', 'SS', 'B3'];
+  } else if (catcherEligible) {
+    shortPool = ['C', 'B1', 'B2', 'SS', 'B3'];
+  } else {
+    shortPool = ['B1', 'B2', 'SS', 'B3'];
+  }
 
   const primaryPool: Position[] = depthFt <= SHORT_CONTACT_DEPTH_FT
-    ? ['P', 'C', 'B1', 'B2', 'SS', 'B3']
-    : isOutfieldBall
-      ? ['LF', 'CF', 'RF']
-      : ['P', 'B1', 'B2', 'SS', 'B3'];
+    ? shortPool
+    : depthFt <= INFIELD_OF_GRAY_ZONE_FT
+      ? ['B1', 'B2', 'SS', 'B3']  // shallow — infield only, no pitcher/catcher
+      : depthFt <= INFIELD_CONTACT_DEPTH_FT
+        ? ['B1', 'B2', 'SS', 'B3', 'LF', 'CF', 'RF']  // gray zone — both pools
+        : ['LF', 'CF', 'RF', 'SS', 'B2'];  // deep — OF primary, MIF can help
 
-  // Pick primary from a realistic responsibility pool first.
-  const primary = closestFielder(fielders, predictedLanding, primaryPool)
-    ?? closestFielder(fielders, predictedLanding);
-  if (!primary) return;
+  // Check if any infielder is already IN the ball's path (within ~15ft
+  // of the trajectory line). This handles hard grounders hit AT a fielder.
+  const ballDir = { x: predictedLanding.x - ball.pos.x, y: predictedLanding.y - ball.pos.y };
+  const ballDirLen = Math.hypot(ballDir.x, ballDir.y) || 1;
+  const ballDirNorm = { x: ballDir.x / ballDirLen, y: ballDir.y / ballDirLen };
 
-  // The primary fielder tracks the ball
-  primary.state = { type: 'tracking', target: predictedLanding };
+  let interceptFielder: FielderEntity | undefined;
+  let interceptDist = Infinity;
+  for (const f of fielders) {
+    // Consider infielders + pitcher + catcher for intercept
+    if (!['P', 'C', 'B1', 'B2', 'SS', 'B3'].includes(f.position)) continue;
+
+    // Pitcher gets a much tighter intercept radius (comebacker only)
+    const maxPerp = f.position === 'P' ? 6 : 15;
+
+    // Pitcher must also pass the lateral + depth eligibility check
+    if (f.position === 'P' && !pitcherEligible) continue;
+    // Catcher only intercepts bunts/dribblers near home
+    if (f.position === 'C' && !catcherEligible) continue;
+
+    // Project fielder position onto ball trajectory line
+    const toFielder = { x: f.pos.x - ball.pos.x, y: f.pos.y - ball.pos.y };
+    const proj = toFielder.x * ballDirNorm.x + toFielder.y * ballDirNorm.y;
+    if (proj < 0 || proj > ballDirLen) continue;  // behind the ball or past landing
+    // Perpendicular distance from trajectory
+    const perpDist = Math.abs(toFielder.x * (-ballDirNorm.y) + toFielder.y * ballDirNorm.x);
+    if (perpDist < maxPerp && perpDist < interceptDist) {
+      interceptDist = perpDist;
+      interceptFielder = f;
+    }
+  }
+
+  // Pick primary: intercept fielder takes priority for grounders, otherwise closest
+  // closestFielder uses the ball direction vector to weight approach angle:
+  // fielders the ball is heading toward get a distance bonus.
+  const isGrounder = (ball.state.type === 'in-flight' && ball.state.vel.z < 5) || depthFt < 200;
+  const primary = (interceptFielder && isGrounder && interceptDist < 12)
+    ? interceptFielder
+    : (closestFielder(fielders, predictedLanding, primaryPool, ballDir)
+       ?? closestFielder(fielders, predictedLanding, undefined, ballDir));
+  if (!primary) return '';
+
+  // PI-based reaction delay: fielder reads the ball before breaking
+  const reactionDelay = reactionDelaySec(primary.playIntelligence ?? 5);
+  primary.state = { type: 'tracking', target: predictedLanding, reactionSec: reactionDelay };
 
   const secondBase = getBaseAnchor('second');
   const cutoffPos: Position = predictedLanding.x < -CORNER_SIDE_THRESHOLD_FT
@@ -198,13 +361,24 @@ export function assignFielderRoles(
     const isIF = ['B1', 'B2', 'SS', 'B3'].includes(f.position);
 
     if (f.position === 'P') {
-      // Pitcher backs up infield plays near the mound, OF plays toward home.
-      f.state = {
-        type: 'backing-up',
-        target: isOutfieldBall ? { x: 0, y: 90 } : { x: 0, y: 70 },
-      };
+      // Pitcher responsibilities mirror real baseball:
+      // - Right-side grounders (spray > 0): cover 1B (1B fielder is pulling off the bag)
+      // - Left-side grounders: back up 3B area
+      // - Outfield balls: back up toward home
+      if (isOutfieldBall) {
+        f.state = { type: 'backing-up', target: { x: 0, y: 90 } };
+      } else if (spray > 5) {
+        // Right-side grounder — pitcher covers 1B
+        f.state = { type: 'covering', base: getFielderCoverPoint('first', 'P') };
+      } else if (spray < -5) {
+        // Left-side grounder — pitcher backs up 3B side
+        f.state = { type: 'backing-up', target: { x: -15, y: 75 } };
+      } else {
+        // Up-the-middle — pitcher backs up infield
+        f.state = { type: 'backing-up', target: { x: 0, y: 70 } };
+      }
     } else if (f.position === 'C') {
-      // Catcher stays home; no deep-ball chasing except very short contact.
+      // Catcher covers home plate
       f.state = { type: 'covering', base: getBaseAnchor('home') };
     } else if (isOF && f.position !== primary.position) {
       // Non-primary OF backs up to keep extra bases honest.
@@ -214,24 +388,79 @@ export function assignFielderRoles(
       };
       f.state = { type: 'backing-up', target: backupPt };
     } else if (isIF) {
-      // Infield progression by contact depth:
-      // - Infield ball: corners hold bags, MIF hold middle.
-      // - Outfield ball: one MIF is cutoff, one covers second.
-      if (f.position === 'B1') {
+      // ── SS/2B spray-angle rule ──────────────────────────────────
+      if (f.position === 'SS') {
+        if (primary.position === 'SS') {
+          // SS is already primary — they're fielding
+        } else if (ssFields) {
+          // Ball to left side — SS backs up the play
+          f.state = { type: 'backing-up', target: { x: -30, y: 120 } };
+        } else {
+          // Ball to right side — SS covers 2nd base
+          if (isOutfieldBall && f.position === cutoffPos) {
+            f.state = { type: 'cutting', relayPoint: cutoffPt };
+          } else {
+            f.state = { type: 'covering', base: getFielderCoverPoint('second', 'SS') };
+          }
+        }
+      } else if (f.position === 'B2') {
+        if (primary.position === 'B2') {
+          // B2 is already primary — they're fielding
+        } else if (b2Fields) {
+          // Ball to right side — B2 backs up the play
+          f.state = { type: 'backing-up', target: { x: 30, y: 120 } };
+        } else {
+          // Ball to left side — B2 covers 2nd base
+          if (isOutfieldBall && f.position === cutoffPos) {
+            f.state = { type: 'cutting', relayPoint: cutoffPt };
+          } else {
+            f.state = { type: 'covering', base: getFielderCoverPoint('second', 'B2') };
+          }
+        }
+      } else if (f.position === 'B1') {
+        // B1 almost always covers first for the throw (batter-runner heading there).
+        // Exception: if ball is hit right at B1 (spray > 25° and short), B1 is already primary.
         f.state = { type: 'covering', base: getFielderCoverPoint('first', f.position) };
       } else if (f.position === 'B3') {
-        f.state = { type: 'covering', base: getFielderCoverPoint('third', f.position) };
-      } else if (f.position === 'B2' || f.position === 'SS') {
-        if (isOutfieldBall && f.position === cutoffPos) {
-          f.state = { type: 'cutting', relayPoint: cutoffPt };
+        // B3 only needs to cover third if a runner could advance there.
+        // With no runners on second, third is empty — B3 should field balls
+        // on their side instead of wasting themselves on an empty bag.
+        const hasRunnerForThird = runners?.some(r =>
+          (r.state.type === 'on-base' && r.state.base === 'second') ||
+          (r.state.type === 'running')
+        ) ?? false;
+
+        if (hasRunnerForThird) {
+          // Runner could advance to third — cover the bag
+          f.state = { type: 'covering', base: getFielderCoverPoint('third', f.position) };
+        } else if (spray < -10 && !isOutfieldBall) {
+          // Ball hit to left side (B3's zone) with no runners at third —
+          // B3 should track the ball as a secondary fielder.
+          // If primary can't make the play, B3 is right there.
+          const reactionDelay = reactionDelaySec(f.playIntelligence ?? 5);
+          f.state = { type: 'tracking', target: predictedLanding, reactionSec: reactionDelay };
         } else {
-          f.state = { type: 'covering', base: getFielderCoverPoint('second', f.position) };
+          // Ball is hit to the opposite side or deep — back up
+          f.state = { type: 'backing-up', target: { x: -40, y: 80 } };
         }
       } else {
         f.state = { type: 'returning' };
       }
     }
   }
+
+  return primary.position;
+}
+
+// ─── Field context for inter-fielder awareness ──────────────────
+
+/** Context passed to tickFielder so each fielder is aware of
+ *  teammates, runners, game situation, and who the primary is. */
+export interface FieldContext {
+  allFielders: FielderEntity[];
+  runners: import('./entities').RunnerEntity[];
+  situation: import('./aiManager').GameSituation;
+  primaryPosition: string;  // position of the designated primary fielder
 }
 
 // ─── Per-tick update ─────────────────────────────────────────────
@@ -241,6 +470,7 @@ export function tickFielder(
   fielder: FielderEntity,
   ball: BallEntity,
   dt: number,
+  ctx?: FieldContext,
 ): TickFielderResult {
   const result: TickFielderResult = {};
 
@@ -253,37 +483,107 @@ export function tickFielder(
 
     case 'tracking': {
       // Sprint toward predicted landing / ball
-      // Update prediction each tick for more realistic tracking
       const target = fielder.state.target;
-      const arrived = moveToward(fielder, target, dt);
+
+      // ── Reaction delay: fielder reads the ball before breaking ──
+      if (fielder.state.reactionSec != null && fielder.state.reactionSec > 0) {
+        fielder.state.reactionSec -= dt;
+        // During reaction, face the ball but don't move
+        const toBall = angleToPoint(fielder.pos, { x: ball.pos.x, y: ball.pos.y });
+        fielder.facingRad = rotateToward(fielder.facingRad, toBall, fielder.turnRateRad * dt);
+        break;
+      }
+
+      // ── Yield logic: if another fielder is closer, back off ────
+      if (ctx && ball.state.type === 'in-flight') {
+        const myDist = dist2D(fielder.pos, target);
+        const isPrimary = fielder.position === ctx.primaryPosition;
+
+        if (!isPrimary) {
+          // Tighter buffer (8ft) — fielders call each other off earlier
+          const closerTeammate = ctx.allFielders.find(f =>
+            f !== fielder &&
+            (f.state.type === 'tracking' || f.state.type === 'chasing') &&
+            dist2D(f.pos, target) < myDist - 8
+          );
+          if (closerTeammate) {
+            const backupPt: Point2D = {
+              x: (fielder.homePos.x + target.x) / 2,
+              y: (fielder.homePos.y + target.y) / 2,
+            };
+            fielder.state = { type: 'backing-up', target: backupPt };
+            break;
+          }
+        }
+      }
+
+      moveToward(fielder, target, dt);
 
       // Check if we can catch the ball (collider-based)
       if (ball.state.type === 'in-flight') {
         const distToBall = dist2D(fielder.pos, ball.pos);
-        // PI affects glove radius — high PI fielders take better routes
-        const catchRadius = COLLIDERS.catchStanding + ((fielder.playIntelligence ?? 5) - 5) * 0.3;
+        // FLD (glove) + PI (route) determine catch radius
+        const catchRadius = catchRadiusForSkills(
+          fielder.defense ?? 5,
+          fielder.playIntelligence ?? 5,
+        );
         const ballInRange =
           distToBall < catchRadius &&
           ball.pos.z < 12 &&
           ball.pos.z > 0 &&
           isFacingPoint(fielder, { x: ball.pos.x, y: ball.pos.y }, CATCH_FACING_TOLERANCE_RAD);
         if (ballInRange) {
-          // Caught it!
+          const transfer = transferTimeSec(fielder.defense ?? 5, fielder.agility ?? 5);
           ball.state = { type: 'held', by: fielder.position };
-          fielder.state = { type: 'has-ball', decideSec: decisionTimeSec(fielder.playIntelligence ?? 5) };
-          result.caught = true;
-          result.event = {
-            type: 'ball-caught',
-            by: fielder.position,
-            playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
-            at: { ...fielder.pos },
+          fielder.state = {
+            type: 'has-ball',
+            decideSec: decisionTimeSec(fielder.playIntelligence ?? 5) + transfer,
           };
+
+          // KEY DISTINCTION: if the ball already bounced, this is a
+          // ground-ball fielding play (must throw to first), NOT a fly out.
+          const hasBounced = (ball.bounceCount ?? 0) > 0;
+          if (hasBounced) {
+            result.fielded = true;
+            result.event = {
+              type: 'ball-fielded',
+              by: fielder.position,
+              playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
+              at: { ...fielder.pos },
+            };
+          } else {
+            result.caught = true;
+            result.event = {
+              type: 'ball-caught',
+              by: fielder.position,
+              playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
+              at: { ...fielder.pos },
+            };
+          }
         }
       }
 
-      // If ball landed and is rolling, switch to chasing
+      // If ball landed and is rolling, only the closest fielder chases
       if (ball.state.type === 'rolling' || ball.state.type === 'idle') {
-        fielder.state = { type: 'chasing', target: { x: ball.pos.x, y: ball.pos.y } };
+        const ballPt = { x: ball.pos.x, y: ball.pos.y };
+        const myDist = dist2D(fielder.pos, ballPt);
+
+        // Tighter buffer (3ft) for tracking→chasing transition
+        const closerChaser = ctx?.allFielders.find(f =>
+          f !== fielder &&
+          (f.state.type === 'tracking' || f.state.type === 'chasing') &&
+          dist2D(f.pos, ballPt) < myDist - 3
+        );
+
+        if (closerChaser) {
+          const backupPt: Point2D = {
+            x: (fielder.homePos.x + ballPt.x) / 2,
+            y: (fielder.homePos.y + ballPt.y) / 2,
+          };
+          fielder.state = { type: 'backing-up', target: backupPt };
+        } else {
+          fielder.state = { type: 'chasing', target: ballPt };
+        }
       }
       break;
     }
@@ -293,34 +593,78 @@ export function tickFielder(
       if (ball.state.type === 'rolling') {
         fielder.state.target = { x: ball.pos.x, y: ball.pos.y };
       }
+
+      // ── Yield logic: if a teammate is closer to the ball, stop chasing ──
+      if (ctx && (ball.state.type === 'rolling' || ball.state.type === 'idle')) {
+        const ballPt = { x: ball.pos.x, y: ball.pos.y };
+        const myDist = dist2D(fielder.pos, ballPt);
+        // Tighter yield buffer (5ft) — fielders call off earlier
+        const closerChaser = ctx.allFielders.find(f =>
+          f !== fielder &&
+          (f.state.type === 'chasing' || f.state.type === 'tracking') &&
+          dist2D(f.pos, ballPt) < myDist - 5
+        );
+        if (closerChaser) {
+          const backupPt: Point2D = {
+            x: (fielder.homePos.x + ballPt.x) / 2,
+            y: (fielder.homePos.y + ballPt.y) / 2,
+          };
+          fielder.state = { type: 'backing-up', target: backupPt };
+          break;
+        }
+      }
+
       const arrived = moveToward(fielder, fielder.state.target, dt);
 
-      // Check if close enough to pick up (collider-based)
+      // Check if close enough to pick up — FLD determines field radius
+      const fieldRadius = fieldRadiusForSkills(fielder.defense ?? 5);
       const distToBall = dist2D(fielder.pos, ball.pos);
-      if (distToBall < COLLIDERS.fieldGrounder && ball.pos.z < 3 &&
-          (ball.state.type === 'rolling' || ball.state.type === 'idle') &&
-          isFacingPoint(fielder, { x: ball.pos.x, y: ball.pos.y }, FIELD_FACING_TOLERANCE_RAD)) {
-        ball.state = { type: 'held', by: fielder.position };
-        fielder.state = { type: 'has-ball', decideSec: decisionTimeSec(fielder.playIntelligence ?? 5) };
-        result.fielded = true;
-        result.event = {
-          type: 'ball-fielded',
-          by: fielder.position,
-          playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
-          at: { ...fielder.pos },
-        };
+      if (distToBall < fieldRadius && ball.pos.z < 3 &&
+          (ball.state.type === 'rolling' || ball.state.type === 'idle')) {
+        // If within 2ft of the ball, auto-face it — you're standing on it,
+        // just bend down and pick it up regardless of facing direction.
+        // Beyond 2ft, still require facing check (approaching the ball).
+        const veryClose = distToBall < 2;
+        if (veryClose) {
+          fielder.facingRad = angleToPoint(fielder.pos, { x: ball.pos.x, y: ball.pos.y });
+        }
+        const facingOk = veryClose ||
+          isFacingPoint(fielder, { x: ball.pos.x, y: ball.pos.y }, FIELD_FACING_TOLERANCE_RAD);
+
+        if (facingOk) {
+          // FLD + AG determine transfer time (glove → hand → throwing position)
+          const transfer = transferTimeSec(fielder.defense ?? 5, fielder.agility ?? 5);
+          ball.state = { type: 'held', by: fielder.position };
+          fielder.state = {
+            type: 'has-ball',
+            decideSec: decisionTimeSec(fielder.playIntelligence ?? 5) + transfer,
+          };
+          result.fielded = true;
+          result.event = {
+            type: 'ball-fielded',
+            by: fielder.position,
+            playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
+            at: { ...fielder.pos },
+          };
+        }
       }
       break;
     }
 
     case 'has-ball': {
-      // Decide where to throw (countdown)
+      // Count down the PI-based decision timer (includes transfer time).
+      // When it expires, if a throw target was provided, transition to
+      // throwing with a position + AG-based windup.
       fielder.state.decideSec -= dt;
-      if (fielder.state.decideSec <= 0) {
-        // Default: throw to second base (simplified for Phase 1)
-        const target = getBaseAnchor('second');
-        fielder.state = { type: 'throwing', target, windupSec: 0.15 };
+      if (fielder.state.decideSec <= 0 && fielder.state.throwTarget) {
+        fielder.state = {
+          type: 'throwing',
+          target: fielder.state.throwTarget,
+          throwBase: fielder.state.throwBase,
+          windupSec: windupTimeSec(fielder.position, fielder.agility ?? 5),
+        };
       }
+      // If no throwTarget, the tick engine main loop will handle it
       break;
     }
 
@@ -338,13 +682,14 @@ export function tickFielder(
       fielder.state.windupSec -= dt;
       if (fielder.state.windupSec <= 0) {
         // Release the throw
-        throwBall(ball, fielder.pos, fielder.state.target, fielder.throwVeloFps, fielder.position);
+        throwBall(ball, fielder.pos, fielder.state.target, fielder.throwVeloFps, fielder.position,
+          fielder.throwingSkill ?? 5, fielder.agility ?? 5);
         result.threw = true;
         result.event = {
           type: 'throw-released',
           from: fielder.position,
           fromId: fielder.playerId > 0 ? fielder.playerId : undefined,
-          toBase: 'second',
+          toBase: fielder.state.throwBase ?? 'unknown',
         };
         fielder.state = { type: 'returning' };
       }
@@ -353,13 +698,68 @@ export function tickFielder(
 
     case 'covering': {
       moveToward(fielder, fielder.state.base, dt);
+
+      // ── Ball awareness: covering fielders can field/catch balls near them ──
+      // Rolling or idle ball within field radius → pick it up
+      if ((ball.state.type === 'rolling' || ball.state.type === 'idle') && ball.pos.z < 3) {
+        const distToBall = dist2D(fielder.pos, ball.pos);
+        const fieldRadius = fieldRadiusForSkills(fielder.defense ?? 5);
+        if (distToBall < fieldRadius + 2) {
+          // Auto-face and pick up
+          fielder.facingRad = angleToPoint(fielder.pos, { x: ball.pos.x, y: ball.pos.y });
+          const transfer = transferTimeSec(fielder.defense ?? 5, fielder.agility ?? 5);
+          ball.state = { type: 'held', by: fielder.position };
+          fielder.state = {
+            type: 'has-ball',
+            decideSec: decisionTimeSec(fielder.playIntelligence ?? 5) + transfer,
+          };
+          result.fielded = true;
+          result.event = {
+            type: 'ball-fielded',
+            by: fielder.position,
+            playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
+            at: { ...fielder.pos },
+          };
+          break;
+        }
+      }
+
+      // In-flight ball within catch radius → catch it
+      if (ball.state.type === 'in-flight') {
+        const distToBall = dist2D(fielder.pos, ball.pos);
+        const catchRadius = catchRadiusForSkills(fielder.defense ?? 5, fielder.playIntelligence ?? 5);
+        if (distToBall < catchRadius && ball.pos.z < 12 && ball.pos.z > 0) {
+          const transfer = transferTimeSec(fielder.defense ?? 5, fielder.agility ?? 5);
+          ball.state = { type: 'held', by: fielder.position };
+          fielder.state = {
+            type: 'has-ball',
+            decideSec: decisionTimeSec(fielder.playIntelligence ?? 5) + transfer,
+          };
+          result.caught = true;
+          result.event = {
+            type: 'ball-caught',
+            by: fielder.position,
+            playerId: fielder.playerId > 0 ? fielder.playerId : undefined,
+            at: { ...fielder.pos },
+          };
+          break;
+        }
+      }
+
       // Check if a thrown ball arrives (collider-based)
       if (ball.state.type === 'thrown') {
         const distToBall = dist2D(fielder.pos, ball.pos);
-        if (distToBall < COLLIDERS.receiveThrow &&
-            ball.pos.z < 8 &&
-            ball.pos.z > 0 &&
-            isFacingPoint(fielder, { x: ball.pos.x, y: ball.pos.y }, RECEIVE_FACING_TOLERANCE_RAD)) {
+        // Use a generous receive radius for covering fielders (they're
+        // waiting for the ball, actively reaching for it)
+        const receiveRadius = COLLIDERS.receiveThrow + 2;  // 8 ft
+        if (distToBall < receiveRadius &&
+            ball.pos.z < 10 &&
+            ball.pos.z > 0) {
+          // Auto-face incoming throw — fielders watching the throw
+          // naturally turn to face it
+          const toBall = angleToPoint(fielder.pos, { x: ball.pos.x, y: ball.pos.y });
+          fielder.facingRad = toBall;
+
           ball.state = { type: 'held', by: fielder.position };
           fielder.state = { type: 'has-ball', decideSec: 0.8 };
           result.event = {
@@ -396,7 +796,24 @@ export function tickFielder(
     }
 
     case 'backing-up': {
-      moveToward(fielder, fielder.state.target, dt, fielder.speedFps * 0.7);
+      // Sprint to backup position (90% speed — hustle, not jog)
+      moveToward(fielder, fielder.state.target, dt, fielder.speedFps * 0.9);
+
+      // ── Loose-ball instinct: if a rolling/idle ball is close, chase it ──
+      if ((ball.state.type === 'rolling' || ball.state.type === 'idle') && ball.pos.z < 3) {
+        const distToBall = dist2D(fielder.pos, ball.pos);
+        // Only break from backup if ball is within 20ft and no one else is closer
+        if (distToBall < 20) {
+          const closerFielder = ctx?.allFielders.find(f =>
+            f !== fielder &&
+            (f.state.type === 'chasing' || f.state.type === 'tracking') &&
+            dist2D(f.pos, ball.pos) < distToBall
+          );
+          if (!closerFielder) {
+            fielder.state = { type: 'chasing', target: { x: ball.pos.x, y: ball.pos.y } };
+          }
+        }
+      }
       break;
     }
 

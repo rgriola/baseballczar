@@ -3,7 +3,7 @@
 'use client';
 
 import { useMemo, useState, useTransition } from 'react';
-import { toggleRosterStatus, updateRotation } from '../actions';
+import { toggleRosterStatus, updateRotation, setGameRotation } from '../actions';
 import { CountryFlag } from '../roster/country-flag';
 
 const HAND_LABEL: Record<number, string> = { 1: 'R', 2: 'L', 3: 'S' };
@@ -129,9 +129,13 @@ function buildInitialAssignments(sortedPitchers: Pitcher[]): InitialAssignments 
 export default function PitchingStaffEditor({
   pitchers,
   nextStarterSlot,
+  scheduleId,
+  gameLabel,
 }: {
   pitchers: Pitcher[];
   nextStarterSlot: number;
+  scheduleId?: number;
+  gameLabel?: string;
 }) {
   const initialPitchers = useMemo(() => [...pitchers].sort(byPitcherSort), [pitchers]);
   const initialAssignments = useMemo(() => buildInitialAssignments(initialPitchers), [initialPitchers]);
@@ -405,9 +409,15 @@ export default function PitchingStaffEditor({
     formData.set('bullpenIds', JSON.stringify(relieverIds));
     formData.set('closerId', JSON.stringify(closerId));
 
+    if (scheduleId) {
+      formData.set('scheduleId', String(scheduleId));
+    }
+
     startSaveTransition(async () => {
-      const result = await updateRotation(formData);
-      setMessage(result.error ?? 'Pitching staff saved!');
+      const result = scheduleId
+        ? await setGameRotation(formData)
+        : await updateRotation(formData);
+      setMessage(result.error ?? (scheduleId ? 'Game pitching staff saved!' : 'Pitching staff saved!'));
     });
   }
 
@@ -432,6 +442,12 @@ export default function PitchingStaffEditor({
   ];
 
   return (
+    <div>
+      {gameLabel && (
+        <div className="mb-4 rounded-lg border border-amber-700/50 bg-amber-900/20 px-4 py-2.5 text-sm text-amber-200">
+          ⚾ <strong>{gameLabel}</strong> — Changes apply to this game only. Your default rotation is unchanged.
+        </div>
+      )}
     <div className="grid gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
       <section className="rounded-lg border border-gray-800 bg-gray-900/40 p-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -666,6 +682,7 @@ export default function PitchingStaffEditor({
           </table>
         </div>
       </section>
+    </div>
     </div>
   );
 }

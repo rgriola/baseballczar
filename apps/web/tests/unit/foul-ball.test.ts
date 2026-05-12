@@ -11,6 +11,7 @@ import {
 function makePlayer(position: Position, id: number): Player {
   return {
     id,
+    jerseyNumber: id,
     firstName: 'Test',
     lastName: position,
     hand: 'R',

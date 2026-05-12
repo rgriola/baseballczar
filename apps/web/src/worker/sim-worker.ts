@@ -1,4 +1,4 @@
-// Last touched by agent: 2026-05-07T22:25:00Z
+// Last touched by agent: 2026-05-12T08:30:00Z
 import fs from 'node:fs';
 import { Worker, Job } from 'bullmq';
 import type { SimJobData } from '@/lib/queues/sim-queue';
@@ -6,13 +6,28 @@ import { createServiceClient } from '@/lib/supabase/service';
 import { simulateScheduledGame } from '@/lib/sim/simulate-scheduled-game';
 import { logger } from '@/lib/logger';
 
+/* ------------------------------------------------------------------ */
+/*  Types                                                              */
+/* ------------------------------------------------------------------ */
+
 type QueueConnection = {
   ping: () => Promise<unknown>;
   quit: () => Promise<unknown>;
   disconnect: () => void;
+  status: string;
 };
 
+/* ------------------------------------------------------------------ */
+/*  Shutdown state                                                     */
+/* ------------------------------------------------------------------ */
+
 let shuttingDown = false;
+const GRACEFUL_TIMEOUT_MS = 15_000; // max time to wait for in-flight job
+const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1_000; // 5 min
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
 
 /**
  * Sim-game worker — processes queued game simulations one at a time.
@@ -72,47 +87,90 @@ function ensureRedisEnvLoaded(): void {
   hydrateWorkerEnvFromFile('apps/web/.env');
 }
 
+/* ------------------------------------------------------------------ */
+/*  Graceful shutdown                                                  */
+/* ------------------------------------------------------------------ */
+
 async function shutdownWorker(
-  signal: NodeJS.Signals,
+  reason: string,
   worker: Worker<SimJobData>,
   connection: QueueConnection,
 ): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  logger.info({ signal }, 'sim-worker shutdown requested');
+  logger.info({ reason }, 'sim-worker shutdown requested — draining in-flight jobs…');
 
+  // Force-exit safety net in case graceful drain hangs
   const forceExitTimer = setTimeout(() => {
-    logger.warn({ signal }, 'sim-worker graceful shutdown timed out; forcing exit');
-    connection.disconnect();
+    logger.warn({ reason }, 'sim-worker graceful shutdown timed out after %dms; forcing exit', GRACEFUL_TIMEOUT_MS);
+    try { connection.disconnect(); } catch { /* best effort */ }
     process.exit(0);
-  }, 8000);
+  }, GRACEFUL_TIMEOUT_MS);
   forceExitTimer.unref();
 
   try {
+    // worker.close() waits for any running job processor to finish,
+    // then cleanly de-registers from the queue
     await worker.close();
+    logger.info('sim-worker drained — closing Redis connection…');
     await connection.quit();
     clearTimeout(forceExitTimer);
-    logger.info({ signal }, 'sim-worker shutdown complete');
+    logger.info({ reason }, 'sim-worker shutdown complete');
     process.exit(0);
   } catch (err) {
     clearTimeout(forceExitTimer);
     const message = err instanceof Error ? err.message : String(err);
-    logger.error({ signal, err: message }, 'sim-worker shutdown failed; forcing exit');
-    connection.disconnect();
+    logger.error({ reason, err: message }, 'sim-worker error during shutdown; forcing exit');
+    try { connection.disconnect(); } catch { /* best effort */ }
     process.exit(0);
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*  Signal & crash handlers                                            */
+/* ------------------------------------------------------------------ */
+
 function registerShutdownHandlers(worker: Worker<SimJobData>, connection: QueueConnection): void {
-  process.once('SIGINT', () => {
-    void shutdownWorker('SIGINT', worker, connection);
+  const handle = (signal: string) => {
+    void shutdownWorker(signal, worker, connection);
+  };
+
+  // Process signals
+  process.once('SIGINT', () => handle('SIGINT'));
+  process.once('SIGTERM', () => handle('SIGTERM'));
+  process.once('SIGHUP', () => handle('SIGHUP'));
+
+  // Catch-all for uncaught errors — log and exit cleanly rather than crashing
+  process.once('uncaughtException', (err) => {
+    logger.fatal({ err: err.message, stack: err.stack }, 'sim-worker uncaught exception');
+    void shutdownWorker('uncaughtException', worker, connection);
   });
 
-  process.once('SIGTERM', () => {
-    void shutdownWorker('SIGTERM', worker, connection);
+  process.once('unhandledRejection', (reason) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    logger.fatal({ err: msg }, 'sim-worker unhandled rejection');
+    void shutdownWorker('unhandledRejection', worker, connection);
   });
 }
+
+/* ------------------------------------------------------------------ */
+/*  Heartbeat                                                          */
+/* ------------------------------------------------------------------ */
+
+function startHeartbeat(connection: QueueConnection): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    if (shuttingDown) return;
+    const redisStatus = connection.status ?? 'unknown';
+    logger.info({ redis: redisStatus }, 'sim-worker heartbeat — still listening');
+  }, HEARTBEAT_INTERVAL_MS);
+  timer.unref(); // don't prevent graceful exit
+  return timer;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Bootstrap                                                          */
+/* ------------------------------------------------------------------ */
 
 async function bootstrapWorker(): Promise<void> {
   ensureRedisEnvLoaded();
@@ -132,6 +190,7 @@ async function bootstrapWorker(): Promise<void> {
     'sim-game',
     async (job: Job<SimJobData>) => {
       const { scheduleId } = job.data;
+      logger.info({ jobId: job.id, scheduleId }, 'sim job started');
       const supabase = createServiceClient();
       const result = await simulateScheduledGame(supabase, scheduleId);
       return result;
@@ -142,6 +201,8 @@ async function bootstrapWorker(): Promise<void> {
     },
   );
 
+  /* --- Worker event listeners --- */
+
   worker.on('completed', (job) => {
     logger.info({ jobId: job.id, scheduleId: job.data.scheduleId }, 'sim job completed');
   });
@@ -151,10 +212,16 @@ async function bootstrapWorker(): Promise<void> {
   });
 
   worker.on('error', (err) => {
-    logger.error({ err: err.message }, 'sim-worker runtime error');
+    // Non-fatal — BullMQ/IORedis will auto-reconnect; just log it
+    if (!shuttingDown) {
+      logger.warn({ err: err.message }, 'sim-worker transient error (will auto-reconnect)');
+    }
   });
 
+  /* --- Wire everything up --- */
+
   registerShutdownHandlers(worker, connection);
+  startHeartbeat(connection);
 
   logger.info('sim-worker listening for jobs');
 }

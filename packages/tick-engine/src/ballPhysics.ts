@@ -197,6 +197,7 @@ export function launchBall(
 
   ball.pos = { x: 0, y: 0, z: CONTACT_HEIGHT_FT };  // bat height at home plate
   ball.state = { type: 'in-flight', vel: { x: vx, y: vy, z: vz } };
+  ball.bounceCount = 0;  // fresh hit — hasn't touched the ground yet
 }
 
 /**
@@ -257,6 +258,7 @@ export function tickBall(ball: BallEntity, dt: number): TickBallResult {
     // Landing detection
     if (ball.pos.z <= 0) {
       ball.pos.z = 0;
+      ball.bounceCount = (ball.bounceCount ?? 0) + 1;  // track ground contacts
       result.landed = true;
       result.landingPoint = { x: ball.pos.x, y: ball.pos.y };
 
@@ -340,20 +342,36 @@ export function tickBall(ball: BallEntity, dt: number): TickBallResult {
     ball.pos.y += vel.y * dt;
     ball.pos.z += vel.z * dt;
 
-    // Catch height: ~3-5 ft
-    if (ball.pos.z <= 3) {
-      const target = ball.state.target;
-      const distToTarget = Math.hypot(ball.pos.x - target.x, ball.pos.y - target.y);
-      if (distToTarget < 8) {
-        // Close enough to receiver — they catch it
-        ball.pos.z = 3;
-        ball.state = { type: 'held', by: ball.state.thrower };
-        result.caught = true;
-      }
+    const target = ball.state.target;
+    const distToTarget = Math.hypot(ball.pos.x - target.x, ball.pos.y - target.y);
+
+    // When the ball is near the target and at a catchable height, snap to
+    // a receivable position so the covering fielder's collider catches it.
+    // Don't assign 'held' here — let fielderAI.ts handle who receives it.
+    if (distToTarget < 10 && ball.pos.z <= 5) {
+      // Clamp height to chest level so the covering fielder can grab it
+      ball.pos.z = Math.max(3, ball.pos.z);
+      // Slow the ball dramatically — it's "arriving" at the receiver
+      vel.x *= 0.3;
+      vel.y *= 0.3;
+      vel.z = 0;
     }
+
+    // Only bounce to rolling if the ball is NOT near any target
+    // (i.e., a truly wild throw that sailed past everyone)
     if (ball.pos.z <= 0) {
       ball.pos.z = 0;
-      ball.state = { type: 'rolling', vel: { x: vel.x * 0.5, y: vel.y * 0.5 } };
+      if (distToTarget > 15) {
+        // Wild throw — no one nearby, becomes rolling
+        ball.state = { type: 'rolling', vel: { x: vel.x * 0.5, y: vel.y * 0.5 } };
+      } else {
+        // Near the target — held by the intended receiver
+        // The covering fielder will pick it up via their collider on the next tick
+        ball.pos.z = 1;
+        vel.x *= 0.2;
+        vel.y *= 0.2;
+        vel.z = 0;
+      }
     }
   }
 
@@ -370,9 +388,31 @@ export interface TickBallResult {
   wallHitPoint?: Point2D;
   wallCrossHeightFt?: number;
 }
+/**
+ * Deterministic noise in [-1, 1] range. Uses a simple hash of the
+ * input values so the same throw always produces the same scatter.
+ * NOT crypto-quality — just needs to be consistent and spread well.
+ */
+function deterministicNoise(a: number, b: number, c: number, d: number): number {
+  // Simple integer hash mixing
+  let h = ((a * 73856093) ^ (b * 19349663) ^ (c * 83492791) ^ (d * 48611953)) | 0;
+  h = ((h >> 16) ^ h) * 0x45d9f3b;
+  h = ((h >> 16) ^ h) * 0x45d9f3b;
+  h = (h >> 16) ^ h;
+  // Map to [-1, 1]
+  return ((h & 0xFFFF) / 0x7FFF) - 1;
+}
 
 /**
  * Initiate a throw from a fielder to a target point.
+ *
+ * Throw accuracy is skill-dependent:
+ *   - TH (throwing skill) is the primary accuracy factor
+ *   - AG (agility) affects release consistency
+ *   - Distance scales scatter (longer throws are harder)
+ *
+ * All scatter is deterministic — derived from throw parameters,
+ * not Math.random() — so replays are identical.
  */
 export function throwBall(
   ball: BallEntity,
@@ -380,26 +420,81 @@ export function throwBall(
   to: Point2D,
   throwVeloFps: number,
   thrower: string,
+  throwingSkill: number = 5,
+  agility: number = 5,
 ): void {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const dist = Math.hypot(dx, dy);
-  const flightTime = dist / throwVeloFps;
+  if (dist < 1) {
+    // Trivial throw (at same location) — just hold
+    ball.pos = { x: from.x, y: from.y, z: 5 };
+    ball.state = { type: 'held', by: thrower };
+    return;
+  }
 
-  // Calculate launch angle for the throw to arrive at ~3 ft height
-  const vHoriz = dist / flightTime;
-  // Solve for vz so ball arrives at z=3 after flightTime:
-  //   3 = 3 + vz*t - 0.5*g*t²  →  vz = 0.5*g*t
-  const vz = 0.5 * G * flightTime;
+  // ─── Throw scatter ─────────────────────────────────────────────
+  // TH skill controls base accuracy. AG affects consistency.
+  // Scatter scales with distance (longer = harder to control).
+  const th = Math.max(1, Math.min(10, throwingSkill));
+  const ag = Math.max(1, Math.min(10, agility));
 
+  // Base scatter at 100 ft:
+  //   TH 10 = ±0.5 ft (laser arm)
+  //   TH  5 = ±2.5 ft (average)
+  //   TH  1 = ±5.0 ft (weak arm)
+  const baseScatterPer100 = 5.5 - th * 0.5;
+  // AG consistency: low AG adds random extra scatter
+  const agPenalty = Math.max(0, (5 - ag) * 0.3);
+  const scatterMag = (baseScatterPer100 + agPenalty) * (dist / 100);
+
+  // Deterministic noise — same throw always gets same scatter
+  const noiseX = deterministicNoise(
+    Math.round(from.x * 10), Math.round(from.y * 10),
+    Math.round(to.x * 10), Math.round(to.y * 10),
+  );
+  const noiseY = deterministicNoise(
+    Math.round(to.x * 10), Math.round(from.y * 10),
+    Math.round(from.x * 10), Math.round(to.y * 10),
+  );
+
+  // Apply scatter perpendicular to the throw line (more realistic
+  // than scattering in x/y — a wild throw drifts left/right of the
+  // line, not randomly in field space)
   const unitX = dx / dist;
   const unitY = dy / dist;
+  // Perpendicular direction (rotate 90°)
+  const perpX = -unitY;
+  const perpY = unitX;
+  // Lateral scatter (perpendicular to throw line)
+  const lateralScatter = noiseX * scatterMag;
+  // Along-line scatter (short/long, smaller magnitude)
+  const lineScatter = noiseY * scatterMag * 0.3;
+
+  const actualTargetX = to.x + perpX * lateralScatter + unitX * lineScatter;
+  const actualTargetY = to.y + perpY * lateralScatter + unitY * lineScatter;
+
+  const actualDx = actualTargetX - from.x;
+  const actualDy = actualTargetY - from.y;
+  const actualDist = Math.hypot(actualDx, actualDy);
+
+  const flightTime = actualDist / throwVeloFps;
+
+  // Calculate launch angle for the throw to arrive at ~3 ft height
+  const vHoriz = actualDist / flightTime;
+  // Solve for vz so ball arrives at z=3 after flightTime:
+  //   3 = 5 + vz*t - 0.5*g*t²  →  vz = (3 - 5 + 0.5*g*t²) / t
+  //   Simplified: vz = 0.5*g*t (for arrival at same height)
+  const vz = 0.5 * G * flightTime;
+
+  const aUnitX = actualDx / actualDist;
+  const aUnitY = actualDy / actualDist;
 
   ball.pos = { x: from.x, y: from.y, z: 5 };  // release height
   ball.state = {
     type: 'thrown',
-    vel: { x: vHoriz * unitX, y: vHoriz * unitY, z: vz },
-    target: to,
+    vel: { x: vHoriz * aUnitX, y: vHoriz * aUnitY, z: vz },
+    target: to,  // keep original target for receiver positioning
     thrower,
   };
 }

@@ -6,9 +6,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import TickFieldCanvas from '@/components/sim-v2-tick/TickFieldCanvas';
 import {
   formatTickEvents,
+  createPbpState,
   type PbpEntry,
 } from '@baseballczar/tick-engine/formatPbp';
 import type { TickEvent } from '@baseballczar/tick-engine';
+import type { DebugPlayerLookup } from '@/components/sim-v2-tick/tickScene';
 import {
   buildPersistedSnapshots,
   num,
@@ -34,11 +36,10 @@ function shortPlayerName(
 ): string {
   const person = resolvePlayerName(players);
   if (!person) return fallback;
-  const firstInitial = person.first_name?.trim()?.charAt(0);
   const last = person.last_name?.trim();
-  if (firstInitial && last) return `${firstInitial}. ${last}`;
-  if (last) return last;
-  return fallback;
+  if (!last) return fallback;
+  const jersey = person.jersey_no != null ? `#${String(person.jersey_no).padStart(2, '0')} ` : '';
+  return `${jersey}${last}`;
 }
 
 function lastNonZeroInning(lines: number[]): number {
@@ -62,7 +63,10 @@ export default function PersistedReplay({
   const [pbpEntries, setPbpEntries] = useState<PbpEntry[]>([]);
   const [pbpOpen, setPbpOpen] = useState(true);
   const [boxOpen, setBoxOpen] = useState(initialView === 'box');
+  const [showDebugTags, setShowDebugTags] = useState(false);
+  const [debugBallCoords, setDebugBallCoords] = useState(false);
   const pbpScrollRef = useRef<HTMLDivElement>(null);
+  const pbpStateRef = useRef(createPbpState());
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +101,39 @@ export default function PersistedReplay({
     };
   }, [gameId]);
 
+  // D key toggles debug player tags, B key toggles ball coordinates
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      if (key !== 'd' && key !== 'b') return;
+      // Don't toggle if user is typing in an input
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (key === 'd') setShowDebugTags(prev => !prev);
+      if (key === 'b') setDebugBallCoords(prev => !prev);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Build debug player lookup from payload (jersey# + last name)
+  const playerLookup = useMemo<DebugPlayerLookup>(() => {
+    if (!payload) return {};
+    const lookup: DebugPlayerLookup = {};
+    const addPlayer = (pid: number, p: PersistedPlayerName | PersistedPlayerName[] | null | undefined) => {
+      const info = resolvePlayerName(p);
+      if (!info) return;
+      lookup[pid] = {
+        lastName: info.last_name?.trim() ?? '',
+        position: info.position ?? '',
+        jerseyNumber: info.jersey_no ?? 0,
+      };
+    };
+    for (const h of payload.hitting) addPlayer(h.player_id, h.players);
+    for (const p of payload.pitching) addPlayer(p.player_id, p.players);
+    return lookup;
+  }, [payload]);
+
   // Re-simulation runs synchronously but can take 1-2s for a full game.
   // We use a separate state to show a loading indicator during computation.
   const replay = useMemo(() => {
@@ -104,8 +141,9 @@ export default function PersistedReplay({
 
     // Diagnostic: check what data is available for resim
     const hasSeed = payload.game?.sim_seed != null;
-    const hasHomeSnap = payload.game?.home_roster_snapshot != null;
-    const hasVisitorSnap = payload.game?.visitor_roster_snapshot != null;
+    const gameRow = payload.game as Record<string, unknown> | undefined;
+    const hasHomeSnap = gameRow?.['home_roster_snapshot'] != null;
+    const hasVisitorSnap = gameRow?.['visitor_roster_snapshot'] != null;
     console.log('[Replay] Seed:', hasSeed, '| HomeSnap:', hasHomeSnap, '| VisitorSnap:', hasVisitorSnap);
 
     // Use tick engine re-simulation if roster snapshots are available
@@ -131,7 +169,7 @@ export default function PersistedReplay({
 
   const onEvent = useCallback((events: TickEvent[], time: number) => {
     if (!events.length) return;
-    const formatted = formatTickEvents(events, time);
+    const formatted = formatTickEvents(events, time, showDebugTags, pbpStateRef.current, debugBallCoords);
     if (!formatted.length) return;
     setPbpEntries((prev) => {
       const next = [...prev];
@@ -140,8 +178,8 @@ export default function PersistedReplay({
         const repeatedLanding = Boolean(
           last
           && last.text === entry.text
-          && last.text.includes('Ball lands at')
-          && entry.text.includes('Ball lands at'),
+          && last.text.includes('ball landed')
+          && entry.text.includes('ball landed'),
         );
         if (!repeatedLanding) {
           next.push(entry);
@@ -149,7 +187,7 @@ export default function PersistedReplay({
       }
       return next.slice(-500);
     });
-  }, []);
+  }, [showDebugTags, debugBallCoords]);
 
   useEffect(() => {
     const el = pbpScrollRef.current;
@@ -247,6 +285,8 @@ export default function PersistedReplay({
             autoplay
             speed={1}
             onEvent={onEvent}
+            debugPlayerTags={showDebugTags}
+            playerLookup={playerLookup}
           />
         </div>
 
@@ -339,7 +379,6 @@ export default function PersistedReplay({
                         <thead>
                           <tr className="border-b border-zinc-700 text-zinc-500">
                             <th className="py-0.5 text-left">Player</th>
-                            <th className="w-6 py-0.5 text-center">Pos</th>
                             <th className="w-6 py-0.5 text-center">AB</th>
                             <th className="w-5 py-0.5 text-center">R</th>
                             <th className="w-5 py-0.5 text-center">H</th>
@@ -357,19 +396,27 @@ export default function PersistedReplay({
                               </td>
                             </tr>
                           ) : (
-                            team.rows.map((row) => (
-                              <tr key={row.id} className="border-b border-zinc-800/30">
-                                <td className="py-0.5 text-zinc-200">{shortPlayerName(row.players, `#${row.player_id}`)}</td>
-                                <td className="py-0.5 text-center text-zinc-500">{resolvePlayerName(row.players)?.position ?? row.position ?? '-'}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.ab)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.r)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.h)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.hr)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.rbi)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.bb)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.so)}</td>
-                              </tr>
-                            ))
+                            team.rows.map((row) => {
+                              const person = resolvePlayerName(row.players);
+                              const pos = person?.position ?? row.position ?? '-';
+                              const posDisplay = pos === 'B1' ? '1B' : pos === 'B2' ? '2B' : pos === 'B3' ? '3B' : pos;
+                              return (
+                                <tr key={row.id} className="border-b border-zinc-800/30">
+                                  <td className="py-0.5 text-white text-left">
+                                    <span className="text-zinc-400">{shortPlayerName(row.players, `#${row.player_id}`).split(' ')[0]}</span>{' '}
+                                    {shortPlayerName(row.players, `#${row.player_id}`).split(' ').slice(1).join(' ')}{' '}
+                                    <span className="text-zinc-400">{posDisplay}</span>
+                                  </td>
+                                  <td className="py-0.5 text-center text-white">{num(row.ab)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.r)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.h)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.hr)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.rbi)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.bb)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.so)}</td>
+                                </tr>
+                              );
+                            })
                           )}
                         </tbody>
                       </table>
@@ -401,17 +448,25 @@ export default function PersistedReplay({
                               </td>
                             </tr>
                           ) : (
-                            team.rows.map((row) => (
-                              <tr key={row.id} className="border-b border-zinc-800/30">
-                                <td className="py-0.5 text-zinc-200">{shortPlayerName(row.players, `#${row.player_id}`)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.ip).toFixed(1)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.h)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.r)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.bb)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.so)}</td>
-                                <td className="py-0.5 text-center text-zinc-200">{num(row.hr)}</td>
-                              </tr>
-                            ))
+                            team.rows.map((row) => {
+                              const name = shortPlayerName(row.players, `#${row.player_id}`);
+                              const parts = name.split(' ');
+                              const jerseyPart = parts[0]; // #XX
+                              const namePart = parts.slice(1).join(' ');
+                              return (
+                                <tr key={row.id} className="border-b border-zinc-800/30">
+                                  <td className="py-0.5 text-white text-left">
+                                    <span className="text-zinc-400">{jerseyPart}</span>{' '}{namePart}
+                                  </td>
+                                  <td className="py-0.5 text-center text-white">{num(row.ip).toFixed(1)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.h)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.r)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.bb)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.so)}</td>
+                                  <td className="py-0.5 text-center text-white">{num(row.hr)}</td>
+                                </tr>
+                              );
+                            })
                           )}
                         </tbody>
                       </table>

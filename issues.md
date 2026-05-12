@@ -2,6 +2,12 @@
 
 # Issues Log (Sim + Web)
 
+
+- lineup defense is not aligned correctly. Players can be placed into the lineup not not resolve into the defensive positios. 
+- need a web worker to make sure each team has a full lineup, defense and pitching staff before the game, this should run prior to the sim but bot be part of the sim. 
+
+
+
 ## Resolved During Queue-First Sim Rollout
 
 - `POST /api/sim/sim-all` returned `500` in queue mode when BullMQ received `jobId` values with `:`.

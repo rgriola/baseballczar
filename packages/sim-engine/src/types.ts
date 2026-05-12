@@ -65,6 +65,7 @@ export interface Skills {
 
 export interface Player {
   id: number;
+  jerseyNumber: number;   // 1-99, unique within a team — visible on uniform
   firstName: string;
   lastName: string;
   hand: Hand;             // batting hand (and throwing for pitchers)

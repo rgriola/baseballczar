@@ -101,7 +101,7 @@ export function buildGroundOutThrowSequence(
 
   snapshots.push({
     time,
-    ball: { pos: { x: throwFrom.x, y: throwFrom.y, z: throwFromZ }, state: { type: 'held', by: input.throwerPos } },
+    ball: { pos: { x: throwFrom.x, y: throwFrom.y, z: throwFromZ }, state: { type: 'held', by: input.throwerPos }, bounceCount: 0 },
     fielders: buildDefenseFrameForThrow(input.defense, input.throwerPos, throwFrom, firstBase),
     runners: buildPlayRunners(
       input.beforeBase,
@@ -138,6 +138,7 @@ export function buildGroundOutThrowSequence(
         state: arrived
           ? { type: 'held', by: 'B1' }
           : { type: 'thrown', vel: throwVel, target: { x: firstBase.x, y: firstBase.y }, thrower: input.throwerPos },
+        bounceCount: 0,
       },
       fielders: buildDefenseFrameForThrow(input.defense, input.throwerPos, throwFrom, firstBase),
       runners: arrived

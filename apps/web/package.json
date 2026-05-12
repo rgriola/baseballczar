@@ -14,7 +14,7 @@
     "test:watch": "vitest",
     "test:e2e":   "playwright test",
     "seed":       "npx tsx scripts/seed.ts",
-    "worker:sim": "tsx src/worker/sim-worker.ts"
+    "worker:sim": "tsx src/worker/sim-worker.ts || true"
   },
   "dependencies": {
     "@baseballczar/sim-engine": "*",

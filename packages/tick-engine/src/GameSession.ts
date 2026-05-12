@@ -24,6 +24,7 @@ import type { AtBatRecord, Player, Team, GameResult, Position } from '@baseballc
 import { FIELDER_POSITIONS_FT } from '@baseballczar/sim-engine';
 import type { WorldSnapshot, TickEvent, Point2D } from './entities';
 import { simulateAtBatTick, type TickSimOptions } from './tickEngine';
+import { extractTickOutcome } from './tickAuthority';
 import {
   computeDefensiveAlignment,
   type GameSituation,
@@ -307,11 +308,18 @@ export class GameSession {
     // ── Simulate via tick engine ──────────────────
     let abSnapshots: WorldSnapshot[];
 
+    // Tick-authority result variables — hoisted so they're visible
+    // for both the batted-ball path and the game-state update below.
+    let tickResult = ab.result;
+    let tickRunsScored = ab.runsScored;
+    let tickRunnersAfter: { runnerId: number; base: 'first' | 'second' | 'third' }[] | null = null;
+    let tickOutsRecorded = 0;
+
     if (!ab.battedBall) {
       // Non-batted-ball AB (walk, K, HBP)
       abSnapshots = [{
         time: this._timeOffset,
-        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
+        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
         fielders: [], runners: [],
         events: [
           abStartEvent,
@@ -362,10 +370,22 @@ export class GameSession {
             fieldedByLabel = `${playerTag(fPlayer)} (${displayPos})`;
           }
         }
+
+    // ── TICK-ENGINE IS THE SINGLE SOURCE OF TRUTH ──
+        if (ab.battedBall) {
+          const tickOutcome = extractTickOutcome(
+            abSnapshots, ab.batter.id, ab.battedBall, this._runners,
+          );
+          tickResult = tickOutcome.outcome;
+          tickRunsScored = tickOutcome.statDeltas.runsScored;
+          tickOutsRecorded = tickOutcome.statDeltas.outsRecorded;
+          tickRunnersAfter = tickOutcome.runnersAfter;
+        }
+
         const lastSnap = abSnapshots[abSnapshots.length - 1];
         lastSnap.events = [
           ...lastSnap.events.filter(e => e.type !== 'play-complete'),
-          { type: 'at-bat-end', result: ab.result, batterId: ab.batter.id, batterName, rbis: ab.rbis, fieldedBy: fieldedByLabel },
+          { type: 'at-bat-end', result: tickResult, batterId: ab.batter.id, batterName, rbis: tickRunsScored, fieldedBy: fieldedByLabel },
           { type: 'play-complete' },
         ];
       }
@@ -381,20 +401,37 @@ export class GameSession {
       // Mound breather
       abSnapshots.push({
         time: this._timeOffset + 0.5,
-        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' } },
+        ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
         fielders: [], runners: [], events: [],
       });
       this._timeOffset += 1.5;
     }
 
-    // ── Update game state ──────────────────────────
+    // ── Update game state (use tick-authoritative result) ──────────
     this._pitchCount += ab.pitches.length;
     defensiveStrategic.pitchCount += ab.pitches.length;
-    const stateUpdate = this.updateGameState(ab);
-    this._runners = stateUpdate.runners;
-    this._outs = stateUpdate.outs;
-    this._homeScore += isHomeBatting ? ab.runsScored : 0;
-    this._awayScore += isHomeBatting ? 0 : ab.runsScored;
+
+    if (tickRunnersAfter) {
+      // Tick engine determined runner positions — use those directly
+      const playerById = new Map<number, Player>();
+      for (const r of this._runners) playerById.set(r.player.id, r.player);
+      playerById.set(ab.batter.id, ab.batter);
+
+      this._runners = tickRunnersAfter
+        .map(r => {
+          const player = playerById.get(r.runnerId);
+          return player ? { player, base: r.base } : null;
+        })
+        .filter((r): r is { player: Player; base: 'first' | 'second' | 'third' } => r !== null);
+      this._outs += tickOutsRecorded;
+    } else {
+      const patchedAb = { ...ab, result: tickResult, runsScored: tickRunsScored, rbis: tickRunsScored } as AtBatRecord;
+      const stateUpdate = this.updateGameState(patchedAb);
+      this._runners = stateUpdate.runners;
+      this._outs = stateUpdate.outs;
+    }
+    this._homeScore += isHomeBatting ? tickRunsScored : 0;
+    this._awayScore += isHomeBatting ? 0 : tickRunsScored;
     this._abIndex++;
 
     // Check if game is over

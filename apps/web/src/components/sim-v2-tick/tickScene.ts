@@ -38,6 +38,7 @@ export interface DebugPlayerLookup {
   [playerId: number]: {
     lastName: string;
     position: string;
+    jerseyNumber?: number;
   };
 }
 
@@ -94,7 +95,7 @@ export class TickScene {
   private readonly RUNNER_COLOR = 0xd4442a;  // red-orange for runners
   private readonly DEBUG_TAG_OFFSET_PX = 10;
   private showDebugPlayerTags = false;
-  private debugPlayerLookup = new Map<number, { lastName: string; position: string }>();
+  private debugPlayerLookup = new Map<number, { lastName: string; position: string; jerseyNumber: number }>();
 
   // Playback state
   private snapshots: WorldSnapshot[] = [];
@@ -231,6 +232,7 @@ export class TickScene {
       this.debugPlayerLookup.set(playerId, {
         lastName: info.lastName,
         position: info.position,
+        jerseyNumber: info.jerseyNumber ?? 0,
       });
     }
   }
@@ -589,9 +591,11 @@ export class TickScene {
       }
 
       const rosterInfo = this.debugPlayerLookup.get(f.playerId);
-      const lastName = rosterInfo?.lastName ?? `#${f.playerId}`;
+      const jerseyNo = f.jerseyNumber > 0 ? f.jerseyNumber : f.playerId;
+      const jerseyStr = String(jerseyNo).padStart(2, '0');
+      const lastName = rosterInfo?.lastName ?? 'Unknown';
       const posLabel = this.displayPosition(f.position);
-      sp.debugTag.text = `${posLabel} ${lastName}`;
+      sp.debugTag.text = `${posLabel} #${jerseyStr} ${lastName}`;
       sp.debugTag.position.set(0, -radiusPx - this.DEBUG_TAG_OFFSET_PX);
       sp.debugTag.visible = this.showDebugPlayerTags;
     }
@@ -664,8 +668,11 @@ export class TickScene {
 
       const rosterInfo = this.debugPlayerLookup.get(r.id);
       const posLabel = rosterInfo?.position ?? 'RUN';
-      const lastName = rosterInfo?.lastName ?? `#${r.id}`;
-      sp.debugTag.text = `${posLabel} ${lastName}`;
+      const jerseyNo = rosterInfo?.jerseyNumber && rosterInfo.jerseyNumber > 0
+        ? rosterInfo.jerseyNumber : r.id;
+      const jerseyStr = String(jerseyNo).padStart(2, '0');
+      const lastName = rosterInfo?.lastName ?? 'Unknown';
+      sp.debugTag.text = `${posLabel} #${jerseyStr} ${lastName}`;
       sp.debugTag.position.set(0, -radiusPx - this.DEBUG_TAG_OFFSET_PX);
       sp.debugTag.visible = this.showDebugPlayerTags && runnerVisible;
     }
