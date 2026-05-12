@@ -449,7 +449,7 @@ function makeFielder(
 function makeRunner(
   player: Player,
   base: 'first' | 'second' | 'third',
-  teamColor: number,
+  teamColor?: number,
 ): RunnerEntity {
   const pos = getRunnerOnBasePoint(base);
   const ag = player.skills.ag ?? 5;
@@ -462,11 +462,13 @@ function makeRunner(
     playIntelligence: player.skills.playIntelligence ?? 5,
     facingRad: facingToPoint(pos, BASE_POS.home),
     turnRateRad: turnRateFromAg(ag),
+    teamColor,
   };
 }
 
 function makeBatterRunner(
   player: Player,
+  teamColor?: number,
 ): RunnerEntity {
   const ag = player.skills.ag ?? 5;
   const start: Point2D = {
@@ -483,6 +485,7 @@ function makeBatterRunner(
     playIntelligence: player.skills.playIntelligence ?? 5,
     facingRad: facingToPoint(start, FIELDER_POSITIONS_FT.P),
     turnRateRad: turnRateFromAg(ag),
+    teamColor,
   };
 }
 
@@ -509,6 +512,8 @@ export interface TickSimOptions {
   errorBy?: string;
   /** Batter hand for defensive alignment ('L' or 'R'). */
   batterHand?: BatterHand;
+  /** Batting team uniform color (hex). Runners get this color. */
+  battingTeamColor?: number;
 }
 
 /**
@@ -539,15 +544,16 @@ export function simulateAtBatTick(
   };
 
   // Create runner entities from existing baserunners + batter
+  const battingColor = opts.battingTeamColor;
   const runners: RunnerEntity[] = [];
   if (opts.runners) {
     for (const r of opts.runners) {
-      runners.push(makeRunner(r.player, r.base, teamColor));
+      runners.push(makeRunner(r.player, r.base, battingColor));
     }
   }
   // Batter becomes a runner on contact
-  const batterRunner = makeBatterRunner(ab.batter);
-  const preContactBatter = makeBatterRunner(ab.batter);
+  const batterRunner = makeBatterRunner(ab.batter, battingColor);
+  const preContactBatter = makeBatterRunner(ab.batter, battingColor);
   const playerLabels = buildPlayerLabelMap(ab, defenseRoster, opts.runners);
 
   const situation: GameSituation = opts.situation ?? {
@@ -1236,6 +1242,7 @@ export function simulateAtBatTick(
           playIntelligence: r.playIntelligence,
           facingRad: r.facingRad,
           turnRateRad: r.turnRateRad,
+          teamColor: r.teamColor,
         }));
 
       const hasBatterRunner = snapshotRunners.some(r => r.id === batterRunner.id);
@@ -1249,6 +1256,7 @@ export function simulateAtBatTick(
           playIntelligence: preContactBatter.playIntelligence,
           facingRad: preContactBatter.facingRad,
           turnRateRad: preContactBatter.turnRateRad,
+          teamColor: preContactBatter.teamColor,
         });
       }
 

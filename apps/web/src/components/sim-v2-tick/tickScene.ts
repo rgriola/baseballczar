@@ -615,7 +615,8 @@ export class TickScene {
 
       // Create sprite if it doesn't exist
       if (!this.runnerSprites.has(r.id)) {
-        const { c, hat, hatOffsetPx } = makeRunnerSprite(this.RUNNER_COLOR, radiusPx);
+        const runnerColor = r.teamColor ?? this.RUNNER_COLOR;
+        const { c, hat, hatOffsetPx } = makeRunnerSprite(runnerColor, radiusPx);
         const debugTag = this.makeDebugTag(radiusPx);
         c.addChild(debugTag);
         this.entityLayer.addChild(c);

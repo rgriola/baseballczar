@@ -208,7 +208,12 @@ export function simulateFullGame(
     const defensiveStrategic = isHomeBatting ? awayStrategic : homeStrategic;
     const defensiveProfile = isHomeBatting ? awayProfile : homeProfile;
     const defenseMap = isHomeBatting ? awayDefense : homeDefense;
-    const teamColor = isHomeBatting ? 0x1e5631 : 0x2a3a6e;
+    // Team uniform colors: away = blue, home = red.
+    // Future: pull from team.primaryColor / team.secondaryColor.
+    const AWAY_COLOR = 0x2563eb;  // vibrant blue
+    const HOME_COLOR = 0xdc2626;  // vibrant red
+    const teamColor = isHomeBatting ? AWAY_COLOR : HOME_COLOR;        // defensive team
+    const battingTeamColor = isHomeBatting ? HOME_COLOR : AWAY_COLOR; // batting team
 
     const pitchingChangeDetail = syncPitcherFromAtBat(defensiveStrategic, ab.pitcher);
     if (pitchingChangeDetail) {
@@ -317,7 +322,7 @@ export function simulateFullGame(
         },
         batter: batterName, pitcher: pitcherName, abIndex: i,
       };
-      const pitchRunners = buildPitchRunners(runnersOnBase, ab.batter);
+      const pitchRunners = buildPitchRunners(runnersOnBase, ab.batter, battingTeamColor);
 
       for (let pi = 0; pi < ab.pitches.length; pi++) {
         const p = ab.pitches[pi];
@@ -361,6 +366,7 @@ export function simulateFullGame(
             playIntelligence: 5,
             facingRad: facingToPoint(pos, BASE_POS.home),
             turnRateRad: 4,
+            teamColor: battingTeamColor,
           };
         });
 
@@ -375,6 +381,7 @@ export function simulateFullGame(
           playIntelligence: 5,
           facingRad: facingToPoint(batterStart, BASE_POS.first),
           turnRateRad: 4,
+          teamColor: battingTeamColor,
         };
         jogRunners.push(batterJogger);
 
@@ -453,7 +460,7 @@ export function simulateFullGame(
     // ── Pre-contact pitches (count buildup) ────────────
     // Animate each pitch before the final contact pitch.
     const preContactPitches = ab.pitches.slice(0, -1);
-    const pitchRunners = buildPitchRunners(runnersOnBase, ab.batter);
+    const pitchRunners = buildPitchRunners(runnersOnBase, ab.batter, battingTeamColor);
 
     for (let pi = 0; pi < preContactPitches.length; pi++) {
       const p = preContactPitches[pi];
@@ -478,6 +485,7 @@ export function simulateFullGame(
       situation,
       errorType: ab.errorType,
       errorBy: ab.fielding?.errorBy,
+      battingTeamColor,
     });
 
     // Inject the CONTACT PITCH's PBP events into the tick engine's first snapshot
@@ -586,7 +594,7 @@ export function simulateFullGame(
     // ── 1-second mound breather ──────────────────────
     // Pitcher gets the ball back, everyone resets — give the game a breath
     const MOUND_PAUSE_SEC = 1.0;
-    const breathRunners = buildPitchRunners(runnersOnBase);
+    const breathRunners = buildPitchRunners(runnersOnBase, undefined, battingTeamColor);
     const idleSnap: WorldSnapshot = {
       time: timeOffset + 0.5,
       ball: { pos: { x: 0, y: 61, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
@@ -849,6 +857,7 @@ function emitPitchSnapshots(
 function buildPitchRunners(
   runnersOnBase: { player: Player; base: 'first' | 'second' | 'third' }[],
   batter?: Player,
+  teamColor?: number,
 ): RunnerEntity[] {
   const runners: RunnerEntity[] = runnersOnBase.map((r): RunnerEntity => {
     const pos = getRunnerOnBasePoint(r.base);
@@ -861,6 +870,7 @@ function buildPitchRunners(
       playIntelligence: r.player.skills.playIntelligence ?? 5,
       facingRad: facingToPoint(pos, BASE_POS.home),
       turnRateRad: turnRateFromAg(r.player.skills.ag),
+      teamColor,
     };
   });
 
@@ -881,6 +891,7 @@ function buildPitchRunners(
     playIntelligence: batter.skills.playIntelligence ?? 5,
     facingRad: facingToPoint(batterStart, FIELDER_POSITIONS_FT.P),
     turnRateRad: turnRateFromAg(batterAg),
+    teamColor,
   });
 
   return runners;
@@ -897,6 +908,7 @@ function cloneRunnersForSnapshot(runners: RunnerEntity[]): RunnerEntity[] {
     playIntelligence: r.playIntelligence,
     facingRad: r.facingRad,
     turnRateRad: r.turnRateRad,
+    teamColor: r.teamColor,
   }));
 }
 

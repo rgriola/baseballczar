@@ -72,6 +72,7 @@ export interface RunnerEntity {
   playIntelligence: number;          // 1-10 PI — baserunning reads, extra-base decisions
   facingRad: number;                 // current facing direction (radians)
   turnRateRad: number;               // max turning speed (radians/sec)
+  teamColor?: number;                // batting team uniform color (hex)
 }
 
 // ─── Game state (for HUD overlay) ────────────────────────────────
