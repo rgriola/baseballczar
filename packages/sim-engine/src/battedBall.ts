@@ -213,7 +213,7 @@ function findConverger(
     // over his shoulder, and physically can't run as fast. Modeled as
     // a time multiplier based on the dot product between his motion
     // vector and the toward-home unit vector. Skipped for catcher
-    // (always faces the ball) and grounders (no flight to track).
+    // (always faces the ball).
     if (!isGrounder && pos !== 'C' && pos !== 'P') {
       const fieldPtMag = Math.hypot(fielderPt.x, fielderPt.y);
       const motionDx = ball.landingPoint.x - fielderPt.x;
@@ -232,6 +232,44 @@ function findConverger(
         // Apply the direction penalty to the running portion only
         // (not the reaction time). Extract reaction from reach, scale
         // the movement portion, then add reaction back.
+        const reactionBonus = (fielder.skills.fielding - 5) * CONFIG.fielder.defenseReactionBonusSec;
+        const reaction = Math.max(0.1, CONFIG.fielder.reactionSec - reactionBonus);
+        const runTime = reach - reaction;
+        reach = reaction + runTime / Math.max(0.3, dirMul);
+      }
+    }
+    // ── Grounder direction-of-motion penalty ─────────────────────
+    // For grounders, the ball rolls outward along its spray vector.
+    // A fielder CHARGING the ball (moving against the ball's direction)
+    // has a clean read and can attack it — bonus. A fielder CHASING
+    // the ball (moving with its direction, ball going away) must run
+    // it down from behind — heavy penalty. Pure lateral ranging
+    // (perpendicular to ball path) is neutral.
+    //
+    // Computed as the dot product between the fielder's motion vector
+    // (home → intercept) and the ball's spray direction (home → landing).
+    //   +1 = chasing (ball going away)     → 0.55x speed (heavy penalty)
+    //    0 = pure lateral range            → ~0.85x speed
+    //   -1 = charging (ball coming at you) → 1.15x speed (bonus)
+    if (isGrounder && pos !== 'C') {
+      const motionDx = ball.landingPoint.x - fielderPt.x;
+      const motionDy = ball.landingPoint.y - fielderPt.y;
+      const motionMag = Math.hypot(motionDx, motionDy);
+      const ballDirMag = Math.hypot(ball.landingPoint.x, ball.landingPoint.y);
+      if (motionMag > 1 && ballDirMag > 1) {
+        const ballUx = ball.landingPoint.x / ballDirMag;
+        const ballUy = ball.landingPoint.y / ballDirMag;
+        const motionUx = motionDx / motionMag;
+        const motionUy = motionDy / motionMag;
+        // alignment ∈ [-1, 1]: +1 = chasing (same direction as ball),
+        // -1 = charging (opposite to ball direction)
+        const alignment = motionUx * ballUx + motionUy * ballUy;
+        // Map: -1 (charging) → 1.15, 0 (lateral) → 0.85, +1 (chasing) → 0.55
+        const grounderChargeMul = 1.15;
+        const grounderChaseMul = 0.55;
+        const norm = (alignment + 1) / 2;  // [0, 1]: 0=charging, 1=chasing
+        const dirMul = grounderChargeMul
+          + (grounderChaseMul - grounderChargeMul) * norm;
         const reactionBonus = (fielder.skills.fielding - 5) * CONFIG.fielder.defenseReactionBonusSec;
         const reaction = Math.max(0.1, CONFIG.fielder.reactionSec - reactionBonus);
         const runTime = reach - reaction;
