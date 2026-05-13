@@ -919,7 +919,7 @@ export function simulateAtBatTick(
         // Continuous extra-base: re-evaluate runners sitting on base
         if (!playComplete && !battedBall.isHomeRun) {
           for (const r of runners) {
-            if (r.state.type === 'on-base' && r.state.base !== 'third') {
+            if (r.state.type === 'on-base') {
               if (evaluateExtraBaseAdvance(r, ball, fielders, situation)) {
                 commandRunner(r, { type: 'advance', targetBase: nextBase(r.state.base) });
               }
@@ -1040,7 +1040,7 @@ export function simulateAtBatTick(
         // Continuous extra-base re-evaluation
         if (!playComplete) {
           for (const r of runners) {
-            if (r.state.type === 'on-base' && r.state.base !== 'third') {
+            if (r.state.type === 'on-base') {
               if (evaluateExtraBaseAdvance(r, ball, fielders, situation)) {
                 commandRunner(r, { type: 'advance', targetBase: nextBase(r.state.base) });
               }

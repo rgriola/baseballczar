@@ -443,11 +443,9 @@ export function commandTagUpRunners(
  * continue to the next base. Called when a runner reaches a base
  * and the ball is still in play.
  *
- * Decision factors:
- *   - Speed: can they beat the throw?
- *   - PI: do they read the play correctly?
- *   - Ball state: is it still rolling? Being fielded? Already thrown?
- *   - Distance: how far is the ball from the next base?
+ * This is the core runner decision engine. Evaluates real-time
+ * physics (ball position, fielder distance, throw trajectory)
+ * against runner speed and Play Intelligence (PI).
  *
  * Returns true if the runner should advance to the next base.
  */
@@ -462,8 +460,9 @@ export function evaluateExtraBaseAdvance(
   const currentBase = runner.state.base;
   const nextB = nextBase(currentBase);
 
-  // Don't try to score from 1B — too risky (would need 1B→2B→3B→home)
-  if (nextB === 'home' && currentBase !== 'third') {
+  // Already at 3B heading home is handled by normal base advancement
+  // Don't try to score from 1B directly (needs 1B→2B→3B→home chain)
+  if (nextB === 'home' && currentBase === 'first') {
     return false;
   }
 
@@ -472,24 +471,69 @@ export function evaluateExtraBaseAdvance(
   const runnerTime = runnerDist / runner.speedFps;
 
   const pi = runner.playIntelligence ?? 5;
-  const piMargin = (pi - 5) * 0.1;  // high PI = +0.5s margin, low PI = -0.4s
+  // PI margin: high PI = earlier commit, more aggressive
+  // PI 1: -0.6s (very conservative)
+  // PI 5: 0.0s  (neutral)
+  // PI 10: +0.75s (commits early on close plays)
+  const piMargin = (pi - 5) * 0.15;
 
-  // Don't stretch if the ball is already being thrown
+  // ── Ball is being THROWN ──────────────────────────────────────
   if (ball.state.type === 'thrown') {
-    // Ball in the air — too risky unless PI says otherwise
-    if (pi < 7) return false;
-    // High PI: check if the throw is going elsewhere
     const throwTarget = ball.state.target;
-    const throwGoingToNextBase = dist2D(throwTarget, nextBasePt) < 15;
-    if (throwGoingToNextBase) return false;  // throw is coming to us
-    // Throw is going elsewhere — we can advance
-    return runnerTime < 2.0;  // only if close
+    const throwToNextBase = dist2D(throwTarget, nextBasePt);
+
+    if (throwToNextBase < 15) {
+      // Throw is coming to our target base!
+      // Can we beat it?
+      const throwDist = dist2D(ball.pos, throwTarget);
+      const throwSpeed = Math.hypot(ball.state.vel.x, ball.state.vel.y);
+      const throwArrival = throwSpeed > 0 ? throwDist / throwSpeed : 0;
+      const catchTransfer = 0.4;  // catcher receives + tag
+      const totalDefense = throwArrival + catchTransfer;
+
+      return runnerTime < totalDefense + piMargin;
+    }
+
+    // Throw is going ELSEWHERE — advance freely if close enough
+    // High PI: reads that the throw is going to a different base
+    if (pi >= 4 && runnerTime < 3.0) return true;
+    if (pi >= 7 && runnerTime < 4.0) return true;
+    return false;
   }
 
-  // Ball is held — a fielder has it, too late to advance
-  if (ball.state.type === 'held') return false;
+  // ── Ball is HELD by a fielder ─────────────────────────────────
+  if (ball.state.type === 'held') {
+    const holder = fielders.find(f =>
+      f.state.type === 'has-ball' || f.state.type === 'throwing'
+    );
+    if (!holder) return false;
 
-  // Ball is still rolling or being chased
+    const holderToNextBase = dist2D(holder.pos, nextBasePt);
+
+    // If the fielder is NEAR our target base (<20 ft) — don't go
+    if (holderToNextBase < 20) return false;
+
+    // Fielder has the ball but is far away (e.g., CF at 320 ft
+    // holding the ball while runner rounds 1B). Estimate total
+    // defensive time: wind-up + throw to next base.
+    const windUp = 0.4;
+    const throwTime = holderToNextBase / (holder.throwVeloFps || 100);
+    const catchTransfer = 0.4;
+    const totalDefense = windUp + throwTime + catchTransfer;
+
+    // Aggressive: if runner can beat the throw, go
+    if (runnerTime < totalDefense + piMargin) return true;
+
+    // High-PI runners also go if the fielder is very deep (>150 ft from base)
+    // even if it's close — they trust their read
+    if (pi >= 8 && holderToNextBase > 150 && runnerTime < totalDefense + 0.5) {
+      return true;
+    }
+
+    return false;
+  }
+
+  // ── Ball is ROLLING or IDLE (still on the ground) ─────────────
   if (ball.state.type === 'rolling' || ball.state.type === 'idle') {
     // Find the closest fielder to the ball
     let closestDist = Infinity;
@@ -504,25 +548,29 @@ export function evaluateExtraBaseAdvance(
 
     if (!closestFielder) return false;
 
-    // Estimate: fielder reaches ball + picks up + throws
+    // Estimate: fielder reaches ball + picks up + throws to next base
     const fielderToBall = closestDist / closestFielder.speedFps;
-    const transferTime = 0.3;  // approximate
+    const pickupTransfer = 0.5;  // pick up + turn + throw
     const throwDist = dist2D(ball.pos, nextBasePt);
-    const throwTime = throwDist / closestFielder.throwVeloFps;
-    const totalDefenseTime = fielderToBall + transferTime + throwTime;
+    const throwTime = throwDist / (closestFielder.throwVeloFps || 100);
+    const totalDefenseTime = fielderToBall + pickupTransfer + throwTime;
 
     // Runner needs to beat the total defensive time
     if (runnerTime < totalDefenseTime + piMargin) {
       return true;
     }
+
+    // Ball is far from any fielder — very aggressive runners go
+    if (closestDist > 50 && pi >= 6 && runnerTime < totalDefenseTime + 1.0) {
+      return true;
+    }
   }
 
-  // Ball is in flight — fielder hasn't caught it yet
+  // ── Ball is IN FLIGHT (not yet caught or landed) ──────────────
   if (ball.state.type === 'in-flight') {
-    // Ball is in the air — runner should be advancing on contact already
-    // Extra-base advance here means going 1st→3rd or 2nd→home on a hit
-    // More aggressive than before: PI 4+ runners attempt extra bases
-    if (pi >= 4 && runnerTime < 4.0 + piMargin) {
+    // Ball is in the air — runner should be advancing on contact
+    // Extra-base advance means going 1st→3rd or 2nd→home on a hit
+    if (pi >= 3 && runnerTime < 3.5 + piMargin) {
       return true;
     }
   }
