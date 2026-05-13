@@ -58,7 +58,17 @@ export function decideThrowTarget(
   } => r.state.type === 'running');
 
   if (movingRunners.length === 0) {
-    // No runners moving — no play to make
+    // No runners moving — no active play.
+    // Outfielders relay the ball to 2B (standard baseball convention).
+    const isOutfielder = ['LF', 'CF', 'RF'].includes(fielder.position);
+    if (isOutfielder) {
+      return {
+        base: 'second',
+        point: BASE_POS.second,
+        priority: 1,  // low priority but still triggers a throw
+        reason: 'relay to 2B (no play)',
+      };
+    }
     return {
       base: closestBaseTo(fielder.pos),
       point: BASE_POS[closestBaseTo(fielder.pos)],

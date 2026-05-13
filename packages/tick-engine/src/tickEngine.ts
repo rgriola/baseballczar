@@ -721,19 +721,31 @@ export function simulateAtBatTick(
           const wallCrossHeightFt = ballResult.wallCrossHeightFt ?? ball.pos.z;
           events.push({ type: 'wall-cleared', at: wallCrossPoint, heightFt: wallCrossHeightFt });
 
-          // All runners (including batter) score instantly on a HR —
-          // they don't visually trot the bases, they just disappear.
+          // ─── HR TROT: runners physically run the bases ──────────
+          // Instead of instantly scoring, command all runners to advance
+          // one base at a time. The play completes when all runners
+          // (including the batter) have crossed home plate.
+          // The ball lands beyond the wall; park it there so fielders
+          // don't chase it.
+          ball.pos.z = 0;
+          ball.state = { type: 'idle' };
+
+          // Command on-base runners to advance toward home
           for (const r of runners) {
-            if (r.state.type !== 'scored' && r.state.type !== 'out') {
-              r.state = { type: 'scored' };
-              events.push({ type: 'runner-scored', runnerId: r.id });
+            if (r.state.type === 'on-base') {
+              commandRunner(r, { type: 'advance', targetBase: nextBase(r.state.base) });
             }
           }
 
-          events.push({ type: 'play-complete' });
-          phase = 'done';
-          playComplete = true;
-          break;
+          // Make sure the batter-runner is running to 1B
+          if (!batterAdded) {
+            runners.push(batterRunner);
+            batterAdded = true;
+            commandRunner(batterRunner, { type: 'advance', targetBase: 'first' });
+          }
+
+          // Don't end the play — let the trot continue in subsequent ticks.
+          // Phase stays 'flight' but ball is idle; runners keep trotting.
         }
 
         // Tick all fielders concurrently
@@ -931,12 +943,27 @@ export function simulateAtBatTick(
         // AI Manager: reassign fielder coverage based on ball state
         reassignFielderRoles(fielders, ball, runners, situation);
 
-        // If ball stopped or is held, transition to fielding/throw
-        if (ball.state.type === 'held' && !playComplete && !isCaughtFly) {
-          phase = 'throw';
+        // ── HR TROT COMPLETION ──────────────────────────────────
+        // When all runners (including batter) have scored, end the play.
+        if (battedBall.isHomeRun && !playComplete) {
+          const allScored = runners.length > 0 &&
+            runners.every(r => r.state.type === 'scored' || r.state.type === 'out');
+          if (allScored) {
+            events.push({ type: 'play-complete' });
+            phase = 'done';
+            playComplete = true;
+          }
         }
-        if ((ball.state.type === 'rolling' || ball.state.type === 'idle') && !playComplete) {
-          phase = 'fielding';
+
+        // If ball stopped or is held, transition to fielding/throw
+        // (but NOT during a HR trot — the ball is idle by design)
+        if (!battedBall.isHomeRun) {
+          if (ball.state.type === 'held' && !playComplete && !isCaughtFly) {
+            phase = 'throw';
+          }
+          if ((ball.state.type === 'rolling' || ball.state.type === 'idle') && !playComplete) {
+            phase = 'fielding';
+          }
         }
         break;
       }
@@ -1235,10 +1262,20 @@ export function simulateAtBatTick(
         ? enrichEventsWithPlayerTags(events, fielders, playerLabels)
         : events;
       const snapshotRunners = runners
-        .filter(r => r.state.type !== 'out' && r.state.type !== 'scored')
+        .filter(r => {
+          if (r.state.type === 'out') return false;
+          // During HR trot, keep scored runners visible at home plate
+          // so they wait to congratulate the batter.
+          if (r.state.type === 'scored') {
+            return battedBall.isHomeRun && !playComplete;
+          }
+          return true;
+        })
         .map(r => ({
           id: r.id,
-          pos: { ...r.pos },
+          pos: r.state.type === 'scored'
+            ? { x: BASE_POS.home.x - 3, y: BASE_POS.home.y + 3 }  // cluster near home
+            : { ...r.pos },
           state: { ...r.state } as RunnerEntity['state'],
           speedFps: r.speedFps,
           agility: r.agility,
