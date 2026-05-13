@@ -172,13 +172,31 @@ function findConverger(
     // P and C only field grounders (comebackers, squibbers, bunts) or
     // anything that lands close to home plate (choppers, weak pop-ups).
     if ((pos === 'P' || pos === 'C') && !isGrounder && !isShortBall) continue;
-    // Pitcher restriction: P only fields balls within shortBallRadius of
-    // the MOUND (comebackers / squibbers), not balls hit to the corners.
-    // Without this, P would chase grounders toward 3B while 3B stands idle.
+    // Pitcher restriction: P only fields balls that pass NEAR the mound.
+    // For grounders, use the ball's trajectory (home → landing) and compute
+    // how close it passes to the mound laterally — a true comebacker has
+    // near-zero lateral offset; a ball hit into the SS hole is 25+ ft off.
+    // Hard-hit grounders (90+ mph) also blow past the pitcher too fast
+    // to field unless they're right at him.
     if (pos === 'P') {
       const mound = FIELDER_POSITIONS_FT.P;
-      const distFromMound = Math.hypot(ball.landingPoint.x - mound.x, ball.landingPoint.y - mound.y);
-      if (distFromMound > CONFIG.fielding.shortBallRadiusFt) continue;
+      if (isGrounder) {
+        // Perpendicular distance from the mound to the ball's ground path
+        // (line from origin to landingPoint, extended indefinitely).
+        const pathLen = Math.hypot(ball.landingPoint.x, ball.landingPoint.y);
+        const lateralDist = pathLen > 1
+          ? Math.abs(ball.landingPoint.x * mound.y - ball.landingPoint.y * mound.x) / pathLen
+          : 0;
+        // A pitcher can reach ~12-15 ft laterally. Anything wider is
+        // the SS/3B/B2's ball. Also gate on EV: hard grounders (90+ mph)
+        // need to be even closer (within ~8 ft) to be reachable.
+        const maxLateral = ball.exitVeloMph >= 90 ? 8 : 15;
+        if (lateralDist > maxLateral) continue;
+      } else {
+        // Non-grounder: use the existing mound-distance check
+        const distFromMound = Math.hypot(ball.landingPoint.x - mound.x, ball.landingPoint.y - mound.y);
+        if (distFromMound > CONFIG.fielding.shortBallRadiusFt) continue;
+      }
     }
     const fielderPt = FIELDER_POSITIONS_FT[pos];
     const dist = distanceFt(fielderPt, ball.landingPoint);
