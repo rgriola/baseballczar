@@ -20,9 +20,9 @@ const LAST_NAMES = [
   'Young', 'Zimmer',
 ];
 
-/** Generate one skill value 1..10 with bell-curve bias toward 5. */
+/** Generate one skill value 1..10 with bell-curve bias toward 5.5 (2 decimal places). */
 function rollSkill(rng: Rng): number {
-  const v = Math.round(rng.gaussian(5.5, 1.8));
+  const v = Math.round(rng.gaussian(5.5, 1.8) * 100) / 100;
   return Math.max(1, Math.min(10, v));
 }
 

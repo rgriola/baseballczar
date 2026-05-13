@@ -601,8 +601,8 @@ async function buildTeamInput(
 }
 
 function clampSkill(raw: number): number {
-  const value = Number.isFinite(raw) ? Math.round(raw) : 1;
-  return Math.max(1, Math.min(10, value));
+  const value = Number.isFinite(raw) ? raw : 1;
+  return Math.max(1, Math.min(10, Math.round(value * 100) / 100));  // 2 decimal places
 }
 
 function toTeamAbbrev(teamName: string): string {

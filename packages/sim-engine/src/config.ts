@@ -69,7 +69,7 @@ export const CONFIG = {
   // ─── Throw velocities (mph) by position ───────────────────────
   // Higher defense skill adds velocity (see throw.ts). OF crow-hop bonus.
   throwVeloBaseMph: {
-    P: 85, C: 82,
+    P: 95, C: 82,
     B1: 80, B2: 82, SS: 86, B3: 84,
     LF: 86, CF: 88, RF: 88,
   } as Record<Position, number>,
