@@ -721,23 +721,7 @@ function sprayDirectionLabel(angleDeg: number): string {
   return `foul ${side}`;
 }
 
-/** Compute pitch type label from intent zone and variation. */
-function pitchTypeLabel(zone: 'in' | 'edge' | 'off'): string {
-  switch (zone) {
-    case 'in': return 'Four-seam';
-    case 'edge': return 'Slider';
-    case 'off': return 'Changeup';
-  }
-}
-
 const MPH_TO_FPS = 5280 / 3600;
-
-/** Stamina-based fatigue multiplier for pitch velocity. */
-function pitcherFatigueMultiplier(pitchCount: number, stamina: number): number {
-  const fatigueRatio = Math.max(0, Math.min(1, (pitchCount - 70) / 50));
-  const maxLoss = 0.12 - (Math.min(10, Math.max(1, stamina)) - 1) * 0.01;
-  return 1.0 - fatigueRatio * maxLoss;
-}
 
 /** Build rich pitch + pitch-result tick events from a sim-engine PitchEvent. */
 function buildPitchTickEvents(
@@ -748,11 +732,9 @@ function buildPitchTickEvents(
 ): import('./entities').TickEvent[] {
   const events: import('./entities').TickEvent[] = [];
 
-  // Compute real pitch velocity with stamina fatigue
-  const baseMph = throwVelocityMph('P', pitcher.skills.throwing ?? 5);
-  const fatigueMult = pitcherFatigueMultiplier(pitchCount, pitcher.skills.stamina ?? 5);
-  const fatigueBaseMph = baseMph * fatigueMult;
-  const mph = p.intentZone === 'off' ? Math.round(fatigueBaseMph * 0.86) : Math.round(fatigueBaseMph);
+  // Use the authoritative mph and pitchType from the sim-engine PitchEvent.
+  // The sim-engine computes these from pitcher.skills.throwing + fatigue + pitch type.
+  const mph = p.mph;
 
   events.push({
     type: 'pitch',
@@ -763,7 +745,7 @@ function buildPitchTickEvents(
     pitcherName: playerTag(pitcher),
     zone: p.intentZone,
     actualInZone: p.actualInZone,
-    speed: pitchTypeLabel(p.intentZone),
+    speed: p.pitchType,
     mph,
     swung: p.swung,
   });

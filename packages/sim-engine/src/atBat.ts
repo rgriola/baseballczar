@@ -9,7 +9,45 @@ import {
   pitcherDecideIntent, executePitch, batterDecideSwing, resolvePitch,
 } from './agents';
 import { rollBattedBall, resolveBattedBall, resolveFoulBall } from './battedBall';
+import { throwVelocityMph } from './physics/throw';
 import type { Rng } from './rng';
+
+// ─── Pitch velocity helpers (single source of truth) ─────────
+
+/** Stamina-based fatigue multiplier for pitch velocity.
+ *  Pitchers start losing velo after ~70 pitches. Higher stamina
+ *  skill means less loss. At pitch 120, low-stamina pitcher loses
+ *  ~12%, high-stamina ~3%. */
+function pitcherFatigueMultiplier(pitchCount: number, stamina: number): number {
+  const fatigueRatio = Math.max(0, Math.min(1, (pitchCount - 70) / 50));
+  const maxLoss = 0.12 - (Math.min(10, Math.max(1, stamina)) - 1) * 0.01;
+  return 1.0 - fatigueRatio * maxLoss;
+}
+
+/** Map intentZone to a pitch-type label. In-zone = fastball,
+ *  edge = breaking ball, off = offspeed. */
+function pitchTypeLabel(zone: 'in' | 'edge' | 'off'): string {
+  if (zone === 'in') return 'Four-seam';
+  if (zone === 'edge') return 'Slider';
+  return 'Changeup';
+}
+
+/** Compute pitch velocity from pitcher skill + fatigue + pitch type.
+ *  Returns { mph, pitchType }. */
+function computePitchVelocity(
+  pitcher: Player,
+  intentZone: 'in' | 'edge' | 'off',
+  pitchCount: number,
+): { mph: number; pitchType: string } {
+  const baseMph = throwVelocityMph('P', pitcher.skills.throwing ?? 5);
+  const fatigueMult = pitcherFatigueMultiplier(pitchCount, pitcher.skills.stamina ?? 5);
+  const fatigueBaseMph = baseMph * fatigueMult;
+  // Off-speed pitches are ~86% of fastball velocity
+  const mph = intentZone === 'off'
+    ? Math.round(fatigueBaseMph * 0.86)
+    : Math.round(fatigueBaseMph);
+  return { mph, pitchType: pitchTypeLabel(intentZone) };
+}
 
 export interface AtBatContext {
   inning: number;
@@ -50,12 +88,15 @@ export function simulateAtBat(
     if ((intent.zone === 'in' || intent.zone === 'edge')
         && !exec.actualInZone
         && rng.bool(hbpChance)) {
+      const { mph, pitchType } = computePitchVelocity(pitcher, intent.zone, ctx.pitcherPitchCount + pitchNum);
       pitches.push({
         pitchNum, balls, strikes,
         intentZone: intent.zone,
         actualInZone: false,
         swung: false,
         outcome: 'hbp',
+        mph,
+        pitchType,
       });
       result = 'hbp';
       break;
@@ -64,6 +105,8 @@ export function simulateAtBat(
     const swing = batterDecideSwing(batter, exec, balls, strikes, rng);
     const pitchRes = resolvePitch(pitcher, batter, exec, swing, balls, strikes, rng);
 
+    const { mph, pitchType } = computePitchVelocity(pitcher, intent.zone, ctx.pitcherPitchCount + pitchNum);
+
     const pitch: PitchEvent = {
       pitchNum,
       balls, strikes,
@@ -71,6 +114,8 @@ export function simulateAtBat(
       actualInZone: exec.actualInZone,
       swung: swing.swung,
       outcome: pitchRes.outcome === 'in-play' ? 'in-play' : pitchRes.outcome,
+      mph,
+      pitchType,
     };
     pitches.push(pitch);
 

@@ -107,6 +107,11 @@ export interface PitchEvent {
   actualInZone: boolean;
   swung: boolean;
   outcome: PitchOutcome;
+  /** Pitch velocity in mph — skill-derived, includes fatigue + pitch-type discount.
+   *  Single source of truth: computed in atBat.ts, consumed by tick-engine for display. */
+  mph: number;
+  /** Human-readable pitch type label: 'Four-seam', 'Slider', 'Changeup', etc. */
+  pitchType: string;
   /** Physics for any contact (fair OR foul). Present whenever the bat
    *  meets the ball, so the renderer can show launch/exit-velo/landing
    *  for foul balls just like fair balls. Absent on takes / whiffs. */
