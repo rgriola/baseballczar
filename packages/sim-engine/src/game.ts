@@ -110,7 +110,7 @@ function isOut(result: AtBatResult): boolean {
 }
 
 function isHit(result: AtBatResult): boolean {
-  return ['single', 'double', 'triple', 'home-run'].includes(result);
+  return ['single', 'double', 'triple', 'home-run', 'base-hit'].includes(result);
 }
 
 function recordPitcherStat(
@@ -164,6 +164,7 @@ function simulateHalfInning(
   half: 'top' | 'bottom',
   atBats: AtBatRecord[],
   rng: Rng,
+  opts?: GameOptions,
 ): void {
   let outs = 0;
   let bases: (Player | null)[] = [null, null, null];
@@ -208,42 +209,71 @@ function simulateHalfInning(
     }, rng);
 
     // ─── Resolve runner advance (single source of truth) ─────────
-    // Phase 4 PI gate: r1→3rd on a single is the runner's read.
-    let r1HoldsAtSecond = false;
-    const r1OnBase = bases[0];
-    if (ab.result === 'single' && r1OnBase) {
-      const goes = decideRunnerAdvance('r1-to-3rd-single', r1OnBase, rng, {
-        sprayAngleDeg: ab.battedBall?.sprayAngleDeg,
+    // For 'base-hit' results, invoke the resolvePlay callback (tick-engine)
+    // to simulate the play dynamically and determine the actual outcome.
+    if (ab.result === 'base-hit' && opts?.resolvePlay) {
+      const resolved = opts.resolvePlay(ab, fielding.defenseMap, bases, rng);
+      ab.result = resolved.outcome;
+      // Use the tick-engine's resolved runner positions
+      const resolvedBases: (Player | null)[] = [null, null, null];
+      for (const rState of resolved.runnersAfter) {
+        const baseIdx = rState.base === 'first' ? 0 : rState.base === 'second' ? 1 : 2;
+        // Find the player by id from the current context
+        const player = rState.runnerId === batter.id
+          ? batter
+          : bases.find(b => b?.id === rState.runnerId) ?? null;
+        resolvedBases[baseIdx] = player;
+      }
+      bases = resolvedBases;
+      outs += resolved.outsRecorded;
+      const runsThisPa = resolved.runsScored;
+      batting.runs += runsThisPa;
+      ab.runsScored = runsThisPa;
+      ab.rbis = runsThisPa;
+      for (const scorerId of resolved.scoredRunnerIds) {
+        const bs = batting.batterStats.get(scorerId);
+        if (bs) bs.runs++;
+      }
+    } else {
+      // Non-base-hit or no resolver: use the existing deterministic
+      // advance logic (walks, outs, infield singles, HRs, etc.)
+      // Phase 4 PI gate: r1→3rd on a single is the runner's read.
+      let r1HoldsAtSecond = false;
+      const r1OnBase = bases[0];
+      if (ab.result === 'single' && r1OnBase) {
+        const goes = decideRunnerAdvance('r1-to-3rd-single', r1OnBase, rng, {
+          sprayAngleDeg: ab.battedBall?.sprayAngleDeg,
+        });
+        r1HoldsAtSecond = !goes;
+        ab.runnerAdvances = { r1OnSingle: goes ? 'third' : 'second' };
+      }
+      const adv = resolveBaseAdvance(bases, batter, ab.result, {
+        errorType: ab.errorType,
+        r1HoldsAtSecond,
+        outsBefore: outs,
       });
-      r1HoldsAtSecond = !goes;
-      ab.runnerAdvances = { r1OnSingle: goes ? 'third' : 'second' };
-    }
-    const adv = resolveBaseAdvance(bases, batter, ab.result, {
-      errorType: ab.errorType,
-      r1HoldsAtSecond,
-      outsBefore: outs,
-    });
-    bases = adv.newBases;
-    outs += adv.outsRecorded;
-    const runsThisPa = adv.runsScored;
-    batting.runs += runsThisPa;
-    ab.runsScored = runsThisPa;
-    ab.rbis = runsThisPa;
-    for (const sc of adv.scorers) {
-      const bs = batting.batterStats.get(sc.id);
-      if (bs) bs.runs++;
+      bases = adv.newBases;
+      outs += adv.outsRecorded;
+      const runsThisPa = adv.runsScored;
+      batting.runs += runsThisPa;
+      ab.runsScored = runsThisPa;
+      ab.rbis = runsThisPa;
+      for (const sc of adv.scorers) {
+        const bs = batting.batterStats.get(sc.id);
+        if (bs) bs.runs++;
+      }
     }
 
     const batterStats = batting.batterStats.get(batter.id);
     if (batterStats) {
       const scoredSelf = ab.result === 'home-run';
-      recordBatterStat(batterStats, ab, runsThisPa, scoredSelf);
+      recordBatterStat(batterStats, ab, ab.runsScored, scoredSelf);
     }
     const pitcherStats = fielding.pitcherStats.get(fielding.currentPitcher.id);
-    if (pitcherStats) recordPitcherStat(pitcherStats, ab, runsThisPa);
+    if (pitcherStats) recordPitcherStat(pitcherStats, ab, ab.runsScored);
 
     // Track performance in manager state for shelling detection
-    fielding.pitcherState.runsAllowed += runsThisPa;
+    fielding.pitcherState.runsAllowed += ab.runsScored;
     if (isHit(ab.result)) fielding.pitcherState.hitsAllowed++;
 
     // Fielding credits (PO/A/E) — pulled from ab.fielding which atBat.ts
@@ -260,10 +290,30 @@ function simulateHalfInning(
   }
 }
 
+export interface ResolvePlayResult {
+  outcome: AtBatResult;
+  outsRecorded: number;
+  runsScored: number;
+  runnersAfter: { runnerId: number; base: 'first' | 'second' | 'third' }[];
+  scoredRunnerIds: number[];
+}
+
+export type ResolvePlayFn = (
+  ab: AtBatRecord,
+  defenseMap: Map<Position, Player>,
+  bases: readonly (Player | null)[],
+  rng: Rng,
+) => ResolvePlayResult;
+
 export interface GameOptions {
   /** Index into each team's rotation array. Default 0. */
   homeStarterIndex?: number;
   awayStarterIndex?: number;
+  /** Tick-engine resolver callback. When provided, outfield hits
+   *  ('base-hit') are simulated through the tick-engine for dynamic
+   *  runner advancement. Without this, base-hits fall through to
+   *  the default single-like advance. */
+  resolvePlay?: ResolvePlayFn;
 }
 
 export function simulateGame(home: Team, away: Team, rng: Rng, opts?: GameOptions): GameResult {
@@ -273,9 +323,9 @@ export function simulateGame(home: Team, away: Team, rng: Rng, opts?: GameOption
 
   let inning = 1;
   while (inning <= CONFIG.game.maxInnings) {
-    simulateHalfInning(awayState, homeState, inning, 'top', atBats, rng);
+    simulateHalfInning(awayState, homeState, inning, 'top', atBats, rng, opts);
     if (inning >= 9 && homeState.runs > awayState.runs) break;  // walk-off skip
-    simulateHalfInning(homeState, awayState, inning, 'bottom', atBats, rng);
+    simulateHalfInning(homeState, awayState, inning, 'bottom', atBats, rng, opts);
     if (inning >= 9 && homeState.runs !== awayState.runs) break;
     inning++;
   }

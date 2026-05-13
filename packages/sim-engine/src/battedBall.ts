@@ -328,10 +328,21 @@ function findConverger(
 // ─── Step 3: Resolve full batted-ball outcome ──────────────────
 export interface BattedBallResolution {
   result: AtBatResult;
-  fieldedBy?: Position;  /** When `result === 'reached-on-error'`, distinguishes whether the
+  fieldedBy?: Position;
+  /** When `result === 'reached-on-error'`, distinguishes whether the
    *  fielder muffed the ball ('fielding') or made a wild throw
    *  ('throw'). Throw errors let existing runners take an extra base. */
-  errorType?: 'fielding' | 'throw';}
+  errorType?: 'fielding' | 'throw';
+  /** Physics metadata for outfield hits (`result === 'base-hit'`).
+   *  The tick-engine uses this to simulate dynamic runner advancement. */
+  outfieldPhysics?: {
+    interceptPoint: { x: number; y: number };
+    totalToBallSec: number;
+    fielderPosition: Position;
+    fielderThrowSkill: number;
+    fielderSpeedSkill: number;
+  };
+}
 
 export function resolveBattedBall(
   ball: BattedBall,
@@ -560,35 +571,21 @@ export function resolveBattedBall(
     return { result: 'single', fieldedBy: conv.position };
   }
 
-  // Outfielder fielded — base hit. How many bases?
-  // Throw distance is computed from where the fielder ACTUALLY picks
-  // up the ball (`interceptPoint`), not his home position. A ball
-  // fielded at the wall is a 350+ ft throw to 2B; using the home
-  // position would underestimate by 100-170 ft and produce false singles
-  // on deep gap shots.
-  const throwTo2 = throwTimeSec(interceptPoint, BASE_COORDS_FT.second,
-    conv.position, conv.fielder.skills.throwing);
-  const runnerToSecond = runnerTimeSec('home', 'first', hitter.skills.speed,
-    { fromContact: true, hand: hitter.hand })
-    + runnerTimeSec('first', 'second', hitter.skills.speed);
-  const fielderToSecond = totalToBall + throwTo2;
-
-  if (runnerToSecond > fielderToSecond - CONFIG.fielding.extraBaseSlackSec.toSecond) {
-    // Runner wisely stops at first
-    return { result: 'single', fieldedBy: conv.position };
-  }
-
-  // Runner could try for 2B. Try 3B too?
-  const throwTo3 = throwTimeSec(interceptPoint, BASE_COORDS_FT.third,
-    conv.position, conv.fielder.skills.throwing);
-  const runnerToThird = runnerToSecond
-    + runnerTimeSec('second', 'third', hitter.skills.speed);
-  const fielderToThird = totalToBall + throwTo3;
-
-  if (runnerToThird < fielderToThird - CONFIG.fielding.extraBaseSlackSec.toThird) {
-    return { result: 'triple', fieldedBy: conv.position };
-  }
-  return { result: 'double', fieldedBy: conv.position };
+  // Outfielder fielded — base hit. The tick-engine determines how
+  // many bases the runner takes based on real-time physics (ball
+  // position, fielder pursuit time, throw vector, runner speed/PI).
+  // Attach physics metadata so the tick-engine can simulate the play.
+  return {
+    result: 'base-hit',
+    fieldedBy: conv.position,
+    outfieldPhysics: {
+      interceptPoint: { ...interceptPoint },
+      totalToBallSec: totalToBall,
+      fielderPosition: conv.position,
+      fielderThrowSkill: conv.fielder.skills.throwing,
+      fielderSpeedSkill: conv.fielder.skills.speed,
+    },
+  };
 }
 
 /**

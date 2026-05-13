@@ -96,6 +96,7 @@ export type PitchOutcome =
 export type AtBatResult =
   | 'walk' | 'hbp' | 'strikeout'
   | 'single' | 'double' | 'triple' | 'home-run'
+  | 'base-hit'  // OF hit — tick-engine resolves to single/double/triple dynamically
   | 'ground-out' | 'fly-out' | 'line-out' | 'pop-out' | 'foul-out'
   | 'fielders-choice' | 'double-play' | 'sac-fly' | 'reached-on-error';
 
@@ -213,6 +214,18 @@ export interface AtBatRecord {
   runnerAdvances?: {
     /** Where r1 ended up on a single. Default 'third'. */
     r1OnSingle?: 'second' | 'third';
+  };
+  /**
+   * Physics metadata for outfield hits (`result === 'base-hit'`).
+   * The tick-engine uses this to simulate the play and determine
+   * how many bases the runner takes dynamically.
+   */
+  outfieldPhysics?: {
+    interceptPoint: { x: number; y: number };
+    totalToBallSec: number;
+    fielderPosition: Position;
+    fielderThrowSkill: number;
+    fielderSpeedSkill: number;
   };
 }
 

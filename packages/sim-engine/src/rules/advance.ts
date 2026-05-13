@@ -157,6 +157,18 @@ export function resolveBaseAdvance(
       break;
     }
 
+    case 'base-hit': {
+      // Initial impulse for outfield hits. The tick-engine overrides
+      // these destinations dynamically based on real-time physics.
+      // Default: batter to 1B, existing runners advance one base.
+      if (r3) trip(r3, 'third', 'home');
+      if (r2) trip(r2, 'second', 'third');
+      if (r1) trip(r1, 'first', 'second');
+      trip(batter, 'home', 'first', { isBatter: true });
+      nb = [batter, r1 ?? null, r2 ?? null];
+      break;
+    }
+
     case 'double': {
       if (r3) trip(r3, 'third', 'home');
       if (r2) trip(r2, 'second', 'home');

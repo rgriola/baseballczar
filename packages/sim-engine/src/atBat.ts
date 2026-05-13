@@ -70,6 +70,7 @@ export function simulateAtBat(
   let battedBall: BattedBall | undefined;
   let fieldedBy: Position | undefined;
   let errorType: 'fielding' | 'throw' | undefined;
+  let outfieldPhysics: AtBatRecord['outfieldPhysics'];
   let result: AtBatResult | null = null;
 
   while (pitchNum < CONFIG.pitch.maxPitchesPerAB) {
@@ -186,6 +187,7 @@ export function simulateAtBat(
         result = res.result;
         fieldedBy = res.fieldedBy;
         errorType = res.errorType;
+        outfieldPhysics = res.outfieldPhysics;
         break;
       }
     }
@@ -267,6 +269,7 @@ export function simulateAtBat(
     fieldedBy,
     errorType,
     fielding,
+    outfieldPhysics,
     rbis: 0,
     runsScored: 0,
   };

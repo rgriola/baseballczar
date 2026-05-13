@@ -12,7 +12,7 @@ export type {
 export { createRng, type Rng } from './rng';
 export { generateTeam, generateMatchup } from './randomTeam';
 export { simulateGame } from './game';
-export type { GameOptions } from './game';
+export type { GameOptions, ResolvePlayFn, ResolvePlayResult } from './game';
 export { simulateAtBat } from './atBat';
 export { rollBattedBall, resolveBattedBall, resolveFoulBall } from './battedBall';
 export { aggregate, formatReport, type RateReport } from './report';
