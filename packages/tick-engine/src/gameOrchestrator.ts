@@ -342,6 +342,7 @@ export function simulateFullGame(
           allSnapshots, timeOffset, currentFielders, pitchEvents,
           isFirst ? gsBase : undefined,
           pitchRunners,
+          p.mph,
         );
       }
 
@@ -475,6 +476,7 @@ export function simulateFullGame(
         allSnapshots, timeOffset, currentFielders, pitchEvents,
         isFirst ? gameState : undefined,
         pitchRunners,
+        p.mph,
       );
     }
 
@@ -799,10 +801,21 @@ function emitPitchSnapshots(
   events: import('./entities').TickEvent[],
   gameState?: import('./entities').GameState,
   runners: RunnerEntity[] = [],
+  pitchMph: number = 85,
 ): number {
   const mound = FIELDER_POSITIONS_FT.P;
   const plate = { x: 0, y: 0 };
-  const flightVel = { x: 0, y: -(throwVelocityMph('P', 5) * MPH_TO_FPS), z: -8 };  // pitcher TH-derived
+
+  // Compute flight velocity from actual pitch speed (skill-derived)
+  const pitchFps = pitchMph * MPH_TO_FPS;
+  const dx = plate.x - mound.x;
+  const dy = plate.y - mound.y;
+  const dist = Math.hypot(dx, dy);  // ~61 ft mound to plate
+  const flightTimeSec = dist / pitchFps;  // ~0.44s at 95 mph, ~0.52s at 80 mph
+  // Normalize direction vector and scale to pitch speed
+  const dirX = dx / dist;
+  const dirY = dy / dist;
+  const flightVel = { x: dirX * pitchFps, y: dirY * pitchFps, z: -8 };
 
   // 1. Ball leaves pitcher's hand — events fire here
   snapshots.push({
@@ -814,25 +827,27 @@ function emitPitchSnapshots(
     gameState,
   });
 
-  // 2. Ball arrives at plate (catcher)
+  // 2. Ball arrives at plate (catcher) — time based on real pitch speed
+  const arrivalVel = { x: dirX * pitchFps * 0.15, y: dirY * pitchFps * 0.15, z: -2 };
   snapshots.push({
-    time: t + 0.35,
-    ball: { pos: { x: plate.x, y: plate.y, z: 3 }, state: { type: 'in-flight', vel: { x: 0, y: -20, z: -2 } }, bounceCount: 0 },
+    time: t + flightTimeSec,
+    ball: { pos: { x: plate.x, y: plate.y, z: 3 }, state: { type: 'in-flight', vel: arrivalVel }, bounceCount: 0 },
     fielders,
     runners: cloneRunnersForSnapshot(runners),
     events: [],
   });
 
   // 3. Ball back in pitcher's glove (idle — hidden)
+  const returnDelay = flightTimeSec + 0.35;  // brief pause after catch
   snapshots.push({
-    time: t + 0.70,
+    time: t + returnDelay,
     ball: { pos: { x: mound.x, y: mound.y, z: 5 }, state: { type: 'idle' }, bounceCount: 0 },
     fielders,
     runners: cloneRunnersForSnapshot(runners),
     events: [],
   });
 
-  return t + 0.85;  // total pitch cycle
+  return t + returnDelay + 0.15;  // total pitch cycle
 }
 
 /** Build static runner entities for pitch snapshots between balls in play. */
