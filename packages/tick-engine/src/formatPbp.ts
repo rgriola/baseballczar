@@ -583,6 +583,40 @@ export function formatTickEvents(
         break;
       }
 
+      // ── RUNDOWN EVENTS ─────────────────────────────────────────
+      case 'rundown-start': {
+        const runner = formatPlayerTag(e.runnerName, e.runnerId, 'Runner');
+        out.push({
+          time, kind: 'play',
+          text: `🔄 ${runner} caught in a rundown between ${baseShort(e.between[0])} and ${baseShort(e.between[1])}!`,
+          color: 'text-amber-300',
+        });
+        break;
+      }
+
+      case 'rundown-throw': {
+        // Silent — just for animation; too noisy for PBP text
+        break;
+      }
+
+      case 'rundown-end': {
+        const runner = formatPlayerTag(e.runnerName, e.runnerId, 'Runner');
+        if (e.result === 'out') {
+          out.push({
+            time, kind: 'play',
+            text: `❌ ${runner} tagged out ${e.at}`,
+            color: 'text-red-400',
+          });
+        } else {
+          out.push({
+            time, kind: 'play',
+            text: `✅ ${runner} escapes the rundown! Safe at ${baseShort(e.at)}`,
+            color: 'text-emerald-400',
+          });
+        }
+        break;
+      }
+
       case 'play-complete':
         break;
 

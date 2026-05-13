@@ -310,8 +310,19 @@ export function reevaluateRunners(
   ball: BallEntity,
   fielders: FielderEntity[],
   situation: GameSituation,
-): void {
+): { rundownEvents: import('./entities').TickEvent[] } {
+  const rundownEvents: import('./entities').TickEvent[] = [];
+
   for (const runner of runners) {
+    // ── Handle active rundowns (runner already in rundown state) ──
+    if (runner.state.type === 'rundown') {
+      const result = resolveRundownTick(runner, ball, fielders);
+      if (result) {
+        rundownEvents.push(...result.events);
+      }
+      continue;
+    }
+
     if (runner.state.type !== 'running') continue;
 
     const targetBase = closestBaseTo(runner.state.to);
@@ -320,8 +331,6 @@ export function reevaluateRunners(
     const runnerTime = distToTarget / runner.speedFps;
 
     // ── BATTER-RUNNER GUARD: never retreat to home ───────────────
-    // In baseball, once you put the ball in play you must reach first
-    // or be put out. The batter-runner cannot go back to home plate.
     const cameFromHome = dist2D(runner.state.from, BASE_POS.home) < 12;
     if (targetBase === 'first' && cameFromHome) continue;
 
@@ -334,15 +343,25 @@ export function reevaluateRunners(
         const holderToTarget = dist2D(holder.pos, targetPt);
         // Fielder is at (or near) the base we're running to
         if (holderToTarget < 15) {
-          // If we're more than 60% of the way there, commit (can't stop)
           const totalDist = dist2D(runner.state.from, targetPt);
           const traveled = totalDist - distToTarget;
           const progress = totalDist > 0 ? traveled / totalDist : 1;
 
           if (progress < 0.6) {
-            // Retreat to previous base
+            // Check if retreat base is also covered → RUNDOWN
             const prevBase = closestBaseTo(runner.state.from);
-            commandRunner(runner, { type: 'retreat', targetBase: prevBase });
+            const prevBasePt = BASE_POS[prevBase];
+            const fielderAtRetreat = fielders.some(f =>
+              f !== holder && dist2D(f.pos, prevBasePt) < 20
+            );
+
+            if (fielderAtRetreat && progress > 0.2) {
+              // Caught between bases — initiate rundown
+              const rd = initiateRundown(runner, prevBase, targetBase, fielders);
+              rundownEvents.push(...rd.events);
+            } else {
+              commandRunner(runner, { type: 'retreat', targetBase: prevBase });
+            }
           }
           // If > 60% committed, keep running (can't turn back)
         }
@@ -355,27 +374,138 @@ export function reevaluateRunners(
       const throwToTarget = dist2D(throwTarget, targetPt);
 
       if (throwToTarget < 12) {
-        // Throw is coming to our base!
-        // Estimate throw arrival time
         const throwDist = dist2D(ball.pos, throwTarget);
         const throwSpeed = Math.hypot(ball.state.vel.x, ball.state.vel.y);
         const throwTime = throwSpeed > 0 ? throwDist / throwSpeed : 0;
 
-        // Can we beat it?
         if (runnerTime > throwTime + 0.3) {
-          // Throw will beat us — retreat if we haven't committed
           const totalDist = dist2D(runner.state.from, targetPt);
           const traveled = totalDist - distToTarget;
           const progress = totalDist > 0 ? traveled / totalDist : 1;
 
           if (progress < 0.5) {
+            // Check if retreat base is also covered → RUNDOWN
             const prevBase = closestBaseTo(runner.state.from);
-            commandRunner(runner, { type: 'retreat', targetBase: prevBase });
+            const prevBasePt = BASE_POS[prevBase];
+            const fielderAtRetreat = fielders.some(f =>
+              dist2D(f.pos, prevBasePt) < 25
+            );
+
+            if (fielderAtRetreat && progress > 0.15) {
+              const rd = initiateRundown(runner, prevBase, targetBase, fielders);
+              rundownEvents.push(...rd.events);
+            } else {
+              commandRunner(runner, { type: 'retreat', targetBase: prevBase });
+            }
           }
         }
       }
     }
   }
+
+  return { rundownEvents };
+}
+
+/**
+ * Initiate a rundown sequence. The runner gets caught between two bases
+ * and must juke/dodge fielders to reach safety.
+ *
+ * The outcome is resolved probabilistically based on:
+ *   - PI (play intelligence): higher PI → better reads, juke moves
+ *   - Speed: faster runners can outrun throws
+ *   - Fielder throwing accuracy
+ *
+ * MLB rundowns result in an out ~90% of the time, with elite
+ * baserunners occasionally escaping.
+ */
+function initiateRundown(
+  runner: RunnerEntity,
+  fromBase: string,
+  toBase: string,
+  fielders: FielderEntity[],
+): { events: import('./entities').TickEvent[] } {
+  const events: import('./entities').TickEvent[] = [];
+  const pi = runner.playIntelligence ?? 5;
+  const speed = runner.speedFps;
+
+  // Escape probability:
+  // Base: 10% escape rate
+  // PI bonus: +2% per PI point above 5 (PI 10 = +10%)
+  // Speed bonus: +1% per fps above 25 (fast runners ≈ 28-30 fps)
+  // Max escape: ~25% for elite PI+speed combo
+  const baseEscape = 0.10;
+  const piBonus = Math.max(0, (pi - 5)) * 0.02;
+  const speedBonus = Math.max(0, (speed - 25)) * 0.01;
+  const escapeProb = Math.min(0.25, baseEscape + piBonus + speedBonus);
+
+  // Random resolution (use simple Math.random for now)
+  const roll = Math.random();
+  const escaped = roll < escapeProb;
+
+  // Generate rundown throw sequence (2-4 throws for drama)
+  const numThrows = 2 + Math.floor(Math.random() * 3);  // 2-4 throws
+
+  events.push({
+    type: 'rundown-start',
+    runnerId: runner.id,
+    between: [fromBase, toBase],
+  });
+
+  // Generate throw events
+  for (let i = 0; i < numThrows; i++) {
+    const throwFrom = i % 2 === 0 ? toBase : fromBase;
+    const throwTo = i % 2 === 0 ? fromBase : toBase;
+    events.push({ type: 'rundown-throw', from: throwFrom, to: throwTo });
+  }
+
+  if (escaped) {
+    // Runner escapes — juke to the closer base
+    // Determine which base the runner ends up at
+    const fromPt = BASE_POS[fromBase as keyof typeof BASE_POS];
+    const toPt = BASE_POS[toBase as keyof typeof BASE_POS];
+    const distToFrom = fromPt ? dist2D(runner.pos, fromPt) : Infinity;
+    const distToTo = toPt ? dist2D(runner.pos, toPt) : Infinity;
+    const safeBase = distToFrom < distToTo ? fromBase : toBase;
+    const safePt = BASE_POS[safeBase as keyof typeof BASE_POS];
+
+    if (safePt) {
+      runner.state = { type: 'running', from: runner.pos, to: safePt };
+    }
+
+    events.push({
+      type: 'rundown-end',
+      runnerId: runner.id,
+      result: 'safe',
+      at: safeBase,
+    });
+  } else {
+    // Runner is out
+    runner.state = { type: 'out' };
+    events.push({
+      type: 'rundown-end',
+      runnerId: runner.id,
+      result: 'out',
+      at: `between ${fromBase} and ${toBase}`,
+    });
+  }
+
+  return { events };
+}
+
+/**
+ * Process a runner already in rundown state — move them toward
+ * their juke target and resolve the rundown outcome.
+ * Currently resolves instantly in initiateRundown(); this is a
+ * placeholder for future tick-by-tick animated rundowns.
+ */
+function resolveRundownTick(
+  _runner: RunnerEntity,
+  _ball: BallEntity,
+  _fielders: FielderEntity[],
+): { events: import('./entities').TickEvent[] } | null {
+  // Currently, rundowns resolve instantly in initiateRundown().
+  // Future: add multi-tick animation with back-and-forth movement.
+  return null;
 }
 
 /**

@@ -60,6 +60,7 @@ export interface FielderEntity {
 export type RunnerState =
   | { type: 'on-base'; base: 'first' | 'second' | 'third' }
   | { type: 'running'; from: Point2D; to: Point2D }
+  | { type: 'rundown'; fromBase: string; toBase: string; jukeTarget: Point2D }
   | { type: 'scored' }
   | { type: 'out' }
 
@@ -205,3 +206,7 @@ export type TickEvent =
   // Game flow
   | { type: 'play-complete' }
   | { type: 'inning-change'; inning: number; half: 'top' | 'bottom' }
+  // Rundown events
+  | { type: 'rundown-start'; runnerId: number; runnerName?: string; between: [string, string] }
+  | { type: 'rundown-throw'; from: string; to: string }
+  | { type: 'rundown-end'; runnerId: number; runnerName?: string; result: 'out' | 'safe'; at: string }

@@ -913,7 +913,8 @@ export function simulateAtBatTick(
 
         // Per-tick runner re-evaluation: react to ball state
         if (!battedBall.isHomeRun) {
-          reevaluateRunners(runners, ball, fielders, situation);
+          const { rundownEvents: rdEvents } = reevaluateRunners(runners, ball, fielders, situation);
+          events.push(...rdEvents);
         }
 
         // Continuous extra-base: re-evaluate runners sitting on base
@@ -1035,7 +1036,8 @@ export function simulateAtBatTick(
         resolveBaseCollisions(runners);
 
         // Per-tick runner re-evaluation
-        reevaluateRunners(runners, ball, fielders, situation);
+        const { rundownEvents: rdEvents2 } = reevaluateRunners(runners, ball, fielders, situation);
+        events.push(...rdEvents2);
 
         // Continuous extra-base re-evaluation
         if (!playComplete) {
@@ -1193,7 +1195,8 @@ export function simulateAtBatTick(
         resolveBaseCollisions(runners);
 
         // Per-tick runner re-evaluation during throws
-        reevaluateRunners(runners, ball, fielders, situation);
+        const { rundownEvents: rdEvents3 } = reevaluateRunners(runners, ball, fielders, situation);
+        events.push(...rdEvents3);
 
         // AI Manager: reassign coverage during throws
         reassignFielderRoles(fielders, ball, runners, situation);
