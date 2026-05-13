@@ -561,12 +561,12 @@ export function resolveBattedBall(
   }
 
   // Outfielder fielded — base hit. How many bases?
-  // Throw to 2B to hold runner. The slack here decides single vs double:
-  // smaller slack means more aggressive baserunning + more doubles. Real
-  // MLB ≈ 1.5 doubles/team-game; the +0.5 slack used to make every OF
-  // hit a single because fielders are aligned with the fair wedge under
-  // the symmetric spray convention.
-  const throwTo2 = throwTimeSec(fielderPt, BASE_COORDS_FT.second,
+  // Throw distance is computed from where the fielder ACTUALLY picks
+  // up the ball (`interceptPoint`), not his home position. A ball
+  // fielded at the wall is a 350+ ft throw to 2B; using the home
+  // position would underestimate by 100-170 ft and produce false singles
+  // on deep gap shots.
+  const throwTo2 = throwTimeSec(interceptPoint, BASE_COORDS_FT.second,
     conv.position, conv.fielder.skills.throwing);
   const runnerToSecond = runnerTimeSec('home', 'first', hitter.skills.speed,
     { fromContact: true, hand: hitter.hand })
@@ -579,7 +579,7 @@ export function resolveBattedBall(
   }
 
   // Runner could try for 2B. Try 3B too?
-  const throwTo3 = throwTimeSec(fielderPt, BASE_COORDS_FT.third,
+  const throwTo3 = throwTimeSec(interceptPoint, BASE_COORDS_FT.third,
     conv.position, conv.fielder.skills.throwing);
   const runnerToThird = runnerToSecond
     + runnerTimeSec('second', 'third', hitter.skills.speed);
