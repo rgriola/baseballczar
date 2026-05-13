@@ -103,10 +103,15 @@ export function simulateFullGame(
   const homeStrategic = createStrategicState(homeTeam, homeStartingPitcher, homeStarterIndex);
   const awayStrategic = createStrategicState(awayTeam, awayStartingPitcher, awayStarterIndex);
 
+  // ── Team uniform colors (consistent across the entire game) ─────
+  // Home = blue, Away = red. These are used for both fielders and runners.
+  const HOME_COLOR = 0x2563eb;  // vibrant blue
+  const AWAY_COLOR = 0xdc2626;  // vibrant red
+
   // Build resting-state fielder arrays so every snapshot has visible fielders.
   // Top of 1st: away team bats, home team fields.
-  const homeFielders = buildRestingFielders(homeDefense, 0x1e5631);
-  const awayFielders = buildRestingFielders(awayDefense, 0x2a3a6e);
+  const homeFielders = buildRestingFielders(homeDefense, HOME_COLOR);
+  const awayFielders = buildRestingFielders(awayDefense, AWAY_COLOR);
   let currentFielders = homeFielders;  // home fields first (top 1st)
 
   const allSnapshots: WorldSnapshot[] = [];
@@ -208,10 +213,6 @@ export function simulateFullGame(
     const defensiveStrategic = isHomeBatting ? awayStrategic : homeStrategic;
     const defensiveProfile = isHomeBatting ? awayProfile : homeProfile;
     const defenseMap = isHomeBatting ? awayDefense : homeDefense;
-    // Team uniform colors: away = blue, home = red.
-    // Future: pull from team.primaryColor / team.secondaryColor.
-    const AWAY_COLOR = 0x2563eb;  // vibrant blue
-    const HOME_COLOR = 0xdc2626;  // vibrant red
     const teamColor = isHomeBatting ? AWAY_COLOR : HOME_COLOR;        // defensive team
     const battingTeamColor = isHomeBatting ? HOME_COLOR : AWAY_COLOR; // batting team
 

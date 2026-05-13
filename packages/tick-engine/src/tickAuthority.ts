@@ -560,7 +560,7 @@ export function resolveAtBatHeadless(
     return deriveSeedNonBattedResolution(ab, opts.runners ?? []);
   }
 
-  const snapshots = simulateAtBatTick(ab, defenseRoster, opts.teamColor ?? 0x1e5631, {
+  const snapshots = simulateAtBatTick(ab, defenseRoster, opts.teamColor ?? 0x2563eb, {
     ...opts,
     captureEvery: 1,
   });

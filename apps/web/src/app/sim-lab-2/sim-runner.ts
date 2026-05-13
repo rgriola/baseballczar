@@ -277,7 +277,7 @@ function applyTickAuthorityPhase2(
       parity.battedBallAtBats++;
 
       const resolution: HeadlessAtBatResolution = resolveAtBatHeadless(ab, defenseMap, {
-        teamColor: isHomeBatting ? 0x2a3a6e : 0x1e5631,
+        teamColor: isHomeBatting ? 0xdc2626 : 0x2563eb,  // defensive team: Home=blue, Away=red
         runners: runnersOnBase,
         situation: {
           outs,

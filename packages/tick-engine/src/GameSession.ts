@@ -236,7 +236,9 @@ export class GameSession {
     const defensiveStrategic = isHomeBatting ? this.awayStrategic : this.homeStrategic;
     const defensiveProfile = isHomeBatting ? this.awayProfile : this.homeProfile;
     const defenseMap = isHomeBatting ? this.awayDefense : this.homeDefense;
-    const teamColor = isHomeBatting ? 0x1e5631 : 0x2a3a6e;
+    // Home = blue (0x2563eb), Away = red (0xdc2626) — matches gameOrchestrator.
+    // teamColor is the DEFENSIVE team's color.
+    const teamColor = isHomeBatting ? 0xdc2626 : 0x2563eb;
 
     const pitchingChangeDetail = syncPitcherFromAtBat(defensiveStrategic, ab.pitcher);
     if (pitchingChangeDetail) {
@@ -339,10 +341,12 @@ export class GameSession {
       this._timeOffset += 2;
     } else {
       // Batted ball — run through tick engine
+      const battingTeamColor = isHomeBatting ? 0x2563eb : 0xdc2626;
       abSnapshots = simulateAtBatTick(ab, defenseMap, teamColor, {
         ...this.tickOpts,
         runners: this._runners,
         situation,
+        battingTeamColor,
       });
 
       // Inject at-bat-start into first snapshot
