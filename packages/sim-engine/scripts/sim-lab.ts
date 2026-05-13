@@ -15,6 +15,7 @@ import {
   aggregate, formatReport, buildEvents,
   type GameResult, type Team,
 } from '../src';
+import { createResolvePlayBridge } from '@baseballczar/tick-engine';
 import { writeFileSync } from 'node:fs';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -37,9 +38,11 @@ console.log(`sim-lab: ${games} game(s), seed=${seed}\n`);
 const rng = createRng(seed);
 const results: GameResult[] = [];
 
+const resolvePlay = createResolvePlayBridge();
+
 for (let i = 0; i < games; i++) {
   const { home, away } = generateMatchup(rng);
-  const g = simulateGame(home, away, rng);
+  const g = simulateGame(home, away, rng, { resolvePlay });
   results.push(g);
 }
 

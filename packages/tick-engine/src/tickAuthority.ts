@@ -1,6 +1,3 @@
-// Last touched by agent: 2026-05-05T13:40:00Z
-// Purpose: Resolves tick-authoritative at-bat outcomes without returning snapshots.
-
 import { BASE_COORDS_FT } from '@baseballczar/sim-engine';
 import type {
   AtBatRecord,
@@ -8,6 +5,8 @@ import type {
   BattedBall,
   Player,
   Position,
+  ResolvePlayFn,
+  ResolvePlayResult,
 } from '@baseballczar/sim-engine';
 import type { GameSituation } from './aiManager';
 import type { TickSimOptions } from './tickEngine';
@@ -48,6 +47,7 @@ const HIT_BASES: Record<string, number> = {
   double: 2,
   triple: 3,
   'home-run': 4,
+  'base-hit': 1,  // fallback; resolved to actual hit type by extractTickOutcome
 };
 const HOME_PLACEHOLDER_RADIUS_FT = 20;
 
@@ -568,3 +568,41 @@ export function resolveAtBatHeadless(
   return extractTickOutcome(snapshots, ab.batter.id, ab.battedBall, opts.runners ?? []);
 }
 
+/**
+ * Create a `ResolvePlayFn` that bridges the sim-engine game loop to
+ * the tick-engine's headless simulation. Pass the returned function
+ * as `opts.resolvePlay` to `simulateGame()`.
+ *
+ * Usage:
+ * ```ts
+ * import { simulateGame } from '@baseballczar/sim-engine';
+ * import { createResolvePlayBridge } from '@baseballczar/tick-engine';
+ *
+ * simulateGame(home, away, rng, {
+ *   resolvePlay: createResolvePlayBridge(),
+ * });
+ * ```
+ */
+export function createResolvePlayBridge(): ResolvePlayFn {
+  return (
+    ab: AtBatRecord,
+    defenseMap: Map<Position, Player>,
+    bases: readonly (Player | null)[],
+  ): ResolvePlayResult => {
+    // Build runners array from bases state
+    const runners: { player: Player; base: 'first' | 'second' | 'third' }[] = [];
+    if (bases[0]) runners.push({ player: bases[0], base: 'first' });
+    if (bases[1]) runners.push({ player: bases[1], base: 'second' });
+    if (bases[2]) runners.push({ player: bases[2], base: 'third' });
+
+    const resolution = resolveAtBatHeadless(ab, defenseMap, { runners });
+
+    return {
+      outcome: resolution.outcome,
+      outsRecorded: resolution.statDeltas.outsRecorded,
+      runsScored: resolution.statDeltas.runsScored,
+      runnersAfter: resolution.runnersAfter,
+      scoredRunnerIds: resolution.scoredRunnerIds,
+    };
+  };
+}

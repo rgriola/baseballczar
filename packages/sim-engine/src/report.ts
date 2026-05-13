@@ -58,7 +58,7 @@ export function aggregate(games: GameResult[]): RateReport {
         if (p.outcome === 'foul' || p.outcome === 'in-play') contact++;
       }
       switch (at.result) {
-        case 'single': hits++; singles++; break;
+        case 'single': case 'base-hit': hits++; singles++; break;
         case 'double': hits++; doubles++; break;
         case 'triple': hits++; triples++; break;
         case 'home-run': hits++; hr++; break;

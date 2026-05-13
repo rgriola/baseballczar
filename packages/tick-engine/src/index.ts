@@ -29,7 +29,7 @@ export { simulateAtBatTick } from './tickEngine';
 export type { TickSimOptions } from './tickEngine';
 
 // ── Tick authority (headless result authority) ──────────────────
-export { resolveAtBatHeadless, extractTickOutcome } from './tickAuthority';
+export { resolveAtBatHeadless, extractTickOutcome, createResolvePlayBridge } from './tickAuthority';
 export type {
   HeadlessAtBatResolution,
   HeadlessAtBatStatDeltas,

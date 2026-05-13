@@ -991,6 +991,7 @@ function updateGameState(
 
   switch (ab.result) {
     case 'single':
+    case 'base-hit':
       // Advance runners, batter to first
       for (const r of prevRunners) {
         if (r.base === 'third') {

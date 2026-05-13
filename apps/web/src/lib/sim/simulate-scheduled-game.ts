@@ -15,6 +15,7 @@ import {
   type Position as V2Position,
   type Team as V2Team,
 } from '@baseballczar/sim-engine';
+import { createResolvePlayBridge } from '@baseballczar/tick-engine';
 import {
   simulateGame as simulateLegacyGame,
   type TeamInput,
@@ -158,6 +159,7 @@ export async function simulateScheduledGame(
         {
           homeStarterIndex: homeInput.v2StarterIndex,
           awayStarterIndex: visitorInput.v2StarterIndex,
+          resolvePlay: createResolvePlayBridge(),
         },
       ),
       toAdapterInput(visitorInput),
