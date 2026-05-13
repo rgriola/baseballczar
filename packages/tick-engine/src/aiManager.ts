@@ -94,6 +94,16 @@ export function decideThrowTarget(
     const canBeat = throwTime < runnerTime + 0.2;
     const startedFromHome = dist2D(runner.state.from, BASE_POS.home) < 12;
 
+    // Is this runner FORCED to advance? (someone behind them pushing)
+    // Batter-runner to 1B is always a force. Other runners are forced only
+    // if the base behind them is occupied (chain from batter).
+    const origins = new Set(movingRunners.map(r => closestBaseTo(r.state.from)));
+    const runnerFrom = closestBaseTo(runner.state.from);
+    const isForcePlay = startedFromHome  // batter → 1B is always a force
+      || (runnerFrom === 'first' && origins.has('home'))               // R1 forced by batter
+      || (runnerFrom === 'second' && origins.has('first') && origins.has('home'))  // R2 forced by R1+batter
+      || (runnerFrom === 'third' && origins.has('second') && origins.has('first') && origins.has('home'));  // R3 forced by chain
+
     // Priority: baseball progression first (lead runner / force), then beatability.
     let priority = 0;
 
@@ -116,6 +126,14 @@ export function decideThrowTarget(
       priority += 2;
     }
 
+    // NON-FORCE PENALTY: throwing to a base where the runner isn't
+    // forced means a TAG play (risky). Heavily penalize vs the guaranteed
+    // force out at 1B. E.g. R2 advancing to 3B on a grounder — no force
+    // at 3B, so always take the easy out at 1B instead.
+    if (!isForcePlay) {
+      priority -= 8;
+    }
+
     // Can-beat bonus
     if (canBeat) priority += 4;
     else priority -= 1;
@@ -130,7 +148,7 @@ export function decideThrowTarget(
       base: targetBase,
       point: runnerTarget,
       priority,
-      reason: `${targetBase} (runner ${canBeat ? 'beatable' : 'safe'})`,
+      reason: `${targetBase} (runner ${canBeat ? 'beatable' : 'safe'}${isForcePlay ? ', force' : ', tag'})`,
     });
   }
 
