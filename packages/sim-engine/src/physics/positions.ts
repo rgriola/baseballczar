@@ -19,17 +19,17 @@
 import type { Position } from '../config';
 
 export const FIELDER_POSITIONS_FT: Record<Position, { x: number; y: number }> = {
-  P:  { x: 0,    y: 61 },
-  C:  { x: 0,    y: -6 },
-  B1: { x: 50,   y: 85 },
-  B2: { x: 35,   y: 130 },
-  SS: { x: -35,  y: 130 },
-  B3: { x: -50,  y: 85 },
+  P: { x: 0, y: 61 },
+  C: { x: 0, y: -6 },
+  B1: { x: 50, y: 85 },
+  B2: { x: 35, y: 130 },
+  SS: { x: -35, y: 130 },
+  B3: { x: -50, y: 85 },
   // ~85 ft from the wall at each fielder's natural spray angle.
   // LF/RF at ~265 ft from home; CF at ~295 ft. Realistic MLB depth
   // gives room to go back on drives while covering the shallow zone.
   LF: { x: -136, y: 227 },
-  CF: { x:    0, y: 295 },
-  RF: { x:  136, y: 227 },
+  CF: { x: 0, y: 295 },
+  RF: { x: 136, y: 227 },
 };
 

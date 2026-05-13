@@ -64,11 +64,19 @@ export function classifySituationalOut(
   }
 
   if (result === 'ground-out' && runnerOn1 && ctx.outs < 2) {
-    // DPs realistically only on grounders to MIF or 3B (6-4-3, 4-6-3, 5-4-3).
-    const dpFeasible =
-      ctx.fieldedBy === 'SS' || ctx.fieldedBy === 'B2' || ctx.fieldedBy === 'B3';
+    // DP feasibility by position:
+    //   MIF/3B: classic 6-4-3, 4-6-3, 5-4-3 — full probability
+    //   P:      1-6-3, 1-4-3 (common on comebackers) — full probability
+    //   B1:     3-6-3, 3-4-3 (relay back is trickier) — reduced probability
+    //   C:      2-5-3, 2-6-3 — only on force plays at home (R3 occupied)
+    const MIF_OR_3B = ctx.fieldedBy === 'SS' || ctx.fieldedBy === 'B2' || ctx.fieldedBy === 'B3';
+    const PITCHER = ctx.fieldedBy === 'P';
+    const FIRST_BASE = ctx.fieldedBy === 'B1';
+    const CATCHER = ctx.fieldedBy === 'C' && runnerOn3;  // force at home only
+    const dpFeasible = MIF_OR_3B || PITCHER || FIRST_BASE || CATCHER;
+    const dpProbMul = FIRST_BASE ? 0.75 : 1.0;
     const dpProb = dpFeasible
-      ? CONFIG.doublePlay.baseProb + (def - 5) * CONFIG.doublePlay.skillLeverage
+      ? (CONFIG.doublePlay.baseProb + (def - 5) * CONFIG.doublePlay.skillLeverage) * dpProbMul
       : 0;
     if (rng.bool(Math.max(0, Math.min(0.85, dpProb)))) return 'double-play';
     if (rng.bool(CONFIG.baserunning.fcProb)) return 'fielders-choice';

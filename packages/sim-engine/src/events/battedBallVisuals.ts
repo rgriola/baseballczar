@@ -101,9 +101,9 @@ export function emitBattedBallVisuals(
     && ball.fieldedAtPoint
     && ball.landingPoint
     && Math.hypot(
-         ball.fieldedAtPoint.x - ball.landingPoint.x,
-         ball.fieldedAtPoint.y - ball.landingPoint.y,
-       ) > 15;  // significant roll distance (>15 ft) = ball got past
+      ball.fieldedAtPoint.x - ball.landingPoint.x,
+      ball.fieldedAtPoint.y - ball.landingPoint.y,
+    ) > 15;  // significant roll distance (>15 ft) = ball got past
   if (ballDropped) {
     // Phase 1: sprint toward landing point at full speed.
     // The fielder reaches this area around hangTime (or a bit after
@@ -187,7 +187,7 @@ export function emitBattedBallVisuals(
   // the air), and any caught-fly result.
   const isGrounderVisual = ball.hangTimeSec < 0.6 && ball.distanceFt < 90;
   if (!isCaught && !isGrounderVisual && !ball.isHomeRun && !ball.isFoul
-      && ball.fieldedAtPoint) {
+    && ball.fieldedAtPoint) {
     const wallHit = ball.wallHitPoint;
     // Did the fielder catch the ball before the wall? Compare cumulative
     // ground from landing to fieldedAt vs landing to wall. If wallHit
@@ -408,9 +408,12 @@ export function emitBattedBallVisuals(
     // Double-play relay: pivot at 2B turns and throws to first for the
     // back-end out. Without this second throw the visualizer just shows
     // a force at second and the at-bat ends, even though the engine
-    // booked two outs (e.g. 5-4-3, 6-4-3, 4-6-3).
+    // booked two outs (e.g. 5-4-3, 6-4-3, 4-6-3, 1-4-3, 3-6-3).
     if (ab.result === 'double-play') {
-      const pivotPos: Position = ab.fieldedBy === 'B2' ? 'SS' : 'B2';
+      const pivotPos: Position = ab.fieldedBy === 'B2' ? 'SS'
+        : ab.fieldedBy === 'SS' ? 'B2'
+          : ab.fieldedBy === 'B1' ? 'SS'
+            : 'B2';
       const pivotPlayer = defenseMap?.get(pivotPos);
       const firstPt = basePoint('first');
       const relayFlightSec = pivotPlayer

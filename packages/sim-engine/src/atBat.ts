@@ -86,8 +86,8 @@ export function simulateAtBat(
       * (1 + (5 - pitcher.skills.eye) * 0.10)
       * (1 + fatigueRatio * 0.5);
     if ((intent.zone === 'in' || intent.zone === 'edge')
-        && !exec.actualInZone
-        && rng.bool(hbpChance)) {
+      && !exec.actualInZone
+      && rng.bool(hbpChance)) {
       const { mph, pitchType } = computePitchVelocity(pitcher, intent.zone, ctx.pitcherPitchCount + pitchNum);
       pitches.push({
         pitchNum, balls, strikes,
@@ -231,12 +231,20 @@ export function simulateAtBat(
       }
       case 'double-play': {
         if (!fieldedBy) return undefined;
-        // 6-4-3 / 4-6-3 family: fielder → pivot → first.
-        const pivot: Position = fieldedBy === 'B2' ? 'SS' : 'B2';
+        // Standard DP: fielder → pivot at 2B → first base.
+        // Pivot is whichever MIF isn't the fielder (B2↔SS). For non-MIF
+        // fielders (P, B3, C), default pivot is B2.
+        // Special case: B1-initiated DP (3-6-3) — SS pivots at 2B,
+        // pitcher covers 1B for the back-end putout.
+        const pivot: Position = fieldedBy === 'B2' ? 'SS'
+          : fieldedBy === 'SS' ? 'B2'
+            : fieldedBy === 'B1' ? 'SS'
+              : 'B2';
+        const firstBaseCover: Position = fieldedBy === 'B1' ? 'P' : 'B1';
         return {
           putoutBy: pivot,                  // forces lead runner at 2B
           assistBy: [fieldedBy, pivot],     // fielder + pivot both throw
-          extraPutouts: ['B1'],             // B1 records the second PO
+          extraPutouts: [firstBaseCover],   // back-end PO at 1B
         };
       }
       case 'reached-on-error':

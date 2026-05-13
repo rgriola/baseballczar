@@ -69,9 +69,9 @@ export const CONFIG = {
   // ─── Throw velocities (mph) by position ───────────────────────
   // Higher defense skill adds velocity (see throw.ts). OF crow-hop bonus.
   throwVeloBaseMph: {
-    P: 95, C: 82,
-    B1: 80, B2: 82, SS: 86, B3: 84,
-    LF: 86, CF: 88, RF: 88,
+    P: 95, C: 85,
+    B1: 85, B2: 90, SS: 90, B3: 90,
+    LF: 90, CF: 90, RF: 90,
   } as Record<Position, number>,
   outfieldCrowHopMph: 5,         // OF gains this on long throws
   releaseTimeSec: 1.0,           // time from glove to throw release
@@ -218,7 +218,7 @@ export const CONFIG = {
     // ─── Statcast collision model (Phase 4) ─────────────────────
     // V_exit = q × V_pitch + (1+q) × V_bat
     collisionEfficiency: 0.2,           // q — wood bat COR
-    batSpeedBaseMph: 60,                // Power 0 bat speed
+    batSpeedBaseMph: 68,                // Power 0 bat speed
     batSpeedRangeMph: 22,               // additional mph over Power 1-10
 
     // Legacy: kept for analytics/parity checking only

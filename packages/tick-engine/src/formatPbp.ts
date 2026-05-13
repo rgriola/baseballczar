@@ -473,9 +473,16 @@ export function formatTickEvents(
         const chain = st.fieldingChain;
         if (chain.length > 0) {
           const first = chain[0];
+          // Build scoring notation: filter out 'received', map to position
+          // numbers, deduplicate consecutive same-position entries (e.g.
+          // pitcher fields + throws = just '1', not '1-1'), then append
+          // the receiver (putout) position.
           const scoringNums = chain
             .filter(c => c.action !== 'received')
-            .map(c => POS_NUM[c.pos] ?? c.pos);
+            .map(c => POS_NUM[c.pos] ?? c.pos)
+            .filter((num, i, arr) => i === 0 || num !== arr[i - 1]);
+          const receiver = chain.find(c => c.action === 'received');
+          if (receiver) scoringNums.push(POS_NUM[receiver.pos] ?? receiver.pos);
           const isCatch = first.action === 'caught';
           const scoringStr = isCatch
             ? `(F${POS_NUM[first.pos] ?? first.pos})`
@@ -535,9 +542,15 @@ export function formatTickEvents(
         const chain = st.fieldingChain;
         if (chain.length > 0 && isOut) {
           const first = chain[0];
+          // Build scoring notation: filter out 'received', map to position
+          // numbers, deduplicate consecutive same-position entries, then
+          // append the receiver (putout) position.
           const scoringNums = chain
             .filter(c => c.action !== 'received')
-            .map(c => POS_NUM[c.pos] ?? c.pos);
+            .map(c => POS_NUM[c.pos] ?? c.pos)
+            .filter((num, i, arr) => i === 0 || num !== arr[i - 1]);
+          const receiver = chain.find(c => c.action === 'received');
+          if (receiver) scoringNums.push(POS_NUM[receiver.pos] ?? receiver.pos);
           const isCatch = first.action === 'caught';
           const scoringStr = isCatch
             ? `(F${POS_NUM[first.pos] ?? first.pos})`

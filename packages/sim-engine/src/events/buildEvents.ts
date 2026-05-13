@@ -330,7 +330,10 @@ export function buildEvents(g: GameResult): SimEvent[] {
         // straight from second back to the mound, hiding the relay
         // throw entirely.
         if (ab.result === 'double-play') {
-          const pivotPos = ab.fieldedBy === 'B2' ? 'SS' : 'B2';
+          const pivotPos: Position = ab.fieldedBy === 'B2' ? 'SS'
+            : ab.fieldedBy === 'SS' ? 'B2'
+            : ab.fieldedBy === 'B1' ? 'SS'
+            : 'B2';
           const pivotPlayer = currentDefenseMap.get(pivotPos);
           const relaySec = pivotPlayer
             ? throwTimeSec(BASE_COORDS_FT.second, BASE_COORDS_FT.first,

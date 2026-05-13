@@ -6,6 +6,8 @@
 - lineup defense is not aligned correctly. Players can be placed into the lineup not not resolve into the defensive positios. 
 - need a web worker to make sure each team has a full lineup, defense and pitching staff before the game, this should run prior to the sim but bot be part of the sim. 
 
+- Box Score is incorrect. Needs player #, 1st init, Last name, Position, Stats. 
+
 
 
 ## Resolved During Queue-First Sim Rollout
