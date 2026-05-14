@@ -223,22 +223,35 @@ export function closestFielder(
 
 // ─── Predicted landing ──────────────────────────────────────────
 
-/** Predict where a ball in flight will land (simple parabolic). */
+/** Predict where a ball in flight will land.
+ *  Uses forward Euler with the same drag model as ballPhysics.ts
+ *  so fielders run to the RIGHT spot, not a drag-free overshoot. */
 export function predictLanding(ball: BallEntity): Point2D | null {
   if (ball.state.type !== 'in-flight') return null;
-  const vel = ball.state.vel;
-  const vz = vel.z;
-  const z = ball.pos.z;
-  // Time to ground: z + vz*t - 0.5*g*t² = 0
-  const g = 32.174;
-  const disc = vz * vz + 2 * g * z;
-  if (disc < 0) return null;
-  const tLand = (vz + Math.sqrt(disc)) / g;
-  // Horizontal position at landing (ignoring drag for prediction)
-  return {
-    x: ball.pos.x + vel.x * tLand,
-    y: ball.pos.y + vel.y * tLand,
-  };
+  const G = 32.174;
+  const K_DRAG = 0.00180;  // must match ballPhysics.ts
+  const DT = 1 / 30;       // coarse step is fine for prediction
+
+  let x = ball.pos.x, y = ball.pos.y, z = ball.pos.z;
+  let vx = ball.state.vel.x, vy = ball.state.vel.y, vz = ball.state.vel.z;
+
+  for (let t = 0; t < 12; t += DT) {
+    const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+    if (speed > 0.1) {
+      const dragMag = K_DRAG * speed * speed;
+      vx -= (dragMag * vx / speed) * DT;
+      vy -= (dragMag * vy / speed) * DT;
+      vz -= (dragMag * vz / speed + G) * DT;
+    } else {
+      vz -= G * DT;
+    }
+    x += vx * DT;
+    y += vy * DT;
+    z += vz * DT;
+    if (z <= 0) return { x, y };
+  }
+  // Fallback: ball hasn't landed within 12s (shouldn't happen)
+  return { x, y };
 }
 
 // ─── Assignment ──────────────────────────────────────────────────
@@ -288,13 +301,23 @@ export function assignFielderRoles(
     shortPool = ['B1', 'B2', 'SS', 'B3'];
   }
 
+  // ── 1B territory gate ──────────────────────────────────────────
+  // 1B only fields balls within 10 ft of 1st base (63.6, 63.6).
+  // Anything outside that radius is the 2B's responsibility.
+  const FIRST_BASE_PT = { x: 63.6, y: 63.6 };
+  const distFromFirstBase = Math.hypot(
+    predictedLanding.x - FIRST_BASE_PT.x,
+    predictedLanding.y - FIRST_BASE_PT.y,
+  );
+  const b1Eligible = distFromFirstBase <= 10;
+
   const primaryPool: Position[] = depthFt <= SHORT_CONTACT_DEPTH_FT
-    ? shortPool
+    ? shortPool.filter(p => p !== 'B1' || b1Eligible)
     : depthFt <= INFIELD_OF_GRAY_ZONE_FT
-      ? ['B1', 'B2', 'SS', 'B3']  // shallow — infield only, no pitcher/catcher
+      ? (['B1', 'B2', 'SS', 'B3'] as Position[]).filter(p => p !== 'B1' || b1Eligible)
       : depthFt <= INFIELD_CONTACT_DEPTH_FT
-        ? ['B1', 'B2', 'SS', 'B3', 'LF', 'CF', 'RF']  // gray zone — both pools
-        : ['LF', 'CF', 'RF', 'SS', 'B2'];  // deep — OF primary, MIF can help
+        ? (['B1', 'B2', 'SS', 'B3', 'LF', 'CF', 'RF'] as Position[]).filter(p => p !== 'B1' || b1Eligible)
+        : ['LF', 'CF', 'RF', 'SS', 'B2'];  // deep — OF primary, MIF can help (B1 never here)
 
   // Check if any infielder is already IN the ball's path (within ~15ft
   // of the trajectory line). This handles hard grounders hit AT a fielder.
@@ -315,6 +338,8 @@ export function assignFielderRoles(
     if (f.position === 'P' && !pitcherEligible) continue;
     // Catcher only intercepts bunts/dribblers near home
     if (f.position === 'C' && !catcherEligible) continue;
+    // B1 only intercepts balls within 10 ft of 1st base
+    if (f.position === 'B1' && !b1Eligible) continue;
 
     // Project fielder position onto ball trajectory line
     const toFielder = { x: f.pos.x - ball.pos.x, y: f.pos.y - ball.pos.y };
@@ -517,7 +542,13 @@ export function tickFielder(
         }
       }
 
-      moveToward(fielder, target, dt);
+      // ── Live re-prediction: update target as ball decelerates ───
+      if (ball.state.type === 'in-flight') {
+        const updated = predictLanding(ball);
+        if (updated) fielder.state.target = updated;
+      }
+
+      moveToward(fielder, fielder.state.target, dt);
 
       // Check if we can catch the ball (collider-based)
       if (ball.state.type === 'in-flight') {

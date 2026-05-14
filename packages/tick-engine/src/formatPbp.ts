@@ -36,6 +36,8 @@ export interface PbpFormatterState {
   currentBatterId?: number;
   /** Current outs before the at-bat — used to detect 3rd-out LOB. */
   currentOuts?: number;
+  /** True when runner-out already emitted the fielding-chain OUT line for this AB. */
+  runnerOutEmitted?: boolean;
 }
 
 export function createPbpState(): PbpFormatterState {
@@ -209,6 +211,7 @@ export function formatTickEvents(
         // Track batter + outs for runner-safe suppression
         st.currentBatterId = e.batter.id;
         st.currentOuts = e.outs;
+        st.runnerOutEmitted = false;
 
         // Batter + pitcher skills — debug only (#8)
         if (debug) {
@@ -252,7 +255,7 @@ export function formatTickEvents(
             out.push({
               time, kind: 'pitch',
               text: `  ${pp.pitchNum}. ${pitcher} throws ${pp.speed} to ${batter} [${pp.mph} mph]`,
-              color: 'text-violet-300',
+              color: 'text-white',
             });
           } else if (e.outcome === 'foul') {
             let text = `  ${pp.pitchNum}. ${pitcher} throws ${pp.speed} to ${batterLast}, ${batterLast} fouls it off ${countStr} [${pp.mph} mph]`;
@@ -260,38 +263,38 @@ export function formatTickEvents(
             if (fb) {
               text += ` — ${Math.round(fb.exitVeloMph)} mph, LA ${Math.round(fb.launchAngleDeg)}°, ${Math.round(fb.distanceFt)} ft`;
             }
-            out.push({ time, kind: 'pitch', text, color: 'text-amber-200' });
+            out.push({ time, kind: 'pitch', text, color: 'text-white' });
           } else if (e.outcome === 'ball') {
             // Ball — show location since batter didn't swing
             out.push({
               time, kind: 'pitch',
               text: `  ${pp.pitchNum}. ${pitcher} throws ${pp.speed}, ${loc} — ball ${countStr} [${pp.mph} mph]`,
-              color: 'text-sky-300',
+              color: 'text-white',
             });
           } else if (e.outcome === 'called-strike') {
             out.push({
               time, kind: 'pitch',
               text: `  ${pp.pitchNum}. ${pitcher} throws ${pp.speed}, ${loc} — called strike ${countStr} [${pp.mph} mph]`,
-              color: 'text-red-300',
+              color: 'text-white',
             });
           } else if (e.outcome === 'swinging-strike') {
             const chase = pp.zone === 'off' ? 'chases' : 'swings and misses';
             out.push({
               time, kind: 'pitch',
               text: `  ${pp.pitchNum}. ${pitcher} throws ${pp.speed}, ${batterLast} ${chase} ${countStr} [${pp.mph} mph]`,
-              color: 'text-red-300',
+              color: 'text-white',
             });
           } else if (e.outcome === 'hbp') {
             out.push({
               time, kind: 'pitch',
               text: `  ${pp.pitchNum}. ${pitcher} throws ${pp.speed} — hits ${batterLast}! ${countStr} [${pp.mph} mph]`,
-              color: 'text-red-300',
+              color: 'text-green-400',
             });
           } else {
             out.push({
               time, kind: 'pitch',
               text: `  ${pp.pitchNum}. ${pitcher} throws ${pp.speed} to ${batter} — ${e.outcome} ${countStr} [${pp.mph} mph]`,
-              color: 'text-violet-300',
+              color: 'text-white',
             });
           }
         } else {
@@ -299,7 +302,7 @@ export function formatTickEvents(
           out.push({
             time, kind: 'pitch',
             text: `     ${batter} — ${e.outcome} ${countStr}`,
-            color: 'text-violet-300',
+            color: 'text-white',
           });
         }
         break;
@@ -324,23 +327,23 @@ export function formatTickEvents(
           out.push({
             time, kind: 'contact', bold: true,
             text: `  🚀 ${batter} ${descriptor.charAt(0).toLowerCase()}${descriptor.slice(1)} to ${e.sprayDirection}!`,
-            color: 'text-yellow-300',
+            color: 'text-green-400',
           });
           out.push({
             time, kind: 'contact',
             text: `     — EV ${ev} mph | LA ${la}° | Spray ${spray}° | ${dist} ft${apex}`,
-            color: 'text-yellow-200',
+            color: 'text-white',
           });
         } else {
           out.push({
             time, kind: 'contact',
             text: `     ${batterAction} to ${e.sprayDirection}`,
-            color: 'text-amber-300',
+            color: 'text-white',
           });
           out.push({
             time, kind: 'contact',
             text: `     — EV ${ev} mph | LA ${la}° | Spray ${spray}° | ${dist} ft${apex}${hang}`,
-            color: 'text-amber-200',
+            color: 'text-white',
           });
         }
         break;
@@ -404,7 +407,7 @@ export function formatTickEvents(
       case 'wall-bounce': {
         let text = `  💥 OFF THE WALL!`;
         if (debugBallCoords) text += ` at (${Math.round(e.at.x)}, ${Math.round(e.at.y)})`;
-        out.push({ time, kind: 'play', bold: true, text, color: 'text-orange-300' });
+        out.push({ time, kind: 'play', bold: true, text, color: 'text-white' });
         break;
       }
 
@@ -412,7 +415,7 @@ export function formatTickEvents(
         const h = e.heightFt != null && e.heightFt > 0.5 ? `, height ${Math.round(e.heightFt)} ft` : '';
         let text = `  🧱 Cleared the wall!${h}`;
         if (debugBallCoords) text = `  🧱 Cleared the wall at (${Math.round(e.at.x)}, ${Math.round(e.at.y)})${h}`;
-        out.push({ time, kind: 'play', bold: true, text, color: 'text-yellow-200' });
+        out.push({ time, kind: 'play', bold: true, text, color: 'text-green-400' });
         break;
       }
 
@@ -420,7 +423,7 @@ export function formatTickEvents(
         out.push({
           time, kind: 'play', bold: true,
           text: `  🚀 GONE! ${e.distanceFt} ft bomb!`,
-          color: 'text-yellow-300',
+          color: 'text-green-400',
         });
         break;
       }
@@ -461,7 +464,7 @@ export function formatTickEvents(
         out.push({
           time, kind: 'play',
           text: `  ✅ ${runner} ${verb}`,
-          color: 'text-emerald-300',
+          color: 'text-green-400',
         });
         break;
       }
@@ -492,7 +495,7 @@ export function formatTickEvents(
             out.push({
               time, kind: 'play',
               text: `  🧤 ${first.name} (${first.pos}) makes the catch — ${runner} is OUT ${scoringStr}`,
-              color: 'text-green-300',
+              color: 'text-red-400',
             });
           } else {
             // Find the receiver
@@ -501,10 +504,11 @@ export function formatTickEvents(
             out.push({
               time, kind: 'play',
               text: `  🏃 ${first.name} (${first.pos}) fields and throws${receiverPart} — ${runner} is OUT ${scoringStr}`,
-              color: 'text-green-300',
+              color: 'text-red-400',
             });
           }
           st.fieldingChain = [];
+          st.runnerOutEmitted = true;
         } else {
           out.push({
             time, kind: 'play',
@@ -521,7 +525,7 @@ export function formatTickEvents(
         out.push({
           time, kind: 'score', bold: true,
           text: `  🏠 ${runner} scores!`,
-          color: 'text-emerald-400',
+          color: 'text-green-400',
         });
         break;
       }
@@ -539,8 +543,10 @@ export function formatTickEvents(
         }
         // Flush fielding chain — if result is an out but tick engine didn't
         // emit a runner-out, build the fielding line from the chain.
+        // Skip if runner-out already emitted the OUT line (avoids double-display
+        // when a relay throw builds a second chain after the out).
         const chain = st.fieldingChain;
-        if (chain.length > 0 && isOut) {
+        if (chain.length > 0 && isOut && !st.runnerOutEmitted) {
           const first = chain[0];
           // Build scoring notation: filter out 'received', map to position
           // numbers, deduplicate consecutive same-position entries, then
@@ -560,7 +566,7 @@ export function formatTickEvents(
             out.push({
               time, kind: 'play',
               text: `  🧤 ${first.name} (${first.pos}) makes the catch — ${batter} is OUT ${scoringStr}`,
-              color: 'text-green-300',
+              color: 'text-red-400',
             });
           } else {
             const receiver = chain.find(c => c.action === 'received');
@@ -568,7 +574,7 @@ export function formatTickEvents(
             out.push({
               time, kind: 'play',
               text: `  🏃 ${first.name} (${first.pos}) fields and throws${receiverPart} — ${batter} is OUT ${scoringStr}`,
-              color: 'text-green-300',
+              color: 'text-red-400',
             });
           }
         }
@@ -576,9 +582,8 @@ export function formatTickEvents(
         out.push({
           time, kind: 'result', bold: true,
           text: `→ ${batter}: ${r}${rbi}`,
-          color: e.result === 'home-run' ? 'text-yellow-300' :
-            ['single', 'double', 'triple', 'walk', 'hbp', 'reached-on-error'].includes(e.result)
-              ? 'text-emerald-300' : 'text-red-300',
+          color: ['single', 'double', 'triple', 'home-run', 'walk', 'hbp', 'reached-on-error'].includes(e.result)
+              ? 'text-green-400' : 'text-red-400',
         });
         break;
       }
@@ -589,7 +594,7 @@ export function formatTickEvents(
         out.push({
           time, kind: 'play',
           text: `🔄 ${runner} caught in a rundown between ${baseShort(e.between[0])} and ${baseShort(e.between[1])}!`,
-          color: 'text-amber-300',
+          color: 'text-white',
         });
         break;
       }
@@ -611,7 +616,7 @@ export function formatTickEvents(
           out.push({
             time, kind: 'play',
             text: `✅ ${runner} escapes the rundown! Safe at ${baseShort(e.at)}`,
-            color: 'text-emerald-400',
+            color: 'text-green-400',
           });
         }
         break;
@@ -666,7 +671,7 @@ export function formatTickEvents(
           'intentional-walk': 'Manager signals for an intentional walk',
         };
         const text = narratives[e.decision] ?? `Manager decision: ${e.detail}`;
-        out.push({ time, kind: 'flow', text: `  📋 ${text}`, color: 'text-cyan-300' });
+        out.push({ time, kind: 'flow', text: `  📋 ${text}`, color: 'text-white' });
         break;
       }
 
@@ -674,7 +679,7 @@ export function formatTickEvents(
         out.push({
           time, kind: 'flow',
           text: `  ⚙️ Manager adjusts the defensive alignment`,
-          color: 'text-cyan-300',
+          color: 'text-white',
         });
         break;
       }
@@ -685,7 +690,7 @@ export function formatTickEvents(
         out.push({
           time, kind: 'play', bold: true,
           text: `  🏃 ${runner} steals ${baseShort(e.base)}!`,
-          color: 'text-emerald-300',
+          color: 'text-green-400',
         });
         break;
       }
@@ -705,7 +710,7 @@ export function formatTickEvents(
         out.push({
           time, kind: 'play', bold: true,
           text: `  ⚠️ Wild pitch by ${pitcher}!`,
-          color: 'text-orange-300',
+          color: 'text-white',
         });
         break;
       }
@@ -715,7 +720,57 @@ export function formatTickEvents(
         out.push({
           time, kind: 'play', bold: true,
           text: `  ⚠️ Passed ball by ${catcher}!`,
-          color: 'text-orange-300',
+          color: 'text-white',
+        });
+        break;
+      }
+
+      case 'advanced-on-wild-pitch': {
+        const runner = formatPlayerTag(e.runnerName, e.runnerId, 'Runner');
+        out.push({
+          time, kind: 'play', bold: true,
+          text: `  🏃 ${runner} advances to ${baseShort(e.to)} on the wild pitch`,
+          color: 'text-green-400',
+        });
+        break;
+      }
+
+      case 'pickoff-attempt': {
+        const pitcher = formatPlayerTag(e.pitcherName, undefined, 'Pitcher');
+        out.push({
+          time, kind: 'play', bold: false,
+          text: `  ⚾ ${pitcher} checks runner at ${baseShort(e.base)}...`,
+          color: 'text-white',
+        });
+        break;
+      }
+
+      case 'pickoff-out': {
+        const runner = formatPlayerTag(e.runnerName, e.runnerId, 'Runner');
+        out.push({
+          time, kind: 'play', bold: true,
+          text: `  ❌ Pickoff! ${runner} caught off ${baseShort(e.at)}!`,
+          color: 'text-red-400',
+        });
+        break;
+      }
+
+      case 'pickoff-safe': {
+        const runner = formatPlayerTag(e.runnerName, e.runnerId, 'Runner');
+        out.push({
+          time, kind: 'play', bold: false,
+          text: `  ✅ ${runner} dives back safely to ${baseShort(e.at)}`,
+          color: 'text-green-400',
+        });
+        break;
+      }
+
+      case 'hit-and-run': {
+        const runner = formatPlayerTag(e.runnerName, e.runnerId, 'Runner');
+        out.push({
+          time, kind: 'play', bold: true,
+          text: `  🏃 Hit and run! ${runner} goes on the pitch`,
+          color: 'text-white',
         });
         break;
       }
@@ -725,7 +780,7 @@ export function formatTickEvents(
         out.push({
           time, kind: 'play', bold: true,
           text: `  ⚠️ Balk called on ${pitcher} — runners advance`,
-          color: 'text-orange-300',
+          color: 'text-white',
         });
         break;
       }

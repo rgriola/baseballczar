@@ -2,7 +2,7 @@
 // and game-day roster snapshots, producing 30fps tick engine snapshots
 // identical to Sim Lab 2 quality.
 
-import { createRng, simulateGame } from '@baseballczar/sim-engine';
+import { createRng } from '@baseballczar/sim-engine';
 import type { Team, Player, Skills, Hand, Position, GameResult } from '@baseballczar/sim-engine';
 import { simulateFullGame } from '@baseballczar/tick-engine/gameOrchestrator';
 import type { WorldSnapshot } from '@baseballczar/tick-engine';
@@ -59,15 +59,12 @@ export function resimulateForReplay(payload: ResimPayload): ResimResult {
   const homeStarterIndex = g.home_roster_snapshot!.starterIndex ?? 0;
   const awayStarterIndex = g.visitor_roster_snapshot!.starterIndex ?? 0;
 
-  // Re-run the sim engine with the same seed → deterministic, same AtBatRecord[]
+  // Re-run the sim deterministically from seed through the tick engine
+  // The orchestrator now owns the game loop — no pre-rolling needed.
   const rng = createRng(g.sim_seed!);
-  const gameResult = simulateGame(homeTeam, awayTeam, rng, {
-    homeStarterIndex,
-    awayStarterIndex,
-  });
 
   // Run the tick engine → 30fps physics snapshots (same pipeline as Sim Lab 2)
-  const fullGame = simulateFullGame(gameResult, homeTeam, awayTeam, {
+  const fullGame = simulateFullGame(rng, homeTeam, awayTeam, {
     captureEvery: 2,  // 30fps output
     homeStarterIndex,
     awayStarterIndex,

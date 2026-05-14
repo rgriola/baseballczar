@@ -9,32 +9,16 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
   createRng,
-  simulateGame as simulateGameV2,
   type Hand as V2Hand,
   type Player as V2Player,
   type Position as V2Position,
   type Team as V2Team,
 } from '@baseballczar/sim-engine';
-import { createResolvePlayBridge } from '@baseballczar/tick-engine';
-import {
-  simulateGame as simulateLegacyGame,
-  type TeamInput,
-  type LineupPlayer,
-  type BullpenPitcher,
-} from '../sim-engine/GameEngine';
-import {
-  type PitcherAttributes,
-  type PlayerSkills,
-} from '../sim-engine/types';
+import { simulateFullGame } from '@baseballczar/tick-engine';
 import { persistGameResult } from './persist-game';
 import {
-  adaptV2ResultToLegacy,
-  type ScheduledTeamAdapterInput,
-} from './scheduled-v2-adapter';
-import {
   buildScheduledGameContract,
-  SIM_VERSION_SCHEDULED_LEGACY,
-  SIM_VERSION_SCHEDULED_V2,
+  SIM_VERSION_TICK_FULL,
 } from './game-result-contract';
 import { logger } from '@/lib/logger';
 
@@ -89,7 +73,6 @@ interface PitcherRow {
 }
 
 interface TeamBuild {
-  teamInput: TeamInput;
   v2Team: V2Team;
   v2StarterIndex: number;
   hitterMeta: Map<number, { teamId: number; position: string; batOrder: number }>;
@@ -146,33 +129,27 @@ export async function simulateScheduledGame(
     sched.id,
   );
 
-  // 4. Run simulation
-  const useV2 = isScheduledEngineV2Enabled();
+  // 4. Run simulation — single tick-engine pipeline
   const seed = computeScheduledSeed(sched.id, sched.league_id, sched.season_no);
 
-  const result = useV2
-    ? adaptV2ResultToLegacy(
-      simulateGameV2(
-        homeInput.v2Team,
-        visitorInput.v2Team,
-        createRng(seed),
-        {
-          homeStarterIndex: homeInput.v2StarterIndex,
-          awayStarterIndex: visitorInput.v2StarterIndex,
-          resolvePlay: createResolvePlayBridge(),
-        },
-      ),
-      toAdapterInput(visitorInput),
-      toAdapterInput(homeInput),
-    )
-    : simulateLegacyGame(visitorInput.teamInput, homeInput.teamInput);
+  const fullResult = simulateFullGame(
+    createRng(seed),
+    homeInput.v2Team,
+    visitorInput.v2Team,
+    {
+      homeStarterIndex: homeInput.v2StarterIndex,
+      awayStarterIndex: visitorInput.v2StarterIndex,
+    },
+  );
 
-  const contract = buildScheduledGameContract(result, {
+  const engineResult = fullResult.gameResult;
+
+  const contract = buildScheduledGameContract(engineResult, {
     scheduleId: sched.id,
     leagueId: sched.league_id,
     seasonNo: sched.season_no,
     seed,
-    simVersion: useV2 ? SIM_VERSION_SCHEDULED_V2 : SIM_VERSION_SCHEDULED_LEGACY,
+    simVersion: SIM_VERSION_TICK_FULL,
   });
 
   // 5. Ensure budget rows exist (self-healing for teams created before budget system)
@@ -203,17 +180,10 @@ export async function simulateScheduledGame(
 
   return {
     gameId,
-    homeRuns: result.homeRuns,
-    visitorRuns: result.visitorRuns,
-    winningTeamId: result.winningTeamId,
+    homeRuns: engineResult.homeRuns,
+    visitorRuns: engineResult.awayRuns,
+    winningTeamId: engineResult.homeRuns > engineResult.awayRuns ? engineResult.homeTeam.id : engineResult.awayTeam.id,
   };
-}
-
-function isScheduledEngineV2Enabled(): boolean {
-  const raw = process.env.SIM_SCHEDULED_ENGINE_V2;
-  if (raw == null) return false;
-  const value = raw.trim().toLowerCase();
-  return value === '1' || value === 'true' || value === 'on';
 }
 
 const STARTING_BALANCE = 5_000_000;
@@ -483,46 +453,6 @@ async function buildTeamInput(
   );
   const closerPitcher = pitcherRows.find((p) => p.rotation_slot === 10);
 
-  // Build legacy lineup
-  const lineup: LineupPlayer[] = finalHitters.map((h) => ({
-    playerId: h.id,
-    jerseyNo: h.jersey_no,
-    lastName: h.last_name,
-    skills: {
-      ag: clampSkill(h.ag),
-      avg: clampSkill(h.avg),
-      power: clampSkill(h.strength),
-      eye: clampSkill(h.eye),
-      dhr: clampSkill(h.dhr),
-      speed: clampSkill(h.speed),
-    } as PlayerSkills,
-  }));
-
-  function toBullpenEntry(row: PitcherRow, isStarter: boolean, isCloser: boolean): BullpenPitcher {
-    return {
-      playerId: row.id,
-      jerseyNo: row.jersey_no,
-      lastName: row.last_name,
-      skills: {
-        ag: clampSkill(row.ag),
-        avg: clampSkill(row.avg),
-        power: clampSkill(row.strength),
-        eye: clampSkill(row.eye),
-        dhr: clampSkill(row.dhr),
-        speed: clampSkill(row.speed),
-        stamina: clampSkill(row.stamina),
-      } as PitcherAttributes,
-      isStarter,
-      isCloser,
-    };
-  }
-
-  const bullpen: BullpenPitcher[] = [
-    toBullpenEntry(actualStarter, true, false),
-    ...relievers.map((p) => toBullpenEntry(p, false, false)),
-    ...(closerPitcher ? [toBullpenEntry(closerPitcher, false, true)] : []),
-  ];
-
   // Build metadata maps
   const hitterMeta = new Map<number, { teamId: number; position: string; batOrder: number }>();
   for (const h of finalHitters) {
@@ -594,7 +524,6 @@ async function buildTeamInput(
   };
 
   return {
-    teamInput: { teamId, teamName, lineup, bullpen },
     v2Team,
     v2StarterIndex,
     hitterMeta,
@@ -686,20 +615,6 @@ function toV2Pitcher(row: PitcherRow): V2Player {
       bunting: clampSkill(row.bunting),
       karma: clampSkill(row.karma),
     },
-  };
-}
-
-function toAdapterInput(team: TeamBuild): ScheduledTeamAdapterInput {
-  const starterPitcherId = team.v2Team.rotation[team.v2StarterIndex]?.id
-    ?? team.v2Team.rotation[0]?.id
-    ?? -1;
-
-  return {
-    teamId: team.teamInput.teamId,
-    teamName: team.teamInput.teamName,
-    hitterIds: new Set(team.hitterMeta.keys()),
-    pitcherIds: new Set(team.pitcherMeta.keys()),
-    starterPitcherId,
   };
 }
 

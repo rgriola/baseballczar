@@ -379,19 +379,21 @@ export default function PersistedReplay({
                         <thead>
                           <tr className="border-b border-zinc-700 text-zinc-500">
                             <th className="py-0.5 text-left">Player</th>
-                            <th className="w-6 py-0.5 text-center">AB</th>
-                            <th className="w-5 py-0.5 text-center">R</th>
-                            <th className="w-5 py-0.5 text-center">H</th>
-                            <th className="w-5 py-0.5 text-center">HR</th>
-                            <th className="w-6 py-0.5 text-center">RBI</th>
-                            <th className="w-5 py-0.5 text-center">BB</th>
-                            <th className="w-5 py-0.5 text-center">SO</th>
+                            <th className="w-5 py-0.5 text-center">AB</th>
+                            <th className="w-4 py-0.5 text-center">R</th>
+                            <th className="w-4 py-0.5 text-center">H</th>
+                            <th className="w-4 py-0.5 text-center">2B</th>
+                            <th className="w-4 py-0.5 text-center">3B</th>
+                            <th className="w-4 py-0.5 text-center">HR</th>
+                            <th className="w-5 py-0.5 text-center">RBI</th>
+                            <th className="w-4 py-0.5 text-center">BB</th>
+                            <th className="w-4 py-0.5 text-center">SO</th>
                           </tr>
                         </thead>
                         <tbody>
                           {team.rows.length === 0 ? (
                             <tr>
-                              <td colSpan={9} className="py-1 text-center text-zinc-500">
+                              <td colSpan={10} className="py-1 text-center text-zinc-500">
                                 No batting box data recorded for this game.
                               </td>
                             </tr>
@@ -401,19 +403,21 @@ export default function PersistedReplay({
                               const pos = person?.position ?? row.position ?? '-';
                               const posDisplay = pos === 'B1' ? '1B' : pos === 'B2' ? '2B' : pos === 'B3' ? '3B' : pos;
                               return (
-                                <tr key={row.id} className="border-b border-zinc-800/30">
-                                  <td className="py-0.5 text-white text-left">
+                                <tr key={row.id} className="border-b border-zinc-800/30 hover:bg-zinc-800/30">
+                                  <td className="py-0.5 text-white text-[11px] text-left">
                                     <span className="text-zinc-400">{shortPlayerName(row.players, `#${row.player_id}`).split(' ')[0]}</span>{' '}
                                     {shortPlayerName(row.players, `#${row.player_id}`).split(' ').slice(1).join(' ')}{' '}
                                     <span className="text-zinc-400">{posDisplay}</span>
                                   </td>
-                                  <td className="py-0.5 text-center text-white">{num(row.ab)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.r)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.h)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.hr)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.rbi)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.bb)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.so)}</td>
+                                  <td className="py-0.5 text-center tabular-nums text-white">{num(row.ab)}</td>
+                                  <td className={`py-0.5 text-center tabular-nums ${num(row.r) > 0 ? 'text-amber-300' : 'text-white'}`}>{num(row.r)}</td>
+                                  <td className={`py-0.5 text-center tabular-nums ${num(row.h) > 0 ? 'text-green-300' : 'text-white'}`}>{num(row.h)}</td>
+                                  <td className={`py-0.5 text-center tabular-nums ${num(row.b2) > 0 ? 'text-green-300' : 'text-white'}`}>{num(row.b2)}</td>
+                                  <td className={`py-0.5 text-center tabular-nums ${num(row.b3) > 0 ? 'text-green-300' : 'text-white'}`}>{num(row.b3)}</td>
+                                  <td className={`py-0.5 text-center tabular-nums ${num(row.hr) > 0 ? 'text-red-300 font-bold' : 'text-white'}`}>{num(row.hr)}</td>
+                                  <td className={`py-0.5 text-center tabular-nums ${num(row.rbi) > 0 ? 'text-amber-200' : 'text-white'}`}>{num(row.rbi)}</td>
+                                  <td className="py-0.5 text-center tabular-nums text-white">{num(row.bb)}</td>
+                                  <td className="py-0.5 text-center tabular-nums text-white">{num(row.so)}</td>
                                 </tr>
                               );
                             })
@@ -435,6 +439,7 @@ export default function PersistedReplay({
                             <th className="w-7 py-0.5 text-center">IP</th>
                             <th className="w-5 py-0.5 text-center">H</th>
                             <th className="w-5 py-0.5 text-center">R</th>
+                            <th className="w-5 py-0.5 text-center">ER</th>
                             <th className="w-5 py-0.5 text-center">BB</th>
                             <th className="w-5 py-0.5 text-center">SO</th>
                             <th className="w-5 py-0.5 text-center">HR</th>
@@ -443,7 +448,7 @@ export default function PersistedReplay({
                         <tbody>
                           {team.rows.length === 0 ? (
                             <tr>
-                              <td colSpan={7} className="py-1 text-center text-zinc-500">
+                              <td colSpan={8} className="py-1 text-center text-zinc-500">
                                 No pitching box data recorded for this game.
                               </td>
                             </tr>
@@ -454,16 +459,17 @@ export default function PersistedReplay({
                               const jerseyPart = parts[0]; // #XX
                               const namePart = parts.slice(1).join(' ');
                               return (
-                                <tr key={row.id} className="border-b border-zinc-800/30">
-                                  <td className="py-0.5 text-white text-left">
+                                <tr key={row.id} className="border-b border-zinc-800/30 hover:bg-zinc-800/30">
+                                  <td className="py-0.5 text-white text-[11px] text-left">
                                     <span className="text-zinc-400">{jerseyPart}</span>{' '}{namePart}
                                   </td>
-                                  <td className="py-0.5 text-center text-white">{num(row.ip).toFixed(1)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.h)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.r)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.bb)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.so)}</td>
-                                  <td className="py-0.5 text-center text-white">{num(row.hr)}</td>
+                                  <td className="py-0.5 text-center tabular-nums text-white">{num(row.ip).toFixed(1)}</td>
+                                  <td className="py-0.5 text-center tabular-nums text-white">{num(row.h)}</td>
+                                  <td className={`py-0.5 text-center tabular-nums ${num(row.r) > 0 ? 'text-red-300' : 'text-white'}`}>{num(row.r)}</td>
+                                  <td className={`py-0.5 text-center tabular-nums ${num(row.er) > 0 ? 'text-red-300' : 'text-white'}`}>{num(row.er)}</td>
+                                  <td className="py-0.5 text-center tabular-nums text-white">{num(row.bb)}</td>
+                                  <td className={`py-0.5 text-center tabular-nums ${num(row.so) > 3 ? 'text-cyan-300' : 'text-white'}`}>{num(row.so)}</td>
+                                  <td className="py-0.5 text-center tabular-nums text-white">{num(row.hr)}</td>
                                 </tr>
                               );
                             })

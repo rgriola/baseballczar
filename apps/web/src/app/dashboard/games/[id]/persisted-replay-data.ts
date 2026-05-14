@@ -107,6 +107,8 @@ export type PersistedHittingRow = {
   rbi: number;
   bb: number;
   so: number;
+  sb: number;
+  cs: number;
   players?: PersistedPlayerName | PersistedPlayerName[] | null;
 };
 
@@ -118,6 +120,7 @@ export type PersistedPitchingRow = {
   ip: number;
   h: number;
   r: number;
+  er: number;
   bb: number;
   so: number;
   hr: number;

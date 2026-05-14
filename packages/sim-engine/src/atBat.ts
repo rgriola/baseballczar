@@ -42,10 +42,14 @@ function computePitchVelocity(
   const baseMph = throwVelocityMph('P', pitcher.skills.throwing ?? 5);
   const fatigueMult = pitcherFatigueMultiplier(pitchCount, pitcher.skills.stamina ?? 5);
   const fatigueBaseMph = baseMph * fatigueMult;
-  // Off-speed pitches are ~86% of fastball velocity
-  const mph = intentZone === 'off'
-    ? Math.round(fatigueBaseMph * 0.86)
-    : Math.round(fatigueBaseMph);
+  // Pitch-type velocity discounts (MLB-realistic):
+  //   Four-seam (in):   100% — full gas
+  //   Slider (edge):     93% — ~6-7 mph less (91→85)
+  //   Changeup (off):    86% — ~12-14 mph less (91→78)
+  const typeMultiplier = intentZone === 'off' ? 0.86
+    : intentZone === 'edge' ? 0.93
+    : 1.0;
+  const mph = Math.round(fatigueBaseMph * typeMultiplier);
   return { mph, pitchType: pitchTypeLabel(intentZone) };
 }
 

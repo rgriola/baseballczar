@@ -9,7 +9,7 @@
  * Game outcomes come from pre-rolled simulateGame() dice, then replayed
  * through the tick engine with concurrent entity physics.
  */
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef, Fragment } from 'react';
 import {
   formatTickEvents,
   createPbpState,
@@ -605,38 +605,61 @@ export default function SimLab2Module({
                       {[{ label: 'Away', team: boxScore.away, color: 'text-blue-300' }, { label: 'Home', team: boxScore.home, color: 'text-green-300' }].map(({ label, team, color }) => (
                         <div key={label} className="mb-3">
                           <div className={`text-[10px] uppercase tracking-wider mb-1 ${color}`}>{team.teamName} Batting</div>
-                          <table className="w-full text-xs font-mono">
-                            <thead>
-                              <tr className="text-zinc-500 border-b border-zinc-700">
-                                <th className="text-left py-0.5 font-medium">Player</th>
-                                <th className="text-center py-0.5 font-medium w-6">AB</th>
-                                <th className="text-center py-0.5 font-medium w-5">R</th>
-                                <th className="text-center py-0.5 font-medium w-5">H</th>
-                                <th className="text-center py-0.5 font-medium w-5">HR</th>
-                                <th className="text-center py-0.5 font-medium w-6">RBI</th>
-                                <th className="text-center py-0.5 font-medium w-5">BB</th>
-                                <th className="text-center py-0.5 font-medium w-5">SO</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {team.batters.map(b => (
-                                <tr key={b.player.id} className="border-b border-zinc-800/30 hover:bg-zinc-800/30">
-                                  <td className="py-0.5 text-white text-[11px] text-left">
-                                    <span className="text-zinc-400">#{String(b.player.jerseyNumber).padStart(2, '0')}</span>{' '}
-                                    {b.player.lastName}{' '}
-                                    <span className="text-zinc-400">{b.posLabel}</span>
-                                  </td>
-                                  <td className="text-center py-0.5 tabular-nums text-white">{b.ab}</td>
-                                  <td className={`text-center py-0.5 tabular-nums ${b.runs > 0 ? 'text-amber-300' : 'text-white'}`}>{b.runs}</td>
-                                  <td className={`text-center py-0.5 tabular-nums ${b.hits > 0 ? 'text-green-300' : 'text-white'}`}>{b.hits}</td>
-                                  <td className={`text-center py-0.5 tabular-nums ${b.homeRuns > 0 ? 'text-red-300 font-bold' : 'text-white'}`}>{b.homeRuns}</td>
-                                  <td className={`text-center py-0.5 tabular-nums ${b.rbis > 0 ? 'text-amber-200' : 'text-white'}`}>{b.rbis}</td>
-                                  <td className="text-center py-0.5 tabular-nums text-white">{b.walks}</td>
-                                  <td className="text-center py-0.5 tabular-nums text-white">{b.strikeouts}</td>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs font-mono">
+                              <thead>
+                                <tr className="text-zinc-500 border-b border-zinc-700">
+                                  <th className="text-left py-0.5 font-medium">Player</th>
+                                  <th className="text-center py-0.5 font-medium w-5">AB</th>
+                                  <th className="text-center py-0.5 font-medium w-4">R</th>
+                                  <th className="text-center py-0.5 font-medium w-4">H</th>
+                                  <th className="text-center py-0.5 font-medium w-4">2B</th>
+                                  <th className="text-center py-0.5 font-medium w-4">3B</th>
+                                  <th className="text-center py-0.5 font-medium w-4">HR</th>
+                                  <th className="text-center py-0.5 font-medium w-5">RBI</th>
+                                  <th className="text-center py-0.5 font-medium w-4">BB</th>
+                                  <th className="text-center py-0.5 font-medium w-4">SO</th>
+                                  <th className="text-center py-0.5 font-medium w-4">SB</th>
+                                  <th className="text-center py-0.5 font-medium w-4 text-zinc-600">A</th>
+                                  <th className="text-center py-0.5 font-medium w-4 text-zinc-600">PO</th>
+                                  <th className="text-center py-0.5 font-medium w-4 text-zinc-600">E</th>
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                              </thead>
+                              <tbody>
+                                {team.batters.map(b => (
+                                  <Fragment key={b.player.id}>
+                                    <tr className="border-b border-zinc-800/30 hover:bg-zinc-800/30">
+                                      <td className="py-0.5 text-white text-[11px] text-left">
+                                        <span className="text-zinc-400">#{String(b.player.jerseyNumber).padStart(2, '0')}</span>{' '}
+                                        {b.player.lastName}{' '}
+                                        <span className="text-zinc-400">{b.posLabel}</span>
+                                      </td>
+                                      <td className="text-center py-0.5 tabular-nums text-white">{b.ab}</td>
+                                      <td className={`text-center py-0.5 tabular-nums ${b.runs > 0 ? 'text-amber-300' : 'text-white'}`}>{b.runs}</td>
+                                      <td className={`text-center py-0.5 tabular-nums ${b.hits > 0 ? 'text-green-300' : 'text-white'}`}>{b.hits}</td>
+                                      <td className={`text-center py-0.5 tabular-nums ${b.doubles > 0 ? 'text-green-300' : 'text-white'}`}>{b.doubles}</td>
+                                      <td className={`text-center py-0.5 tabular-nums ${b.triples > 0 ? 'text-green-300' : 'text-white'}`}>{b.triples}</td>
+                                      <td className={`text-center py-0.5 tabular-nums ${b.homeRuns > 0 ? 'text-red-300 font-bold' : 'text-white'}`}>{b.homeRuns}</td>
+                                      <td className={`text-center py-0.5 tabular-nums ${b.rbis > 0 ? 'text-amber-200' : 'text-white'}`}>{b.rbis}</td>
+                                      <td className="text-center py-0.5 tabular-nums text-white">{b.walks}</td>
+                                      <td className="text-center py-0.5 tabular-nums text-white">{b.strikeouts}</td>
+                                      <td className={`text-center py-0.5 tabular-nums ${b.sb > 0 ? 'text-sky-300' : 'text-white'}`}>{b.sb}</td>
+                                      <td className="text-center py-0.5 tabular-nums text-zinc-500">{b.assists}</td>
+                                      <td className="text-center py-0.5 tabular-nums text-zinc-500">{b.putouts}</td>
+                                      <td className={`text-center py-0.5 tabular-nums ${b.errors > 0 ? 'text-red-400' : 'text-zinc-500'}`}>{b.errors}</td>
+                                    </tr>
+                                    {b.avgEV !== null && (
+                                      <tr className="border-b border-zinc-800/10">
+                                        <td colSpan={14} className="py-0 pl-6 text-[9px] text-zinc-500">
+                                          EV {b.avgEV} · LA {b.avgLA}° · Spray {b.avgSpray}° · Bat {b.avgBatSpeed} mph
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       ))}
 
@@ -651,10 +674,12 @@ export default function SimLab2Module({
                                 <th className="text-center py-0.5 font-medium w-7">IP</th>
                                 <th className="text-center py-0.5 font-medium w-5">H</th>
                                 <th className="text-center py-0.5 font-medium w-5">R</th>
+                                <th className="text-center py-0.5 font-medium w-5">ER</th>
                                 <th className="text-center py-0.5 font-medium w-5">BB</th>
                                 <th className="text-center py-0.5 font-medium w-5">SO</th>
                                 <th className="text-center py-0.5 font-medium w-5">HR</th>
                                 <th className="text-center py-0.5 font-medium w-6">PC</th>
+                                <th className="text-center py-0.5 font-medium w-7 text-zinc-600">MPH</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -674,10 +699,12 @@ export default function SimLab2Module({
                                   <td className="text-center py-0.5 tabular-nums text-white">{p.ip}</td>
                                   <td className="text-center py-0.5 tabular-nums text-white">{p.hits}</td>
                                   <td className={`text-center py-0.5 tabular-nums ${p.runs > 0 ? 'text-red-300' : 'text-white'}`}>{p.runs}</td>
+                                  <td className={`text-center py-0.5 tabular-nums ${p.earnedRuns > 0 ? 'text-red-300' : 'text-white'}`}>{p.earnedRuns}</td>
                                   <td className="text-center py-0.5 tabular-nums text-white">{p.walks}</td>
                                   <td className={`text-center py-0.5 tabular-nums ${p.strikeouts > 3 ? 'text-cyan-300' : 'text-white'}`}>{p.strikeouts}</td>
                                   <td className="text-center py-0.5 tabular-nums text-white">{p.homeRuns}</td>
                                   <td className="text-center py-0.5 tabular-nums text-white">{p.pitches}</td>
+                                  <td className="text-center py-0.5 tabular-nums text-zinc-400">{p.avgMph ?? '—'}</td>
                                 </tr>
                               ))}
                             </tbody>

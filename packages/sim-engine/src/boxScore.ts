@@ -24,6 +24,17 @@ export interface BoxScoreBatter {
   rbis: number;
   walks: number;
   strikeouts: number;
+  sb: number;
+  // Fielding (unified on the player line)
+  putouts: number;
+  assists: number;
+  errors: number;
+  // Analytics (computed averages)
+  avgEV: number | null;       // avg exit velocity (mph)
+  avgLA: number | null;       // avg launch angle (deg)
+  avgSpray: number | null;    // avg spray angle (deg)
+  avgBatSpeed: number | null; // avg bat speed (mph)
+  battedBalls: number;        // # of fair balls in play
 }
 
 export interface BoxScorePitcher {
@@ -38,6 +49,8 @@ export interface BoxScorePitcher {
   homeRuns: number;
   pitches: number;
   decision?: 'W' | 'L' | 'SV';
+  // Analytics
+  avgMph: number | null;  // avg pitch velocity
 }
 
 export interface BoxScoreTeamLine {
@@ -94,6 +107,7 @@ export function buildBoxScore(result: GameResult): BoxScore {
   function buildBatters(team: Team, stats: Map<number, BatterGameStats>): BoxScoreBatter[] {
     return team.lineup.map((p, i) => {
       const s = stats.get(p.id);
+      const bb = s?.battedBalls ?? 0;
       return {
         player: p,
         orderNum: i + 1,
@@ -107,6 +121,15 @@ export function buildBoxScore(result: GameResult): BoxScore {
         rbis: s?.rbis ?? 0,
         walks: s?.walks ?? 0,
         strikeouts: s?.strikeouts ?? 0,
+        sb: s?.sb ?? 0,
+        putouts: s?.putouts ?? 0,
+        assists: s?.assists ?? 0,
+        errors: s?.errors ?? 0,
+        battedBalls: bb,
+        avgEV: bb > 0 ? Math.round(((s?.totalEV ?? 0) / bb) * 10) / 10 : null,
+        avgLA: bb > 0 ? Math.round(((s?.totalLA ?? 0) / bb) * 10) / 10 : null,
+        avgSpray: bb > 0 ? Math.round(((s?.totalSpray ?? 0) / bb) * 10) / 10 : null,
+        avgBatSpeed: bb > 0 ? Math.round(((s?.totalBatSpeed ?? 0) / bb) * 10) / 10 : null,
       };
     });
   }
@@ -148,6 +171,7 @@ export function buildBoxScore(result: GameResult): BoxScore {
         strikeouts: s.strikeouts,
         homeRuns: s.homeRuns,
         pitches: s.pitches,
+        avgMph: s.pitches > 0 ? Math.round((s.totalMph / s.pitches) * 10) / 10 : null,
       });
     }
 

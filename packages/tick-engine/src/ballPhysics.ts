@@ -118,18 +118,19 @@ function calibrateLaunch(
 
   // ─── Grounders (negative or near-zero vertical) ─────────────────
   // For grounders the ball leaves the bat downward and bounces off
-  // the dirt. We should NOT try to calibrate vertical velocity to
-  // match hang time — that makes it dive into the ground at extreme
-  // speed. Instead, use a gentle downward angle and calibrate only
-  // the horizontal speed to match the target distance.
+  // the dirt. The ball's total distance comes from rolling with
+  // friction — NOT from trying to fly the full distance ballistically.
+  // Using targetDistanceFt / targetHangTimeSec here produced absurd
+  // speeds (e.g. 250ft / 0.3s = 833 ft/s = 568 mph). Instead, use
+  // the raw horizontal component from exit velocity: a 100 mph
+  // grounder at -10° LA → 144 ft/s horizontal, which is physically
+  // correct. The bounce + roll physics in tickBall handles
+  // deceleration naturally via friction and ground absorption.
   if (baseVert <= 0) {
-    // Grounder: small downward vVert (just enough to hit dirt from bat
-    // height in ~0.2-0.3s). The bounce + roll physics in tickBall
-    // handles the rest naturally.
     const gentleVert = -G * 0.15;  // lands in ~0.3s from 3ft → realistic dirt hit
-    // Horizontal: aim for target distance / target time
-    // (grounder travels at roughly constant speed with friction)
-    const vHoriz = Math.max(10, targetDistanceFt / Math.max(0.3, targetHangTimeSec));
+    // Use the raw EV horizontal component, clamped to sane range.
+    // baseHoriz = exitVeloMph * MPH_TO_FPS * cos(launchAngle)
+    const vHoriz = Math.max(10, Math.min(baseHoriz, 200));
     return { vHoriz, vVert: gentleVert };
   }
 

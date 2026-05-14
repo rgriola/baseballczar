@@ -85,6 +85,8 @@ export interface GameStats {
   bb: number;
   so: number;
   hits: number;
+  sb: number;
+  cs: number;
 }
 
 /** Pitcher box score line */

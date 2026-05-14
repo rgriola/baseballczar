@@ -64,6 +64,8 @@ export const GOLDEN_GROUNDOUT_PAYLOAD: PersistedGamePayload = {
       rbi: 0,
       bb: 0,
       so: 0,
+      sb: 0,
+      cs: 0,
       players: {
         first_name: 'Sam',
         last_name: 'Short',
@@ -88,6 +90,8 @@ export const GOLDEN_GROUNDOUT_PAYLOAD: PersistedGamePayload = {
       rbi: 0,
       bb: 0,
       so: 0,
+      sb: 0,
+      cs: 0,
       players: {
         first_name: 'Runner',
         last_name: 'One',
@@ -112,6 +116,8 @@ export const GOLDEN_GROUNDOUT_PAYLOAD: PersistedGamePayload = {
       rbi: 0,
       bb: 0,
       so: 0,
+      sb: 0,
+      cs: 0,
       players: {
         first_name: 'Jane',
         last_name: 'Doe',
@@ -138,6 +144,7 @@ export const GOLDEN_GROUNDOUT_PAYLOAD: PersistedGamePayload = {
       ip: 0,
       h: 0,
       r: 0,
+      er: 0,
       bb: 0,
       so: 0,
       hr: 0,

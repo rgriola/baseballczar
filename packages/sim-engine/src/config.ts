@@ -93,6 +93,97 @@ export const CONFIG = {
     accelTimeSec: 0.6,           // ~0.6s to hit top speed from a stand
   },
 
+  // ─── Stealing / pickoff / WP / PB ──────────────────────────────
+  // Governs the pre-pitch baserunning sub-system: leads, steal attempts,
+  // pickoff throws, wild pitches, and passed balls.
+  stealing: {
+    // ── Runner leads ──────────────────────────────────────────────
+    // Runners take a lead off the bag toward the next base. Lead distance
+    // is base-specific with speed/PI bonuses.
+    lead: {
+      /** Base lead distances (ft) by base. */
+      firstBaseFt: 6,
+      secondBaseFt: 8,         // harder pickoff, more aggressive lead
+      thirdBaseFt: 6,          // offset into foul territory
+      /** Speed bonus per point above 5 (ft per skill point). */
+      speedBonusPerPt: { first: 0.3, second: 0.4, third: 0.2 },
+      /** PI bonus per point above 5 (ft per skill point). */
+      piBonusPerPt: 0.1,
+      /** Clamp range for computed lead distance. */
+      minLeadFt: 4,
+      maxLeadFt: 12,
+    },
+
+    // ── Pitcher delivery timing ───────────────────────────────────
+    // With runners on base, pitcher throws from the stretch.
+    // The runner breaks when they read the pitcher committing to home.
+    /** Time from stretch delivery start to ball reaching the plate (sec). */
+    stretchDeliverySec: 1.3,
+    /** LHP penalty: left-handed pitchers face 1B, so the runner at 1B
+     *  must wait longer to commit (can't read the front-foot commit as
+     *  easily). Cost in seconds added to the runner's jump time. */
+    lhpPenaltyAt1BSec: 0.25,
+    /** RHP slight penalty for steals of 3B (back turned to runner). */
+    rhpPenaltyAt2BSec: 0.10,
+
+    // ── Catcher timing ────────────────────────────────────────────
+    /** Catcher pop-time: receive-to-release for the throw to a base.
+     *  Skill 10 catcher = 1.9s, skill 1 = 2.35s. */
+    catcherPopTimeBaseSec: 1.9,
+    catcherPopTimePerSkillPt: 0.05,  // each TH point below 10 adds this
+    /** Distance from home plate to 2B (ft) for throw timing. */
+    homeToSecondFt: 127.5,
+    /** Distance from home plate to 3B (ft) for throw timing. */
+    homeToThirdFt: 90,
+
+    // ── Steal attempt probability gates ───────────────────────────
+    /** Minimum speed skill to attempt a steal of 2B. */
+    minSpeedFor2B: 6,
+    /** Minimum speed skill to attempt a steal of 3B (rarer). */
+    minSpeedFor3B: 7,
+    /** Minimum PI skill for 3B steal (must read the pitcher well). */
+    minPIFor3B: 6,
+    /** Base probability of attempting a steal per pitch (before manager modifier). */
+    stealAttemptProb2B: 0.06,       // ~6% of pitches with eligible runner
+    stealAttemptProb3B: 0.015,      // ~1.5% — very rare
+    /** Jump time: base time from pitcher commit to runner first step (sec).
+     *  PI reduces this: jumpSec = jumpBaseSec + (5 - PI) * jumpPILeverageSec */
+    jumpBaseSec: 0.15,
+    jumpPILeverageSec: 0.015,
+
+    // ── Pickoff attempts ──────────────────────────────────────────
+    /** Probability of a pickoff attempt per pitch, by base. */
+    pickoffProb: { first: 0.08, second: 0.03, third: 0.01 },
+    /** Extra pickoff probability per foot of lead beyond 8 ft. */
+    pickoffLeadBonusPerFt: 0.05,
+    /** Extra pickoff probability if runner speed ≥ 8 (fast runner = more checks). */
+    pickoffFastRunnerBonus: 0.03,
+    /** LHP bonus at 1B (they face the runner). */
+    pickoffLhpBonusAt1B: 0.04,
+    /** Base out probability on pickoff (if lead > threshold AND PI < threshold). */
+    pickoffOutBaseProb: 0.02,
+    /** Lead distance penalty per foot above 8 ft. */
+    pickoffOutLeadPenaltyPerFt: 0.02,
+    /** PI save per point above 5 (reduces out probability). */
+    pickoffOutPISavePerPt: 0.015,
+
+    // ── Wild pitch / passed ball ──────────────────────────────────
+    /** Wild pitch probability per pitch (pitcher-caused). */
+    wildPitchBaseProb: 0.005,
+    /** Extra WP probability per pitcher eye point below 5. */
+    wildPitchEyePenaltyPerPt: 0.002,
+    /** Extra WP probability when intent is off-zone. */
+    wildPitchOffZoneBonus: 0.003,
+    /** Passed ball probability per pitch (catcher-caused). */
+    passedBallBaseProb: 0.002,
+    /** Extra PB probability per catcher fielding point below 5. */
+    passedBallFieldingPenaltyPerPt: 0.001,
+    /** Probability a runner advances on a WP/PB (speed + PI gated). */
+    wpAdvanceBaseProb: 0.70,
+    /** Speed bonus for WP advancement per point above 5. */
+    wpAdvanceSpeedBonusPerPt: 0.04,
+  },
+
   // ─── Fielder reaction & range ─────────────────────────────────
   // Fielder foot speed comes from `sprintFtPerSec(speed)` — the SAME
   // function used for baserunning. Defense skill improves the fielder's
@@ -111,7 +202,7 @@ export const CONFIG = {
      *  Skill 1 = 1.08 (8% longer route). */
     routeBase: 1.0,
     routeLeverage: -0.02,
-    catchRadiusFt: 12,           // ball within this of fielder = caught (line-drive)
+    catchRadiusFt: 6,            // aligned with tick-engine catchStanding collider (6 ft)
     /** Catch tolerance for in-air balls: fielder may arrive slightly
      *  after landing and still convert a running/diving catch.
      *  Tightened from prior baseline to reduce overly generous catches.

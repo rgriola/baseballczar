@@ -247,7 +247,7 @@ export async function buildSimSmokeSummary(
 
   const [{ data: hittingRows, error: hittingErr }, { data: eventRows, error: eventErr }] = await Promise.all([
     supabase
-      .from('game_stats_hitting')
+      .from('hitter_game_stats')
       .select('ab, h, b2, b3, hr, bb, so, sf, sac')
       .in('game_id', gameIds),
     supabase

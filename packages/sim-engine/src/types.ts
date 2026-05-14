@@ -171,6 +171,9 @@ export interface BattedBall {
   fieldedAtSec?: number;
   isFoul: boolean;
   isHomeRun: boolean;
+  /** Bat speed at contact (mph). Derived from batter Power skill.
+   *  MLB range: ~62 mph (weak) to ~82 mph (elite). */
+  batSpeedMph?: number;
 }
 
 export interface AtBatRecord {
@@ -240,6 +243,13 @@ export interface PitcherGameStats {
   walks: number;
   strikeouts: number;
   homeRuns: number;
+  // Fielding (unified — pitchers field too)
+  putouts: number;
+  assists: number;
+  errors: number;
+  // Analytics — running totals (divide by pitches for avg)
+  /** Sum of all pitch velocities — divide by pitches for avg MPH. */
+  totalMph: number;
 }
 
 export interface BatterGameStats {
@@ -254,6 +264,23 @@ export interface BatterGameStats {
   strikeouts: number;
   runs: number;
   rbis: number;
+  sb: number;
+  cs: number;
+  // Fielding (unified — every position player has these)
+  putouts: number;
+  assists: number;
+  errors: number;
+  // Analytics — running totals (divide by battedBalls for averages)
+  /** Number of balls put in play (fair contact only, excludes fouls). */
+  battedBalls: number;
+  /** Sum of exit velocities for avg EV. */
+  totalEV: number;
+  /** Sum of launch angles for avg LA. */
+  totalLA: number;
+  /** Sum of spray angles for avg Spray. */
+  totalSpray: number;
+  /** Sum of bat speeds for avg bat speed. */
+  totalBatSpeed: number;
 }
 
 /**

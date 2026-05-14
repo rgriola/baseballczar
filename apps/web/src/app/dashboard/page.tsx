@@ -92,7 +92,7 @@ export default async function DashboardPage() {
                   '?';
                 const pct =
                   s.w + s.l > 0
-                    ? (s.w / (s.w + s.l)).toFixed(3)
+                    ? (s.w / (s.w + s.l)).toFixed(3).replace(/^0/, '')
                     : '.000';
                 const isMe = s.team_id === team.id;
                 return (

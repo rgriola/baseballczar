@@ -1,10 +1,11 @@
-// Last touched by agent: 2026-05-07T23:55:00Z
+// Last touched by agent: 2026-05-14T09:44:00Z
 /**
  * Persist game revenue — gate receipts + budget updates via safe_credit RPC.
+ * Reads directly from engine types (GameResult).
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
-import type { GameResult } from '../sim-engine/types';
+import type { GameResult } from '@baseballczar/sim-engine';
 import { calculateGameRevenue } from '../sim-engine/GateReceipts';
 
 export interface RevenueTransactionTemplate {
@@ -22,36 +23,36 @@ export interface RevenueBundle {
 
 export function buildRevenueBundle(
   result: GameResult,
-  gameType: 'regular' | 'playoff' | 'o2o',
+  gameType: string,
 ): RevenueBundle {
   const rev = calculateGameRevenue(gameType);
   const transactions: RevenueTransactionTemplate[] = [
     {
-      team_id: result.homeTeamId,
+      team_id: result.homeTeam.id,
       type: 'LGR_home',
       amount: rev.homeReceipts,
       description: 'Home gate receipts',
     },
     {
-      team_id: result.visitorTeamId,
+      team_id: result.awayTeam.id,
       type: 'LGR_visitor',
       amount: rev.visitorReceipts,
       description: 'Visitor gate receipts',
     },
     {
-      team_id: result.homeTeamId,
+      team_id: result.homeTeam.id,
       type: 'food_bev_souv',
       amount: rev.homeFoodBev,
       description: 'Food/bev/souvenir',
     },
     {
-      team_id: result.homeTeamId,
+      team_id: result.homeTeam.id,
       type: 'advertisment',
       amount: rev.homeAds,
       description: 'Advertising revenue',
     },
     {
-      team_id: result.homeTeamId,
+      team_id: result.homeTeam.id,
       type: 'stadium_ops',
       amount: rev.homeStadiumOps,
       description: 'Stadium operations',
@@ -83,7 +84,7 @@ export async function processRevenue(
   }
 
   const { error: homeCreditError } = await supabase.rpc('safe_credit', {
-    p_team_id: result.homeTeamId,
+    p_team_id: result.homeTeam.id,
     p_amount: revenue.homeCreditAmount,
     p_type: 'LGR_home',
     p_desc: `Game ${gameId} home revenue`,
@@ -94,7 +95,7 @@ export async function processRevenue(
   }
 
   const { error: visitorCreditError } = await supabase.rpc('safe_credit', {
-    p_team_id: result.visitorTeamId,
+    p_team_id: result.awayTeam.id,
     p_amount: revenue.visitorCreditAmount,
     p_type: 'LGR_visitor',
     p_desc: `Game ${gameId} visitor revenue`,

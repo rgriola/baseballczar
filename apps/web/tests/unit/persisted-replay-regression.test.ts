@@ -90,6 +90,8 @@ function makeReplayPayload(): PersistedGamePayload {
         rbi: 0,
         bb: 0,
         so: 0,
+        sb: 0,
+        cs: 0,
         players: {
           first_name: 'Runner',
           last_name: 'One',
@@ -114,6 +116,8 @@ function makeReplayPayload(): PersistedGamePayload {
         rbi: 0,
         bb: 0,
         so: 0,
+        sb: 0,
+        cs: 0,
         players: {
           first_name: 'Jane',
           last_name: 'Doe',
@@ -140,6 +144,7 @@ function makeReplayPayload(): PersistedGamePayload {
         ip: 0,
         h: 0,
         r: 0,
+        er: 0,
         bb: 0,
         so: 0,
         hr: 0,

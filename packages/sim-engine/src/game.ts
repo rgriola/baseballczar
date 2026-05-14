@@ -32,11 +32,14 @@ interface TeamGameState {
 
 function newPitcherStats(id: number): PitcherGameStats {
   return { pitcherId: id, battersFaced: 0, pitches: 0, outs: 0, hits: 0,
-    runs: 0, earnedRuns: 0, walks: 0, strikeouts: 0, homeRuns: 0 };
+    runs: 0, earnedRuns: 0, walks: 0, strikeouts: 0, homeRuns: 0,
+    putouts: 0, assists: 0, errors: 0, totalMph: 0 };
 }
 function newBatterStats(id: number): BatterGameStats {
   return { batterId: id, pa: 0, ab: 0, hits: 0, doubles: 0, triples: 0,
-    homeRuns: 0, walks: 0, strikeouts: 0, runs: 0, rbis: 0 };
+    homeRuns: 0, walks: 0, strikeouts: 0, runs: 0, rbis: 0, sb: 0, cs: 0,
+    putouts: 0, assists: 0, errors: 0,
+    battedBalls: 0, totalEV: 0, totalLA: 0, totalSpray: 0, totalBatSpeed: 0 };
 }
 
 function newFielderStats(id: number, position: Position): FielderGameStats {
@@ -316,6 +319,11 @@ export interface GameOptions {
   resolvePlay?: ResolvePlayFn;
 }
 
+/**
+ * @deprecated Use `simulateFullGame()` from `@baseballczar/tick-engine` instead.
+ * This game loop lacks tick-engine physics (fielding AI, throw decisions, real baserunning).
+ * Retained only for `season.ts` batch benchmarking. Will be removed in a future phase.
+ */
 export function simulateGame(home: Team, away: Team, rng: Rng, opts?: GameOptions): GameResult {
   const homeState = initTeamState(home, opts?.homeStarterIndex ?? 0);
   const awayState = initTeamState(away, opts?.awayStarterIndex ?? 0);

@@ -128,6 +128,7 @@ export function rollBattedBall(
     wallBounceSpeedFps: f.wallBounceSpeedFps,
     isFoul: f.isFoul,
     isHomeRun: f.isHomeRun,
+    batSpeedMph,
   };
 }
 
@@ -179,6 +180,11 @@ function findConverger(
     // Hard-hit grounders (90+ mph) also blow past the pitcher too fast
     // to field unless they're right at him.
     if (pos === 'P') {
+      // 60° fielding cone: pitcher faces home, can only react to balls
+      // hit within ±30° of dead center. Balls into the SS/3B holes
+      // are physically beside or behind him — not fieldable.
+      if (Math.abs(ball.sprayAngleDeg) > 30) continue;
+
       const mound = FIELDER_POSITIONS_FT.P;
       if (isGrounder) {
         // Perpendicular distance from the mound to the ball's ground path
@@ -197,6 +203,18 @@ function findConverger(
         const distFromMound = Math.hypot(ball.landingPoint.x - mound.x, ball.landingPoint.y - mound.y);
         if (distFromMound > CONFIG.fielding.shortBallRadiusFt) continue;
       }
+    }
+    // ── 1B territory gate ──────────────────────────────────────────
+    // The first baseman stays near the bag. He can only field balls
+    // that land within 10 ft of 1st base ({63.6, 63.6}). Anything
+    // wider or deeper is the 2B's responsibility.
+    if (pos === 'B1') {
+      const firstBase = { x: 63.6, y: 63.6 };
+      const distFromFirst = Math.hypot(
+        ball.landingPoint.x - firstBase.x,
+        ball.landingPoint.y - firstBase.y,
+      );
+      if (distFromFirst > 10) continue;
     }
     const fielderPt = FIELDER_POSITIONS_FT[pos];
     const dist = distanceFt(fielderPt, ball.landingPoint);
@@ -307,7 +325,7 @@ function findConverger(
     }
     // Catch radius scales with defense (±6 ft across 1-10).
     const effectiveCatchRadius = CONFIG.fielder.catchRadiusFt
-      + (fielder.skills.fielding - 5) * 1.5;
+      + (fielder.skills.fielding - 5) * 0.8;
     // Catch tolerance: fielder can arrive slightly after the ball lands
     // and still make a running/diving catch. Better defense = more slack.
     // Skill 5 = 0.65s slack, Skill 10 = 0.85s, Skill 1 = 0.49s.

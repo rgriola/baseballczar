@@ -414,10 +414,10 @@ export async function resetSeason(): Promise<{ error?: string; message?: string 
 
   const deletes = [
     'game_events',
-    'game_stats_hitting',
-    'game_stats_pitching',
-    'player_stats_hitting',
-    'player_stats_pitching',
+    'hitter_game_stats',
+    'pitcher_game_stats',
+    'hitter_season_stats',
+    'pitcher_season_stats',
     'games',
   ];
 
@@ -440,6 +440,7 @@ export async function resetSeason(): Promise<{ error?: string; message?: string 
       ab: 0, r: 0, h: 0, b2: 0, b3: 0, hr: 0,
       rbi: 0, bb: 0, so: 0, sb: 0, cs: 0, sf: 0, sac: 0,
       era_runs: 0, era_outs: 0,
+      p_ip: 0, p_h: 0, p_r: 0, p_er: 0, p_bb: 0, p_so: 0, p_hr: 0,
     })
     .gte('id', 0);
 

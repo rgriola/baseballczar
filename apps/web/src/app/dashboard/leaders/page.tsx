@@ -17,15 +17,15 @@ export default async function LeadersPage() {
 
   // Fetch hitting stats for entire league
   const { data: hitting } = await supabase
-    .from('player_stats_hitting')
-    .select('player_id, team_id, ab, h, hr, rbi, r, bb, so, sb, b2, b3, players(first_name, last_name)')
+    .from('hitter_season_stats')
+    .select('player_id, team_id, g, pa, ab, h, hr, rbi, r, bb, so, sb, b2, b3, sf, batted_balls, total_ev, players(first_name, last_name)')
     .in('team_id', teamIds)
     .order('ab', { ascending: false });
 
   // Fetch pitching stats for entire league
   const { data: pitching } = await supabase
-    .from('player_stats_pitching')
-    .select('player_id, team_id, w, l, sv, ip, er, so, bb, h, cg, sho, players(first_name, last_name)')
+    .from('pitcher_season_stats')
+    .select('player_id, team_id, w, l, sv, ip, er, so, bb, h, cg, sho, pitches, total_mph, players(first_name, last_name)')
     .in('team_id', teamIds)
     .order('ip', { ascending: false });
 
@@ -54,12 +54,21 @@ export default async function LeadersPage() {
     const frac = Math.round((ip - whole) * 10);
     return whole + frac / 3;
   }
+
+  /** Qualifying: min 3 PA per game played */
+  const qualifies = (s: HitStat) => s.g > 0 && s.pa >= s.g * 3;
+
   const categories = [
-    { title: 'Batting Average', data: top(hitting, (a, b) => (b.h / Math.max(b.ab, 1)) - (a.h / Math.max(a.ab, 1)), (s) => s.ab >= 10), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: (s.h / s.ab).toFixed(3) }) },
-    { title: 'Home Runs', data: top(hitting, (a, b) => b.hr - a.hr), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.hr) }) },
-    { title: 'RBI', data: top(hitting, (a, b) => b.rbi - a.rbi), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.rbi) }) },
-    { title: 'Runs', data: top(hitting, (a, b) => b.r - a.r), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.r) }) },
-    { title: 'Stolen Bases', data: top(hitting, (a, b) => b.sb - a.sb), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.sb) }) },
+    { title: 'Batting Average', data: top(hitting, (a, b) => (b.h / Math.max(b.ab, 1)) - (a.h / Math.max(a.ab, 1)), qualifies), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: (s.h / s.ab).toFixed(3).replace(/^0/, '') }) },
+    { title: 'Home Runs', data: top(hitting, (a, b) => b.hr - a.hr, qualifies), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.hr) }) },
+    { title: 'RBI', data: top(hitting, (a, b) => b.rbi - a.rbi, qualifies), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.rbi) }) },
+    { title: 'Runs', data: top(hitting, (a, b) => b.r - a.r, qualifies), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.r) }) },
+    { title: 'Stolen Bases', data: top(hitting, (a, b) => b.sb - a.sb, qualifies), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.sb) }) },
+    { title: 'Avg Exit Velocity', data: top(hitting, (a, b) => {
+      const aEv = a.batted_balls > 0 ? a.total_ev / a.batted_balls : 0;
+      const bEv = b.batted_balls > 0 ? b.total_ev / b.batted_balls : 0;
+      return bEv - aEv;
+    }, (s) => qualifies(s) && s.batted_balls >= 10), render: (s: HitStat) => ({ name: hName(s), team: teamNameMap.get(s.team_id) ?? '?', value: s.batted_balls > 0 ? (s.total_ev / s.batted_balls).toFixed(1) : '—' }) },
     { title: 'Wins', data: top(pitching, (a, b) => b.w - a.w), render: (s: PitchStat) => ({ name: pName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.w) }) },
     { title: 'ERA', data: top(pitching, (a, b) => {
       const aInn = ipToInnings(a.ip);
@@ -70,6 +79,11 @@ export default async function LeadersPage() {
     }, (s) => s.ip >= 3), render: (s: PitchStat) => ({ name: pName(s), team: teamNameMap.get(s.team_id) ?? '?', value: ((s.er / ipToInnings(s.ip)) * 9).toFixed(2) }) },
     { title: 'Strikeouts', data: top(pitching, (a, b) => b.so - a.so), render: (s: PitchStat) => ({ name: pName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.so) }) },
     { title: 'Saves', data: top(pitching, (a, b) => b.sv - a.sv), render: (s: PitchStat) => ({ name: pName(s), team: teamNameMap.get(s.team_id) ?? '?', value: String(s.sv) }) },
+    { title: 'Avg Pitch Velocity', data: top(pitching, (a, b) => {
+      const aMph = a.pitches > 0 ? a.total_mph / a.pitches : 0;
+      const bMph = b.pitches > 0 ? b.total_mph / b.pitches : 0;
+      return bMph - aMph;
+    }, (s) => s.pitches >= 30), render: (s: PitchStat) => ({ name: pName(s), team: teamNameMap.get(s.team_id) ?? '?', value: s.pitches > 0 ? (s.total_mph / s.pitches).toFixed(1) : '—' }) },
   ];
 
   return (

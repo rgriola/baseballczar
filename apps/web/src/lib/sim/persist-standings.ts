@@ -1,10 +1,11 @@
-// Last touched by agent: 2026-05-07T23:55:00Z
+// Last touched by agent: 2026-05-14T09:43:00Z
 /**
- * Persist standings updates after a game via upsert_standing RPC.
+ * Persist standings updates after a game.
+ * Reads directly from engine types (BatterGameStats, PitcherGameStats).
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
-import type { GameResult, GameStats, PitcherBoxLine } from '../sim-engine/types';
+import type { BatterGameStats, PitcherGameStats, GameResult } from '@baseballczar/sim-engine';
 
 export interface StandingDelta {
   leagueId: number;
@@ -23,32 +24,43 @@ export interface StandingDelta {
   so: number;
   eraRuns: number;
   eraOuts: number;
+  // Team pitching totals
+  pIp: number;
+  pH: number;
+  pR: number;
+  pEr: number;
+  pBb: number;
+  pSo: number;
+  pHr: number;
 }
 
-function sumHitting(statsMap: Map<number, GameStats>) {
+function sumBatterHitting(statsMap: Map<number, BatterGameStats>) {
   let ab = 0, r = 0, h = 0, b2 = 0, b3 = 0, hr = 0, rbi = 0, bb = 0, so = 0;
   for (const s of Array.from(statsMap.values())) {
-    ab += s.ab; r += s.r; h += s.hits; b2 += s.b2; b3 += s.b3;
-    hr += s.hr; rbi += s.rbi; bb += s.bb; so += s.so;
+    ab += s.ab; r += s.runs; h += s.hits; b2 += s.doubles; b3 += s.triples;
+    hr += s.homeRuns; rbi += s.rbis; bb += s.walks; so += s.strikeouts;
   }
   return { ab, r, h, b2, b3, hr, rbi, bb, so };
 }
 
-function sumPitching(statsMap: Map<number, PitcherBoxLine>) {
-  let er = 0, outs = 0;
+function sumPitching(statsMap: Map<number, PitcherGameStats>) {
+  let er = 0, outs = 0, h = 0, r = 0, bb = 0, so = 0, hr = 0;
   for (const s of Array.from(statsMap.values())) {
-    er += s.er; outs += s.om;
+    er += s.earnedRuns; outs += s.outs; h += s.hits; r += s.runs;
+    bb += s.walks; so += s.strikeouts; hr += s.homeRuns;
   }
-  return { er, outs };
+  return { er, outs, h, r, bb, so, hr };
 }
 
 function buildStandingDelta(
   teamId: number,
   isWinner: boolean,
-  hit: ReturnType<typeof sumHitting>,
+  hit: ReturnType<typeof sumBatterHitting>,
   pitch: ReturnType<typeof sumPitching>,
   opts: { leagueId: number; seasonNo: number },
 ): StandingDelta {
+  const ipWhole = Math.floor(pitch.outs / 3);
+  const ipFrac = (pitch.outs % 3) * 0.1;
   return {
     leagueId: opts.leagueId,
     teamId,
@@ -66,24 +78,38 @@ function buildStandingDelta(
     so: hit.so,
     eraRuns: pitch.er,
     eraOuts: pitch.outs,
+    pIp: ipWhole + ipFrac,
+    pH: pitch.h,
+    pR: pitch.r,
+    pEr: pitch.er,
+    pBb: pitch.bb,
+    pSo: pitch.so,
+    pHr: pitch.hr,
   };
 }
 
+/**
+ * Build standings deltas from an engine GameResult.
+ * Requires pre-split batter/pitcher stat maps per team.
+ */
 export function buildStandingsDeltas(
   result: GameResult,
+  homeBatterStats: Map<number, BatterGameStats>,
+  awayBatterStats: Map<number, BatterGameStats>,
+  homePitcherStats: Map<number, PitcherGameStats>,
+  awayPitcherStats: Map<number, PitcherGameStats>,
   opts: { leagueId: number; seasonNo: number },
 ): { home: StandingDelta; visitor: StandingDelta } {
-  const homeHit = sumHitting(result.homePlayerStats);
-  const visitorHit = sumHitting(result.visitorPlayerStats);
-  const homePitch = sumPitching(result.homePitcherStats);
-  const visitorPitch = sumPitching(result.visitorPitcherStats);
+  const homeHit = sumBatterHitting(homeBatterStats);
+  const visitorHit = sumBatterHitting(awayBatterStats);
+  const homePitch = sumPitching(homePitcherStats);
+  const visitorPitch = sumPitching(awayPitcherStats);
 
-  const winnerId = result.winningTeamId;
-  const homeIsWinner = result.homeTeamId === winnerId;
+  const homeIsWinner = result.homeRuns > result.awayRuns;
 
   return {
-    home: buildStandingDelta(result.homeTeamId, homeIsWinner, homeHit, homePitch, opts),
-    visitor: buildStandingDelta(result.visitorTeamId, !homeIsWinner, visitorHit, visitorPitch, opts),
+    home: buildStandingDelta(result.homeTeam.id, homeIsWinner, homeHit, homePitch, opts),
+    visitor: buildStandingDelta(result.awayTeam.id, !homeIsWinner, visitorHit, visitorPitch, opts),
   };
 }
 
@@ -112,9 +138,13 @@ async function upsertStandingDelta(supabase: SupabaseClient, delta: StandingDelt
 export async function updateStandings(
   supabase: SupabaseClient,
   result: GameResult,
+  homeBatterStats: Map<number, BatterGameStats>,
+  awayBatterStats: Map<number, BatterGameStats>,
+  homePitcherStats: Map<number, PitcherGameStats>,
+  awayPitcherStats: Map<number, PitcherGameStats>,
   opts: { leagueId: number; seasonNo: number },
 ) {
-  const deltas = buildStandingsDeltas(result, opts);
+  const deltas = buildStandingsDeltas(result, homeBatterStats, awayBatterStats, homePitcherStats, awayPitcherStats, opts);
   await upsertStandingDelta(supabase, deltas.home);
   await upsertStandingDelta(supabase, deltas.visitor);
 }

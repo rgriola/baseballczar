@@ -92,6 +92,12 @@ export interface GameState {
   pitcher: string;
   /** At-bat index within the game (for timeline markers). */
   abIndex: number;
+  /** Team names for the HUD scoreboard. */
+  homeName?: string;
+  awayName?: string;
+  /** 2-3 letter abbreviations for compact HUD display. */
+  homeAbbrev?: string;
+  awayAbbrev?: string;
 }
 
 // ─── World snapshot ──────────────────────────────────────────────
@@ -202,6 +208,11 @@ export type TickEvent =
   | { type: 'caught-stealing'; runnerId: number; runnerName?: string; at: string }
   | { type: 'wild-pitch'; pitcherId?: number; pitcherName?: string }
   | { type: 'passed-ball'; catcherId?: number; catcherName?: string }
+  | { type: 'advanced-on-wild-pitch'; runnerId: number; runnerName?: string; from: string; to: string }
+  | { type: 'pickoff-attempt'; base: string; pitcherName?: string }
+  | { type: 'pickoff-out'; runnerId: number; runnerName?: string; at: string }
+  | { type: 'pickoff-safe'; runnerId: number; runnerName?: string; at: string }
+  | { type: 'hit-and-run'; runnerId: number; runnerName?: string }
   | { type: 'balk'; pitcherId?: number; pitcherName?: string }
   // Game flow
   | { type: 'play-complete' }

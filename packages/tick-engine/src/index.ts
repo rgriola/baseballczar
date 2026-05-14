@@ -45,6 +45,9 @@ export type {
   StrategicLogEntry,
 } from './gameOrchestrator';
 
+// ── Stats accumulator ────────────────────────────────────────────
+export { StatsAccumulator, isHitResult, isOutResult } from './statsAccumulator';
+
 // ── AI Manager (tactical decisions) ─────────────────────────────
 export {
   computeDefensiveAlignment,

@@ -334,6 +334,8 @@ export function extractTickOutcome(
   batterId: number,
   battedBall: BattedBall,
   runners: RunnerStateInput = [],
+  /** Outs at the start of the play. Used for force-out 3rd-out run nullification. */
+  startingOuts: number = 0,
 ): HeadlessAtBatResolution {
   if (snapshots.length === 0) {
     return deriveContactHeuristicResolution(
@@ -516,11 +518,63 @@ export function extractTickOutcome(
   }
 
   const outsRecorded = Math.min(3, outRunnerIds.size);
-  const runsScored = scoredRunnerIds.size;
+  let runsScored = scoredRunnerIds.size;
   const hits = HIT_BASES[outcome] != null ? 1 : 0;
   const totalBases = HIT_BASES[outcome] ?? 0;
   const batterOutFinal = outRunnerIds.has(batterId);
   const batterScoredFinal = scoredRunnerIds.has(batterId);
+
+  // ── MLB Rule 5.08(a): Force-out 3rd-out run nullification ──────
+  // No run may score when the third out is made by:
+  //   (1) The batter-runner being put out before reaching first base, OR
+  //   (2) A force play at any base.
+  // Also: no run scores on a caught fly that is the 3rd out (batter out).
+  const totalOuts = startingOuts + outsRecorded;
+  if (totalOuts >= 3 && outsRecorded > 0) {
+    // Check: was the inning-ending out a force play or batter-runner out?
+    const batterWasOut = outRunnerIds.has(batterId);
+    // If batter is out, this is either a fly-out, ground-out at 1B, or DP
+    // All are force-out-equivalent situations → void runs
+    if (batterWasOut) {
+      runsScored = 0;
+      scoredRunnerIds.clear();
+    } else {
+      // Check if the out that made 3 was a force play.
+      // With bases loaded and a grounder, all outs at force bases are force plays.
+      // Conservative approach: if the batter-runner is still in play (not out)
+      // but other runners were forced out, those are force plays.
+      // Any force out making the 3rd out voids all runs.
+      const forceOutBases = new Set<string>();
+      const batterRunning = !outRunnerIds.has(batterId); // batter creates force chain
+      if (batterRunning) {
+        // Build force chain: batter→1B, R1→2B, R2→3B, R3→home
+        const occupiedBefore = new Set(
+          runners.map(r => r.base),
+        );
+        forceOutBases.add('first'); // batter always forced at 1B
+        if (occupiedBefore.has('first')) forceOutBases.add('second');
+        if (occupiedBefore.has('first') && occupiedBefore.has('second')) forceOutBases.add('third');
+        if (occupiedBefore.has('first') && occupiedBefore.has('second') && occupiedBefore.has('third')) forceOutBases.add('home');
+      }
+
+      // Check each out event to see if it was at a force base
+      let thirdOutIsForce = false;
+      for (const snapshot of snapshots) {
+        for (const event of snapshot.events) {
+          if (event.type === 'runner-out' && outRunnerIds.has(event.runnerId)) {
+            if (forceOutBases.has(event.at)) {
+              thirdOutIsForce = true;
+            }
+          }
+        }
+      }
+
+      if (thirdOutIsForce) {
+        runsScored = 0;
+        scoredRunnerIds.clear();
+      }
+    }
+  }
 
   const runnersAfter: HeadlessRunnerState[] = [];
   for (const [runnerId, base] of runnersAfterById) {
@@ -537,7 +591,7 @@ export function extractTickOutcome(
       hits,
       totalBases,
       batterOut: batterOutFinal,
-      batterScored: batterScoredFinal,
+      batterScored: batterScoredFinal && runsScored > 0,
     },
     runnersAfter: sortedRunnersAfter(runnersAfter),
     scoredRunnerIds: Array.from(scoredRunnerIds),

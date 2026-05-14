@@ -7,13 +7,16 @@ export type {
   Player, Team, Skills, Hand,
   AtBatRecord, AtBatResult, BattedBall, GameResult,
   PitchEvent, PitchOutcome,
-  PitcherGameStats, BatterGameStats,
+  PitcherGameStats, BatterGameStats, FielderGameStats,
 } from './types';
 export { createRng, type Rng } from './rng';
 export { generateTeam, generateMatchup } from './randomTeam';
 export { simulateGame } from './game';
 export type { GameOptions, ResolvePlayFn, ResolvePlayResult } from './game';
 export { simulateAtBat } from './atBat';
+export type { AtBatContext } from './atBat';
+export { shouldPullPitcher, pickReliever } from './manager';
+export type { ManagerState } from './manager';
 export { rollBattedBall, resolveBattedBall, resolveFoulBall } from './battedBall';
 export { aggregate, formatReport, type RateReport } from './report';
 export { buildEvents, type SimEvent } from './events';

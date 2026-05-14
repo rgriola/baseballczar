@@ -76,12 +76,12 @@ export async function GET(
       .eq('game_id', gameId)
       .order('seq'),
     supabase
-      .from('game_stats_hitting')
+      .from('hitter_game_stats')
         .select('*, players(first_name, last_name, jersey_no, position, hand_batting, hand_throw, speed, stamina, ag, eye, avg, strength, play_intel, bunting, fielding, throw)')
       .eq('game_id', gameId)
       .order('bat_order'),
     supabase
-      .from('game_stats_pitching')
+      .from('pitcher_game_stats')
         .select('*, players(first_name, last_name, jersey_no, position, hand_batting, hand_throw, speed, stamina, ag, eye, avg, strength, play_intel, bunting, fielding, throw)')
       .eq('game_id', gameId)
       .order('pitch_app'),
@@ -94,12 +94,12 @@ export async function GET(
   if (hittingRes.error || pitchingRes.error) {
     const [plainHittingRes, plainPitchingRes] = await Promise.all([
       supabase
-        .from('game_stats_hitting')
+        .from('hitter_game_stats')
         .select('*')
         .eq('game_id', gameId)
         .order('bat_order'),
       supabase
-        .from('game_stats_pitching')
+        .from('pitcher_game_stats')
         .select('*')
         .eq('game_id', gameId)
         .order('pitch_app'),

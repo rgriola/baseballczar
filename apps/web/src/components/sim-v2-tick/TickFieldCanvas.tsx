@@ -112,9 +112,14 @@ export default function TickFieldCanvas({
   }, [width, height]);
 
   // Load snapshots when they change
+  const loadedSnapshotsRef = useRef<WorldSnapshot[] | null>(null);
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene || !ready) return;
+
+    // Prevent double-load from React strict mode re-renders
+    if (loadedSnapshotsRef.current === snapshots) return;
+    loadedSnapshotsRef.current = snapshots;
 
     scene.loadSnapshots(snapshots, (events, time, meta) => {
       onEventRef.current?.(events, time, meta);

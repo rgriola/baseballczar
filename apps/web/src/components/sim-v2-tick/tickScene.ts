@@ -118,6 +118,7 @@ export class TickScene {
   private hudBaseIndicators: { first: Graphics; second: Graphics; third: Graphics } = {} as any;
   private hudBatterText!: Text;
   private hudPitcherText!: Text;
+  private hudTeamLabel!: Text;
   private lastGameState?: GameState;
 
   constructor(private opts: TickSceneOptions) {
@@ -599,6 +600,17 @@ export class TickScene {
       sp.debugTag.position.set(0, -radiusPx - this.DEBUG_TAG_OFFSET_PX);
       sp.debugTag.visible = this.showDebugPlayerTags;
     }
+
+    // Remove stale fielder sprites for positions not in the current snapshot.
+    // Mirrors the runner cleanup pattern — prevents frozen ghost sprites
+    // from persisting across at-bat or inning transitions.
+    const activePositions = new Set(fielders.map(f => f.position));
+    for (const [pos, sp] of this.fielderSprites) {
+      if (!activePositions.has(pos)) {
+        this.entityLayer.removeChild(sp.container);
+        this.fielderSprites.delete(pos);
+      }
+    }
   }
 
   private updateRunners(
@@ -696,105 +708,130 @@ export class TickScene {
 
   private buildHUD(): void {
     const W = this.opts.width;
-    const panelW = 200;
-    const panelH = 100;
-    const panelX = W - panelW - 12;
-    const panelY = 12;
+    const panelW = 220;
+    const panelH = 116;
+    const panelX = W - panelW - 10;
+    const panelY = 10;
 
-    // Semi-transparent background panel
+    // Solid dark background panel — high opacity for readability over field
     const bg = new Graphics()
       .roundRect(panelX, panelY, panelW, panelH, 8)
-      .fill({ color: 0x0a0a14, alpha: 0.85 })
-      .stroke({ color: 0x3a3a4e, width: 1, alpha: 0.6 });
+      .fill({ color: 0x101018, alpha: 0.93 })
+      .stroke({ color: 0x4a4a5e, width: 1, alpha: 0.8 });
     this.hudLayer.addChild(bg);
 
-    const textStyle = { fill: 0xffffff, fontSize: 11, fontFamily: 'system-ui' };
-    const dimStyle = { fill: 0x888899, fontSize: 9, fontFamily: 'system-ui' };
+    // ─── Typography tokens ──────────────────────────────
+    const fontFamily = 'system-ui, -apple-system, sans-serif';
+    const brightText = { fill: 0xffffff, fontSize: 13, fontFamily };
+    const scoreStyle = { fill: 0xffffff, fontSize: 18, fontFamily, fontWeight: '700' as const };
+    const inningStyle = { fill: 0xffffff, fontSize: 16, fontFamily, fontWeight: '700' as const };
+    const labelStyle = { fill: 0xb0b8c8, fontSize: 10, fontFamily };
+    const nameStyle = { fill: 0xd8dce6, fontSize: 11, fontFamily };
 
-    // Inning: "▲ 3" or "▼ 3"
-    this.hudHalfArrow = new Text({ text: '▲', style: { ...textStyle, fontSize: 10 } });
-    this.hudHalfArrow.position.set(panelX + 10, panelY + 8);
+    // ─── Row 1: Inning + Score ──────────────────────────
+    // Inning half arrow (▲/▼)
+    this.hudHalfArrow = new Text({ text: '▲', style: { ...brightText, fontSize: 11 } });
+    this.hudHalfArrow.position.set(panelX + 12, panelY + 10);
     this.hudLayer.addChild(this.hudHalfArrow);
 
-    this.hudInningText = new Text({ text: '1', style: { ...textStyle, fontSize: 14, fontWeight: '700' } });
-    this.hudInningText.position.set(panelX + 22, panelY + 5);
+    // Inning number
+    this.hudInningText = new Text({ text: '1', style: inningStyle });
+    this.hudInningText.position.set(panelX + 25, panelY + 6);
     this.hudLayer.addChild(this.hudInningText);
 
-    // Score
-    this.hudScoreText = new Text({ text: '0 - 0', style: { ...textStyle, fontSize: 13, fontWeight: '600' } });
+    // Score (right-aligned)
+    this.hudScoreText = new Text({ text: '0 - 0', style: scoreStyle });
     this.hudScoreText.anchor.set(1, 0);
-    this.hudScoreText.position.set(panelX + panelW - 10, panelY + 6);
+    this.hudScoreText.position.set(panelX + panelW - 12, panelY + 5);
     this.hudLayer.addChild(this.hudScoreText);
 
-    // Out dots: 3 small circles
-    const outY = panelY + 28;
+    // Team abbreviation label under score (e.g. "OMA - NWK")
+    this.hudTeamLabel = new Text({ text: 'AWAY - HOME', style: { ...labelStyle, fontSize: 9 } });
+    this.hudTeamLabel.anchor.set(1, 0);
+    this.hudTeamLabel.position.set(panelX + panelW - 12, panelY + 26);
+    this.hudLayer.addChild(this.hudTeamLabel);
+
+    // ─── Row 2: Outs + Base diamond ─────────────────────
+    const row2Y = panelY + 40;
+
+    // Out dots: 3 circles — fill WHITE so tint controls full color
     for (let i = 0; i < 3; i++) {
       const dot = new Graphics()
-        .circle(panelX + 10 + i * 14, outY, 4)
-        .fill({ color: 0x444455, alpha: 1 })
-        .stroke({ color: 0x666677, width: 0.5 });
+        .circle(panelX + 14 + i * 16, row2Y, 5)
+        .fill({ color: 0xffffff })
+        .stroke({ color: 0x5a5a6e, width: 1 });
+      dot.tint = 0x3a3a4e;  // start inactive (dark)
       this.hudLayer.addChild(dot);
       this.hudOutDots.push(dot);
     }
 
-    const outsLabel = new Text({ text: 'OUT', style: dimStyle });
-    outsLabel.position.set(panelX + 52, outY - 5);
+    const outsLabel = new Text({ text: 'OUT', style: labelStyle });
+    outsLabel.position.set(panelX + 62, row2Y - 6);
     this.hudLayer.addChild(outsLabel);
 
-    // Base diamond: small diamond shape with 3 base indicators
-    const dX = panelX + panelW - 40;
-    const dY = panelY + 50;
-    const dS = 12; // half-size of the diamond
+    // Base diamond (right side of row 2, shifted 50px lower)
+    const dX = panelX + panelW - 38;
+    const dY = row2Y + 54;
+    const dS = 13;
 
-    // Diamond outline
     this.hudBaseDiamond = new Graphics()
       .poly([dX, dY - dS, dX + dS, dY, dX, dY + dS, dX - dS, dY])
-      .stroke({ color: 0x555566, width: 1 });
+      .stroke({ color: 0x5a5a6e, width: 1 });
     this.hudLayer.addChild(this.hudBaseDiamond);
 
-    // Base indicators (small filled diamonds)
+    // Base indicators — fill WHITE so tint controls full color
     const makeBaseInd = (bx: number, by: number) => {
-      const s = 4;
+      const s = 5;
       const g = new Graphics()
         .poly([bx, by - s, bx + s, by, bx, by + s, bx - s, by])
-        .fill({ color: 0x444455 });
+        .fill({ color: 0xffffff });
+      g.tint = 0x3a3a4e;  // start inactive (dark)
       this.hudLayer.addChild(g);
       return g;
     };
     this.hudBaseIndicators = {
-      first:  makeBaseInd(dX + dS, dY),
+      first: makeBaseInd(dX + dS, dY),
       second: makeBaseInd(dX, dY - dS),
-      third:  makeBaseInd(dX - dS, dY),
+      third: makeBaseInd(dX - dS, dY),
     };
 
-    // Batter / Pitcher text
-    const bpX = panelX + 10;
-    const batterIcon = new Text({ text: '⚙', style: dimStyle });
-    batterIcon.position.set(bpX, panelY + 48);
+    // ─── Row 3: Batter / Pitcher ────────────────────────
+    const row3Y = panelY + 65;
+    const bpX = panelX + 12;
+
+    const batterIcon = new Text({ text: '⚙', style: labelStyle });
+    batterIcon.position.set(bpX, row3Y);
     this.hudLayer.addChild(batterIcon);
 
-    this.hudBatterText = new Text({ text: '', style: { ...textStyle, fontSize: 10 } });
-    this.hudBatterText.position.set(bpX + 12, panelY + 47);
+    this.hudBatterText = new Text({ text: '', style: nameStyle });
+    this.hudBatterText.position.set(bpX + 14, row3Y - 1);
     this.hudLayer.addChild(this.hudBatterText);
 
-    const pitcherIcon = new Text({ text: '⚾', style: dimStyle });
-    pitcherIcon.position.set(bpX, panelY + 63);
+    const pitcherIcon = new Text({ text: '⚾', style: labelStyle });
+    pitcherIcon.position.set(bpX, row3Y + 18);
     this.hudLayer.addChild(pitcherIcon);
 
-    this.hudPitcherText = new Text({ text: '', style: { ...textStyle, fontSize: 10 } });
-    this.hudPitcherText.position.set(bpX + 12, panelY + 62);
+    this.hudPitcherText = new Text({ text: '', style: nameStyle });
+    this.hudPitcherText.position.set(bpX + 14, row3Y + 17);
     this.hudLayer.addChild(this.hudPitcherText);
-
-    // "AWAY - HOME" label under the score
-    const teamLabel = new Text({ text: 'AWAY - HOME', style: { ...dimStyle, fontSize: 7 } });
-    teamLabel.anchor.set(1, 0);
-    teamLabel.position.set(panelX + panelW - 10, panelY + 22);
-    this.hudLayer.addChild(teamLabel);
   }
 
   private updateHUD(gs: GameState): void {
-    // Avoid unnecessary updates if the state hasn't changed
-    if (this.lastGameState === gs) return;
+    // Skip update if nothing meaningful changed (value-based, not reference-based)
+    const prev = this.lastGameState;
+    if (prev &&
+      prev.inning === gs.inning &&
+      prev.half === gs.half &&
+      prev.outs === gs.outs &&
+      prev.homeScore === gs.homeScore &&
+      prev.awayScore === gs.awayScore &&
+      prev.basesOccupied.first === gs.basesOccupied.first &&
+      prev.basesOccupied.second === gs.basesOccupied.second &&
+      prev.basesOccupied.third === gs.basesOccupied.third &&
+      prev.batter === gs.batter &&
+      prev.pitcher === gs.pitcher) {
+      return;
+    }
     this.lastGameState = gs;
 
     // Inning
@@ -807,11 +844,11 @@ export class TickScene {
     // Outs
     for (let i = 0; i < 3; i++) {
       const isOut = i < gs.outs;
-      this.hudOutDots[i].tint = isOut ? 0xf5d76e : 0x444455;
+      this.hudOutDots[i].tint = isOut ? 0xFAC60C : 0x3a3a4e;
     }
 
     // Bases
-    const baseColor = (occupied: boolean) => occupied ? 0xf5d76e : 0x444455;
+    const baseColor = (occupied: boolean) => occupied ? 0xfac60c : 0x3a3a4e;
     this.hudBaseIndicators.first.tint = baseColor(gs.basesOccupied.first);
     this.hudBaseIndicators.second.tint = baseColor(gs.basesOccupied.second);
     this.hudBaseIndicators.third.tint = baseColor(gs.basesOccupied.third);
@@ -819,5 +856,10 @@ export class TickScene {
     // Batter / Pitcher
     this.hudBatterText.text = gs.batter;
     this.hudPitcherText.text = gs.pitcher;
+
+    // Team label — prefer abbreviations (OMA - NWK), fall back to names
+    const awayLabel = gs.awayAbbrev || gs.awayName || 'AWAY';
+    const homeLabel = gs.homeAbbrev || gs.homeName || 'HOME';
+    this.hudTeamLabel.text = `${awayLabel} - ${homeLabel}`;
   }
 }

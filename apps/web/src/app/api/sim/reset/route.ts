@@ -34,6 +34,13 @@ const STANDINGS_RESET = {
   sac: 0,
   era_runs: 0,
   era_outs: 0,
+  p_ip: 0,
+  p_h: 0,
+  p_r: 0,
+  p_er: 0,
+  p_bb: 0,
+  p_so: 0,
+  p_hr: 0,
 };
 
 async function readOptionalJson(request: NextRequest): Promise<unknown> {
@@ -88,20 +95,20 @@ export async function POST(request: NextRequest) {
 
       if (teamIds.length > 0) {
         const { error: pshErr } = await supabase
-          .from('player_stats_hitting')
+          .from('hitter_season_stats')
           .delete()
           .in('team_id', teamIds);
         if (pshErr) {
-          console.error('Failed to clear player_stats_hitting:', pshErr.message);
+          console.error('Failed to clear hitter_season_stats:', pshErr.message);
           return NextResponse.json({ error: 'An internal error occurred' }, { status: 500 });
         }
 
         const { error: pspErr } = await supabase
-          .from('player_stats_pitching')
+          .from('pitcher_season_stats')
           .delete()
           .in('team_id', teamIds);
         if (pspErr) {
-          console.error('Failed to clear player_stats_pitching:', pspErr.message);
+          console.error('Failed to clear pitcher_season_stats:', pspErr.message);
           return NextResponse.json({ error: 'An internal error occurred' }, { status: 500 });
         }
       }
@@ -146,10 +153,10 @@ export async function POST(request: NextRequest) {
     // 1. Delete game-related data (order matters for FK constraints)
     const deletes = [
       'game_events',
-      'game_stats_hitting',
-      'game_stats_pitching',
-      'player_stats_hitting',
-      'player_stats_pitching',
+      'hitter_game_stats',
+      'pitcher_game_stats',
+      'hitter_season_stats',
+      'pitcher_season_stats',
       'games',
     ];
 

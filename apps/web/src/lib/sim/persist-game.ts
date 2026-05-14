@@ -1,17 +1,18 @@
-// Last touched by agent: 2026-05-07T23:55:00Z
+// Last touched by agent: 2026-05-14T09:45:00Z
 /**
  * Persist a simulated game result to Supabase.
  *
- * Writes to: games, game_events, game_stats_hitting, game_stats_pitching,
- * player_stats_hitting, player_stats_pitching, standings, schedules,
+ * Writes to: games, game_events, hitter_game_stats, pitcher_game_stats,
+ * hitter_season_stats, pitcher_season_stats, standings, schedules,
  * team_budgets, financial_transactions.
  *
  * Sub-modules: persist-game-record, persist-player-stats, persist-standings, persist-revenue.
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
+import type { GameResult, BatterGameStats, PitcherGameStats } from '@baseballczar/sim-engine';
 import { assertGameResultContract, type ScheduledGameContract } from './game-result-contract';
-import { buildGameEventRows, buildGameInsertRow } from './persist-game-record';
+import { buildGameEventRows, buildGameInsertRow, buildLinescore } from './persist-game-record';
 import type { RosterSnapshot } from './simulate-scheduled-game';
 import {
   buildHitterGameRows,
@@ -21,12 +22,13 @@ import {
 } from './persist-player-stats';
 import { buildStandingsDeltas } from './persist-standings';
 import { buildRevenueBundle } from './persist-revenue';
+import { determinePitcherRoles } from './pitcher-roles';
 
 interface PersistOptions {
   scheduleId: number;
   leagueId: number;
   seasonNo: number;
-  gameType: 'regular' | 'playoff' | 'o2o';
+  gameType: string;
   homeHitterMeta: Map<number, { teamId: number; position: string; batOrder: number }>;
   visitorHitterMeta: Map<number, { teamId: number; position: string; batOrder: number }>;
   homePitcherMeta: Map<number, { teamId: number }>;
@@ -34,6 +36,40 @@ interface PersistOptions {
   homeRosterSnapshot?: RosterSnapshot;
   visitorRosterSnapshot?: RosterSnapshot;
 }
+
+// ── Stat splitting ───────────────────────────────────────────────
+
+/**
+ * Split the unified batterStats/pitcherStats maps by team using roster membership.
+ * The engine produces one big map — persistence needs home vs away.
+ */
+function splitBatterStats(
+  allStats: Map<number, BatterGameStats>,
+  homePlayerIds: Set<number>,
+): { home: Map<number, BatterGameStats>; away: Map<number, BatterGameStats> } {
+  const home = new Map<number, BatterGameStats>();
+  const away = new Map<number, BatterGameStats>();
+  for (const [id, stats] of allStats) {
+    if (homePlayerIds.has(id)) home.set(id, stats);
+    else away.set(id, stats);
+  }
+  return { home, away };
+}
+
+function splitPitcherStats(
+  allStats: Map<number, PitcherGameStats>,
+  homePlayerIds: Set<number>,
+): { home: Map<number, PitcherGameStats>; away: Map<number, PitcherGameStats> } {
+  const home = new Map<number, PitcherGameStats>();
+  const away = new Map<number, PitcherGameStats>();
+  for (const [id, stats] of allStats) {
+    if (homePlayerIds.has(id)) home.set(id, stats);
+    else away.set(id, stats);
+  }
+  return { home, away };
+}
+
+// ── Persistence entry point ──────────────────────────────────────
 
 const PERSIST_BOUNDARY_STEPS = ['persist-sim-game-transaction'] as const;
 
@@ -56,7 +92,21 @@ export async function persistGameResult(
   const { result, meta } = contract;
   assertGameResultContract(result);
 
-  const gameRow = buildGameInsertRow(result, {
+  // Build home player ID set from roster
+  const homePlayerIds = new Set<number>();
+  for (const p of result.homeTeam.lineup) homePlayerIds.add(p.id);
+  for (const p of result.homeTeam.rotation) homePlayerIds.add(p.id);
+  for (const p of result.homeTeam.bullpen) homePlayerIds.add(p.id);
+
+  // Split unified stats into home/away
+  const batterSplit = splitBatterStats(result.batterStats, homePlayerIds);
+  const pitcherSplit = splitPitcherStats(result.pitcherStats, homePlayerIds);
+
+  // Build linescores from atBats
+  const homeLinescore = buildLinescore(result.atBats, result.innings, 'bottom');
+  const visitorLinescore = buildLinescore(result.atBats, result.innings, 'top');
+
+  const gameRow = buildGameInsertRow(result, homeLinescore, visitorLinescore, {
     scheduleId: opts.scheduleId,
     leagueId: opts.leagueId,
     provenance: {
@@ -68,32 +118,37 @@ export async function persistGameResult(
     visitorRosterSnapshot: opts.visitorRosterSnapshot,
   });
 
-  const eventRows = buildGameEventRows(result);
+  const eventRows = buildGameEventRows(result.atBats);
 
   const gameHittingRows = [
-    ...buildHitterGameRows(null, result.homePlayerStats, opts.homeHitterMeta, result.visitorTeamId, opts.gameType),
-    ...buildHitterGameRows(null, result.visitorPlayerStats, opts.visitorHitterMeta, result.homeTeamId, opts.gameType),
+    ...buildHitterGameRows(null, batterSplit.home, opts.homeHitterMeta, result.awayTeam.id, opts.gameType),
+    ...buildHitterGameRows(null, batterSplit.away, opts.visitorHitterMeta, result.homeTeam.id, opts.gameType),
   ];
 
+  // Determine W/L/SV for pitchers
+  const pitcherRoles = determinePitcherRoles(result, homePlayerIds);
+
   const gamePitchingRows = [
-    ...buildPitcherGameRows(null, result.homePitcherStats, opts.homePitcherMeta, result.visitorTeamId, opts.gameType),
-    ...buildPitcherGameRows(null, result.visitorPitcherStats, opts.visitorPitcherMeta, result.homeTeamId, opts.gameType),
+    ...buildPitcherGameRows(null, pitcherSplit.home, opts.homePitcherMeta, result.awayTeam.id, opts.gameType, pitcherRoles),
+    ...buildPitcherGameRows(null, pitcherSplit.away, opts.visitorPitcherMeta, result.homeTeam.id, opts.gameType, pitcherRoles),
   ];
 
   const seasonHittingRows = [
-    ...buildSeasonHitterRows(result.homePlayerStats, opts.homeHitterMeta, opts.seasonNo),
-    ...buildSeasonHitterRows(result.visitorPlayerStats, opts.visitorHitterMeta, opts.seasonNo),
+    ...buildSeasonHitterRows(batterSplit.home, opts.homeHitterMeta, opts.seasonNo, opts.leagueId),
+    ...buildSeasonHitterRows(batterSplit.away, opts.visitorHitterMeta, opts.seasonNo, opts.leagueId),
   ];
 
   const seasonPitchingRows = [
-    ...buildSeasonPitcherRows(result.homePitcherStats, opts.homePitcherMeta, opts.seasonNo),
-    ...buildSeasonPitcherRows(result.visitorPitcherStats, opts.visitorPitcherMeta, opts.seasonNo),
+    ...buildSeasonPitcherRows(pitcherSplit.home, opts.homePitcherMeta, opts.seasonNo, opts.leagueId, pitcherRoles),
+    ...buildSeasonPitcherRows(pitcherSplit.away, opts.visitorPitcherMeta, opts.seasonNo, opts.leagueId, pitcherRoles),
   ];
 
-  const standings = buildStandingsDeltas(result, {
-    leagueId: opts.leagueId,
-    seasonNo: opts.seasonNo,
-  });
+  const standings = buildStandingsDeltas(
+    result,
+    batterSplit.home, batterSplit.away,
+    pitcherSplit.home, pitcherSplit.away,
+    { leagueId: opts.leagueId, seasonNo: opts.seasonNo },
+  );
 
   const homeStandingDelta = {
     league_id: standings.home.leagueId,
@@ -112,6 +167,13 @@ export async function persistGameResult(
     so: standings.home.so,
     era_runs: standings.home.eraRuns,
     era_outs: standings.home.eraOuts,
+    p_ip: standings.home.pIp,
+    p_h: standings.home.pH,
+    p_r: standings.home.pR,
+    p_er: standings.home.pEr,
+    p_bb: standings.home.pBb,
+    p_so: standings.home.pSo,
+    p_hr: standings.home.pHr,
   };
 
   const visitorStandingDelta = {
@@ -131,6 +193,13 @@ export async function persistGameResult(
     so: standings.visitor.so,
     era_runs: standings.visitor.eraRuns,
     era_outs: standings.visitor.eraOuts,
+    p_ip: standings.visitor.pIp,
+    p_h: standings.visitor.pH,
+    p_r: standings.visitor.pR,
+    p_er: standings.visitor.pEr,
+    p_bb: standings.visitor.pBb,
+    p_so: standings.visitor.pSo,
+    p_hr: standings.visitor.pHr,
   };
 
   const revenue = buildRevenueBundle(result, opts.gameType);

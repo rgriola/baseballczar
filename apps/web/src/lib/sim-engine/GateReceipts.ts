@@ -17,11 +17,14 @@ export interface GameRevenue {
   homeStadiumOps: number; // expense (negative)
 }
 
-const REVENUE = {
-  regular: { home: 22500, visitor: 15000 },
-  playoff: { home: 35000, visitor: 25000 },
-  o2o:     { home: 35000, visitor: 3000 },
-} as const;
+const REVENUE: Record<string, { home: number; visitor: number }> = {
+  regular:    { home: 22500, visitor: 15000 },
+  playoff:    { home: 35000, visitor: 25000 },
+  o2o:        { home: 35000, visitor: 3000 },
+  League:     { home: 22500, visitor: 15000 },
+  Friendly:   { home: 35000, visitor: 3000 },
+  Tournament: { home: 35000, visitor: 25000 },
+};
 
 /** Food/bev/souvenir = 15% of home gate */
 const FOOD_BEV_RATE = 0.15;
@@ -31,9 +34,9 @@ const ADS_RATE = 0.08;
 const STADIUM_OPS = 5000;
 
 export function calculateGameRevenue(
-  gameType: 'regular' | 'playoff' | 'o2o',
+  gameType: string,
 ): GameRevenue {
-  const rates = REVENUE[gameType];
+  const rates = REVENUE[gameType] ?? REVENUE['regular'];
   const homeReceipts = rates.home;
   const visitorReceipts = rates.visitor;
 

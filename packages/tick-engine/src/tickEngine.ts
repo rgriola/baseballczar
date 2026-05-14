@@ -403,6 +403,14 @@ function enrichEventsWithPlayerTags(
         break;
       }
 
+      case 'rundown-start':
+      case 'rundown-end': {
+        if (!event.runnerName && event.runnerId > 0) {
+          event.runnerName = playerLabels.get(event.runnerId) ?? `#${event.runnerId} Runner`;
+        }
+        break;
+      }
+
       default:
         break;
     }
@@ -592,6 +600,16 @@ export function simulateAtBatTick(
   let throwCount = 0;
   const MAX_THROWS = 3;
 
+  // ── LIVE OUT COUNTER ────────────────────────────────────────────
+  // The tick engine must track outs recorded during THIS play so it
+  // can stop the simulation when 3 total outs are reached.
+  let outsThisPlay = 0;
+  /** Build a situation snapshot with live outs for AI decisions. */
+  const liveSituation = (): GameSituation => ({
+    ...situation,
+    outs: situation.outs + outsThisPlay,
+  });
+
   // Accumulate events across ticks so that events firing on non-capture
   // frames aren't silently dropped. Flushed into each captured snapshot.
   let pendingEvents: TickEvent[] = [];
@@ -643,14 +661,28 @@ export function simulateAtBatTick(
             },
           );
           const sa = battedBall.sprayAngleDeg;
-          const sprayDirection =
-            sa < -45 ? 'foul-L' :
-            sa < -30 ? 'LF-line' :
-            sa < -10 ? 'LF' :
-            sa <  10 ? 'CF' :
-            sa <  30 ? 'RF' :
-            sa <= 45 ? 'RF-line' :
-            'foul-R';
+          const dist = battedBall.distanceFt;
+          // For short-distance balls (< 170 ft), use infield labels
+          // so we don't say "grounds it to RF" for a 118 ft grounder
+          let sprayDirection: string;
+          if (dist < 170) {
+            // Infield territory — use fielding-zone labels
+            sprayDirection =
+              sa < -30 ? 'the left side' :
+              sa < -10 ? 'SS' :
+              sa < 10  ? 'up the middle' :
+              sa < 30  ? 'the right side' :
+              'the right side';
+          } else {
+            sprayDirection =
+              sa < -45 ? 'foul-L' :
+              sa < -30 ? 'LF-line' :
+              sa < -10 ? 'LF' :
+              sa <  10 ? 'CF' :
+              sa <  30 ? 'RF' :
+              sa <= 45 ? 'RF-line' :
+              'foul-R';
+          }
           events.push({
             type: 'contact',
             batterId: ab.batter.id,
@@ -680,11 +712,14 @@ export function simulateAtBatTick(
 
           // Command existing runners to advance
           if (battedBall.isHomeRun) {
-            // Home run — all runners go home immediately
+            // Home run — all runners trot the bases (1B→2B→3B→home).
+            // Each runner advances to the NEXT base; when they arrive,
+            // the tick loop (line ~921) re-commands them to keep going.
             for (const r of runners) {
               if (r.id === batterRunner.id) continue;
               if (r.state.type === 'scored' || r.state.type === 'out') continue;
-              commandRunner(r, { type: 'advance', targetBase: 'home' });
+              const currentBase = r.state.type === 'on-base' ? r.state.base : 'first';
+              commandRunner(r, { type: 'advance', targetBase: nextBase(currentBase) });
             }
           } else {
             // On high fly balls (LA >= 20°), runners hold at their base
@@ -812,22 +847,31 @@ export function simulateAtBatTick(
               // Batter is out on a caught fly
               batterRunner.state = { type: 'out' };
               events.push({ type: 'runner-out', runnerId: batterRunner.id, at: 'first' });
+              outsThisPlay++;
 
-              // AI Manager: decide throw target for tag-up plays
-              const throwTarget = decideThrowTarget(f, runners, situation);
-              if (throwTarget.priority > 0) {
-                f.state = {
-                  type: 'has-ball',
-                  decideSec: 0.5,
-                  throwTarget: throwTarget.point,
-                  throwBase: throwTarget.base,
-                };
+              // 3rd out check — if the inning is over, stop immediately
+              if (situation.outs + outsThisPlay >= 3) {
+                phase = 'done';
+                events.push({ type: 'play-complete' });
+                playComplete = true;
+                f.state = { type: 'returning' };
               } else {
-                // No tag-up play — hold the ball
-                f.state = { type: 'has-ball', decideSec: 0 };
-              }
+                // AI Manager: decide throw target for tag-up plays
+                const throwTarget = decideThrowTarget(f, runners, liveSituation());
+                if (throwTarget.priority > 0) {
+                  f.state = {
+                    type: 'has-ball',
+                    decideSec: 0.5,
+                    throwTarget: throwTarget.point,
+                    throwBase: throwTarget.base,
+                  };
+                } else {
+                  // No tag-up play — hold the ball
+                  f.state = { type: 'has-ball', decideSec: 0 };
+                }
 
-              phase = 'throw';
+                phase = 'throw';
+              }
             }
           }
 
@@ -872,20 +916,29 @@ export function simulateAtBatTick(
                   runnerId: fieldedOutRunner.id,
                   at: outBase,
                 });
+                outsThisPlay++;
               }
 
-              const throwTarget = decideThrowTarget(f, runners, situation);
-              if (throwTarget.priority > 0) {
-                f.state = {
-                  type: 'has-ball',
-                  decideSec: 0.3,
-                  throwTarget: throwTarget.point,
-                  throwBase: throwTarget.base,
-                };
-                phase = 'throw';
+              // 3rd out check
+              if (situation.outs + outsThisPlay >= 3) {
+                phase = 'done';
+                events.push({ type: 'play-complete' });
+                playComplete = true;
+                f.state = { type: 'returning' };
               } else {
-                f.state = { type: 'has-ball', decideSec: 0 };
-                phase = 'throw';
+                const throwTarget = decideThrowTarget(f, runners, liveSituation());
+                if (throwTarget.priority > 0) {
+                  f.state = {
+                    type: 'has-ball',
+                    decideSec: 0.3,
+                    throwTarget: throwTarget.point,
+                    throwBase: throwTarget.base,
+                  };
+                  phase = 'throw';
+                } else {
+                  f.state = { type: 'has-ball', decideSec: 0 };
+                  phase = 'throw';
+                }
               }
             }
           }
@@ -1020,23 +1073,32 @@ export function simulateAtBatTick(
                   runnerId: fieldedOutRunner.id,
                   at: outBase,
                 });
+                outsThisPlay++;
               }
 
-              const throwTarget = decideThrowTarget(f, runners, situation);
-              if (throwTarget.priority > 0) {
-                // Throw to the target base
-                f.state = {
-                  type: 'has-ball',
-                  decideSec: 0.3,
-                  throwTarget: throwTarget.point,
-                  throwBase: throwTarget.base,
-                };
-                phase = 'throw';
+              // 3rd out check
+              if (situation.outs + outsThisPlay >= 3) {
+                phase = 'done';
+                events.push({ type: 'play-complete' });
+                playComplete = true;
+                f.state = { type: 'returning' };
               } else {
-                // No play needed (fielder is on the force-out base, or no runners)
-                // Hold the ball — play will end via safety check
-                f.state = { type: 'has-ball', decideSec: 0 };
-                phase = 'throw';  // enter throw phase for out/end detection
+                const throwTarget = decideThrowTarget(f, runners, liveSituation());
+                if (throwTarget.priority > 0) {
+                  // Throw to the target base
+                  f.state = {
+                    type: 'has-ball',
+                    decideSec: 0.3,
+                    throwTarget: throwTarget.point,
+                    throwBase: throwTarget.base,
+                  };
+                  phase = 'throw';
+                } else {
+                  // No play needed (fielder is on the force-out base, or no runners)
+                  // Hold the ball — play will end via safety check
+                  f.state = { type: 'has-ball', decideSec: 0 };
+                  phase = 'throw';  // enter throw phase for out/end detection
+                }
               }
             }
           }
@@ -1093,7 +1155,7 @@ export function simulateAtBatTick(
           if (f.state.type === 'has-ball' && f.state.decideSec <= 0 && !f.state.throwTarget) {
             if (throwCount < MAX_THROWS) {
               // No pre-set target — ask the AI Manager now
-              const mgrTarget = decideThrowTarget(f, runners, situation);
+              const mgrTarget = decideThrowTarget(f, runners, liveSituation());
               if (mgrTarget.priority > 0) {
                 f.state = {
                   type: 'has-ball',
@@ -1178,25 +1240,34 @@ export function simulateAtBatTick(
                 runnerId: outRunner.id,
                 at: outBase,
               });
+              outsThisPlay++;
             }
 
-            // ── Relay check: are there other runners to throw to? ──
-            const activeRunners = runners.filter(r =>
-              r.state.type === 'running'
-            );
+            // 3rd out check — stop immediately, no relay
+            if (situation.outs + outsThisPlay >= 3) {
+              phase = 'done';
+              events.push({ type: 'play-complete' });
+              playComplete = true;
+              f.state = { type: 'returning' };
+            } else {
+              // ── Relay check: are there other runners to throw to? ──
+              const activeRunners = runners.filter(r =>
+                r.state.type === 'running'
+              );
 
-            if (activeRunners.length > 0 && throwCount < MAX_THROWS) {
-              const newTarget = decideThrowTarget(f, runners, situation);
-              if (newTarget.priority > 0) {
-                // There IS a play at another base — relay (double play attempt)
-                f.state = {
-                  type: 'has-ball',
-                  decideSec: 0.2,
-                  throwTarget: newTarget.point,
-                  throwBase: newTarget.base,
-                };
+              if (activeRunners.length > 0 && throwCount < MAX_THROWS) {
+                const newTarget = decideThrowTarget(f, runners, liveSituation());
+                if (newTarget.priority > 0) {
+                  // There IS a play at another base — relay (double play attempt)
+                  f.state = {
+                    type: 'has-ball',
+                    decideSec: 0.2,
+                    throwTarget: newTarget.point,
+                    throwBase: newTarget.base,
+                  };
+                }
+                // If priority is 0, the fielder holds — play will end via safety check
               }
-              // If priority is 0, the fielder holds — play will end via safety check
             }
           }
         }
@@ -1263,7 +1334,10 @@ export function simulateAtBatTick(
         : events;
       const snapshotRunners = runners
         .filter(r => {
-          if (r.state.type === 'out') return false;
+          // Keep 'out' runners visible until the play ends — they're
+          // still physically on the field, just no longer running.
+          // Removing them instantly causes sprites to vanish mid-play.
+          if (r.state.type === 'out') return !playComplete;
           // During HR trot, keep scored runners visible at home plate
           // so they wait to congratulate the batter.
           if (r.state.type === 'scored') {
